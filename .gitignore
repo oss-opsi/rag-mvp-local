@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.env
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Jupyter
+.ipynb_checkpoints
+
+# Data & models
+qdrant_data/
+*.pkl
+*.bin
+*.onnx
+*.pt
+*.h5
+
+# HuggingFace cache
+~/.cache/huggingface/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Docker
+.docker/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Temp files
+tmp/
+temp/
+/tmp/rag_upload_*
+
+# Secrets — never commit!
+.env
+*.pem
+*.key

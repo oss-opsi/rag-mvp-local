@@ -1,0 +1,72 @@
+version: "3.9"
+
+services:
+  # -----------------------------------------------------------------------
+  # Qdrant vector database
+  # -----------------------------------------------------------------------
+  qdrant:
+    image: qdrant/qdrant:v1.11.0
+    container_name: rag_qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:6333/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # -----------------------------------------------------------------------
+  # FastAPI backend
+  # -----------------------------------------------------------------------
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: rag_backend
+    ports:
+      - "8000:8000"
+    environment:
+      - QDRANT_URL=http://qdrant:6333
+      - QDRANT_COLLECTION=${QDRANT_COLLECTION:-rag_documents}
+      - LLM_MODEL=${LLM_MODEL:-gpt-4o-mini}
+      - BM25_CORPUS_FILE=/data/bm25_corpus.pkl
+    volumes:
+      - backend_data:/data
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # -----------------------------------------------------------------------
+  # Streamlit frontend
+  # -----------------------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: rag_frontend
+    ports:
+      - "8501:8501"
+    environment:
+      - BACKEND_URL=http://backend:8000
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  qdrant_storage:
+    driver: local
+  backend_data:
+    driver: local
