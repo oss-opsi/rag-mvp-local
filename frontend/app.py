@@ -1459,39 +1459,77 @@ with tab_gap:
 
         st.markdown("### 📋 Exigences analysées")
 
-        # Filter by status
-        status_filter = st.multiselect(
-            "Filtrer par statut",
-            options=["covered", "partial", "missing", "ambiguous"],
-            default=["covered", "partial", "missing", "ambiguous"],
-            format_func=lambda s: {
-                "covered": "✅ Couverte",
-                "partial": "⚠️ Partielle",
-                "missing": "❌ Manquante",
-                "ambiguous": "❓ Ambiguë",
-            }[s],
-            key="gap_status_filter",
-        )
-
         status_badge = {
             "covered": "✅ Couverte",
             "partial": "⚠️ Partielle",
             "missing": "❌ Manquante",
             "ambiguous": "❓ Ambiguë",
         }
+        priority_badge = {
+            "must": "🔴 Must",
+            "should": "🟠 Should",
+            "could": "🟡 Could",
+            "wont": "⚫ Won't",
+        }
+
+        # Filters: status + priority side by side
+        f_col1, f_col2 = st.columns(2)
+        with f_col1:
+            status_filter = st.multiselect(
+                "Filtrer par statut",
+                options=["covered", "partial", "missing", "ambiguous"],
+                default=["covered", "partial", "missing", "ambiguous"],
+                format_func=lambda s: status_badge[s],
+                key="gap_status_filter",
+            )
+        with f_col2:
+            priority_filter = st.multiselect(
+                "Filtrer par priorité (MoSCoW)",
+                options=["must", "should", "could", "wont"],
+                default=["must", "should", "could", "wont"],
+                format_func=lambda p: priority_badge[p],
+                key="gap_priority_filter",
+            )
 
         for req in report.get("requirements", []):
             if req.get("status") not in status_filter:
                 continue
+            if req.get("priority", "must") not in priority_filter:
+                continue
             label = status_badge.get(req.get("status"), req.get("status", ""))
+            prio_lbl = priority_badge.get(
+                req.get("priority", "must"), req.get("priority", "")
+            )
             with st.expander(
-                f"{label} · {req.get('id', '')} — {req.get('title', '')}",
+                f"{label} · {prio_lbl} · {req.get('id', '')} — "
+                f"{req.get('title', '')}",
                 expanded=(req.get("status") in {"missing", "partial"}),
             ):
+                obl = req.get("obligation_level", "")
+                src_loc = req.get("source_location", "")
+                meta_bits = [
+                    f"**Catégorie** : {req.get('category', 'Autre')}",
+                    f"**Priorité** : {prio_lbl}",
+                ]
+                if obl:
+                    meta_bits.append(f"**Obligation** : {obl}")
+                if src_loc and src_loc != "non localisé":
+                    meta_bits.append(f"**Source dans le CDC** : {src_loc}")
+                st.markdown("  \n".join(meta_bits))
                 st.markdown(
-                    f"**Catégorie** : {req.get('category', 'Autre')}  \n"
                     f"**Description** : {req.get('description', '')}"
                 )
+                criteria = req.get("acceptance_criteria") or []
+                if criteria:
+                    st.markdown("**Critères d'acceptation :**")
+                    for c in criteria:
+                        st.markdown(f"- {c}")
+                deps = req.get("depends_on") or []
+                if deps:
+                    st.caption(f"🔗 Dépend de : {', '.join(deps)}")
+                notes = req.get("notes") or ""
+                if notes:
+                    st.caption(f"📝 Note AMOA : {notes}")
                 verdict = req.get("verdict") or ""
                 if verdict:
                     st.markdown(f"**Verdict** : {verdict}")
@@ -1532,14 +1570,31 @@ with tab_gap:
                 "",
             ]
             for r in rep.get("requirements", []):
+                prio_lbl = priority_badge.get(
+                    r.get("priority", "must"), r.get("priority", "")
+                )
                 lines += [
                     f"### {status_badge.get(r.get('status'), r.get('status', ''))}"
-                    f" · {r.get('id', '')} — {r.get('title', '')}",
+                    f" · {prio_lbl} · {r.get('id', '')} — {r.get('title', '')}",
                     "",
                     f"- **Catégorie** : {r.get('category', 'Autre')}",
+                    f"- **Priorité** : {prio_lbl}",
+                    f"- **Obligation** : {r.get('obligation_level', '')}",
+                    f"- **Source dans le CDC** : {r.get('source_location', 'non localisé')}",
                     f"- **Description** : {r.get('description', '')}",
-                    f"- **Verdict** : {r.get('verdict', '')}",
                 ]
+                crit = r.get("acceptance_criteria") or []
+                if crit:
+                    lines.append("- **Critères d'acceptation** :")
+                    for c in crit:
+                        lines.append(f"  - {c}")
+                deps = r.get("depends_on") or []
+                if deps:
+                    lines.append(f"- **Dépend de** : {', '.join(deps)}")
+                notes = r.get("notes") or ""
+                if notes:
+                    lines.append(f"- **Notes** : {notes}")
+                lines.append(f"- **Verdict** : {r.get('verdict', '')}")
                 if r.get("evidence"):
                     lines.append("- **Extraits** :")
                     for ev in r["evidence"]:
@@ -1569,7 +1624,17 @@ with tab_gap:
                     "ID": r.get("id", ""),
                     "Titre": r.get("title", ""),
                     "Catégorie": r.get("category", ""),
+                    "Priorité": priority_badge.get(
+                        r.get("priority", "must"), r.get("priority", "")
+                    ),
+                    "Obligation": r.get("obligation_level", ""),
+                    "Source dans CDC": r.get("source_location", ""),
                     "Description": r.get("description", ""),
+                    "Critères d'acceptation": "\n".join(
+                        r.get("acceptance_criteria") or []
+                    ),
+                    "Dépend de": ", ".join(r.get("depends_on") or []),
+                    "Notes": r.get("notes", ""),
                     "Statut": status_badge.get(
                         r.get("status"), r.get("status", "")
                     ),
