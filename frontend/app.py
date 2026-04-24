@@ -78,6 +78,46 @@ STICKY_TABS_JS = """
         const tabList = root.querySelector('[data-baseweb="tab-list"]');
         const main = root.querySelector('[data-testid="stMain"]');
         if (!tabList || !main) return false;
+
+        // ------------------------------------------------------------------
+        // Floating "open sidebar" button that appears when the sidebar is
+        // collapsed. Streamlit's built-in stExpandSidebarButton is unreliable
+        // (often rendered with 0x0 size), so we provide our own.
+        // ------------------------------------------------------------------
+        if (!root.querySelector('[data-tellme-open-sidebar]')) {
+            const sidebar = root.querySelector('section[data-testid="stSidebar"]');
+            const btn = root.createElement ? root.createElement('button') : document.createElement('button');
+            btn.setAttribute('data-tellme-open-sidebar', '1');
+            btn.setAttribute('aria-label', 'Ouvrir la barre latérale');
+            btn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>';
+            btn.style.cssText = [
+                'position:fixed','top:10px','left:10px','z-index:100001',
+                'width:36px','height:36px','border-radius:10px','border:1px solid rgba(0,0,0,0.08)',
+                'background:#ffffff','color:#4b2fd6','cursor:pointer','display:none',
+                'align-items:center','justify-content:center','padding:0',
+                'box-shadow:0 4px 14px -4px rgba(0,0,0,0.18)'
+            ].join(';');
+            btn.addEventListener('click', () => {
+                // Click Streamlit's own collapse/expand toggle (it's still in the DOM,
+                // just translated off-screen when the sidebar is collapsed).
+                const toggle = root.querySelector('[data-testid="stSidebarCollapseButton"] button')
+                            || root.querySelector('[data-testid="stSidebarCollapseButton"]')
+                            || root.querySelector('[data-testid="stExpandSidebarButton"]');
+                if (toggle) toggle.click();
+            });
+            (root.body || document.body).appendChild(btn);
+
+            const syncOpenBtn = () => {
+                if (!sidebar) return;
+                const aria = sidebar.getAttribute('aria-expanded');
+                btn.style.display = (aria === 'false') ? 'inline-flex' : 'none';
+            };
+            syncOpenBtn();
+            if (sidebar) {
+                new MutationObserver(syncOpenBtn).observe(sidebar, { attributes: true, attributeFilter: ['aria-expanded'] });
+            }
+        }
+
         if (tabList.dataset.tellmeSticky === '1') return true;
 
         // Insert a placeholder just before the tab-list to measure scroll offset.
