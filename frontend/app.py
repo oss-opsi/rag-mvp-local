@@ -981,7 +981,7 @@ with tab_docs:
                     files={
                         "file": (f.name, f.read(), "application/octet-stream")
                     },
-                    timeout=180,
+                    timeout=900,
                 )
                 if resp.ok:
                     data = resp.json()
@@ -1468,7 +1468,7 @@ with tab_gap:
                 f"{BACKEND_URL}/workspace/clients/{client_id}/cdcs",
                 headers=auth_headers(),
                 files={"file": (uploaded_file.name, uploaded_file.getvalue())},
-                timeout=60,
+                timeout=900,
             )
             if r.status_code in (200, 201):
                 return True, ""
