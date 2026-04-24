@@ -918,8 +918,8 @@ use_reranker = st.session_state.get("use_reranker", False)
 # Tabs at the top (sticky — stay visible while scrolling)
 # ---------------------------------------------------------------------------
 
-tab_docs, tab_chat, tab_ragas = st.tabs(
-    ["📁  Documents", "💬  Chat", "📊  Évaluation RAGAS"]
+tab_docs, tab_chat, tab_gap, tab_ragas = st.tabs(
+    ["📁  Documents", "💬  Chat", "📋  Analyse d'écarts", "📊  Évaluation RAGAS"]
 )
 
 # JS fallback for sticky tabs (position: fixed on scroll, esp. on mobile).
@@ -1368,6 +1368,268 @@ with tab_chat:
                                 )
                             except Exception:
                                 pass
+
+
+# ===========================================================================
+# TAB — Analyse d'écarts (v3.5)
+# ===========================================================================
+
+with tab_gap:
+    st.markdown(
+        """
+        <div class="rag-card">
+            <h3>📋 Analyse d'écarts d'un cahier des charges</h3>
+            <p style="color:#4b5563; margin:0; font-size:0.92rem;">
+                Uploadez un cahier des charges client (PDF, DOCX, TXT, MD). Tell me
+                extrait automatiquement les exigences, puis vérifie pour chacune si
+                elle est <b>couverte</b> par les documents que vous avez indexés.
+                Le rapport est téléchargeable en Markdown et Excel.
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    gap_file = st.file_uploader(
+        "Cahier des charges à analyser",
+        type=["pdf", "docx", "txt", "md"],
+        key="gap_cdc_upload",
+        help="Le fichier est analysé à la volée et n'est pas indexé dans votre base.",
+    )
+
+    run_col, _ = st.columns([1, 3])
+    with run_col:
+        run_gap = st.button(
+            "🚀 Lancer l'analyse",
+            type="primary",
+            use_container_width=True,
+            disabled=(gap_file is None),
+            key="btn_run_gap",
+        )
+
+    if run_gap and gap_file is not None:
+        with st.spinner(
+            "Analyse en cours (extraction des exigences, puis vérification de "
+            "chacune dans vos documents). Cela peut prendre 30–90 secondes."
+        ):
+            try:
+                resp = requests.post(
+                    f"{BACKEND_URL}/gap-analysis",
+                    files={
+                        "file": (gap_file.name, gap_file.getvalue()),
+                    },
+                    headers=auth_headers(),
+                    timeout=600,
+                )
+            except requests.exceptions.RequestException as exc:
+                st.error(f"❌ Impossible de joindre le backend : {exc}")
+                resp = None
+
+        if resp is not None:
+            if resp.status_code == 200:
+                st.session_state["gap_report"] = resp.json()
+                st.success("✅ Analyse terminée.")
+            else:
+                try:
+                    detail = resp.json().get("detail", resp.text)
+                except Exception:
+                    detail = resp.text
+                st.error(f"❌ Erreur ({resp.status_code}) : {detail}")
+
+    # Display report if available
+    report = st.session_state.get("gap_report")
+    if report:
+        summary = report.get("summary", {})
+        total = summary.get("total", 0)
+        covered = summary.get("covered", 0)
+        partial = summary.get("partial", 0)
+        missing = summary.get("missing", 0)
+        ambiguous = summary.get("ambiguous", 0)
+        coverage = summary.get("coverage_percent", 0.0)
+
+        st.markdown("### 📈 Synthèse")
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("Exigences", total)
+        m2.metric("✅ Couvertes", covered)
+        m3.metric("⚠️ Partielles", partial)
+        m4.metric("❌ Manquantes", missing)
+        m5.metric("Taux couverture", f"{coverage}%")
+        if ambiguous:
+            st.caption(f"❓ {ambiguous} exigence(s) classée(s) comme ambiguë(s).")
+
+        st.markdown("### 📋 Exigences analysées")
+
+        # Filter by status
+        status_filter = st.multiselect(
+            "Filtrer par statut",
+            options=["covered", "partial", "missing", "ambiguous"],
+            default=["covered", "partial", "missing", "ambiguous"],
+            format_func=lambda s: {
+                "covered": "✅ Couverte",
+                "partial": "⚠️ Partielle",
+                "missing": "❌ Manquante",
+                "ambiguous": "❓ Ambiguë",
+            }[s],
+            key="gap_status_filter",
+        )
+
+        status_badge = {
+            "covered": "✅ Couverte",
+            "partial": "⚠️ Partielle",
+            "missing": "❌ Manquante",
+            "ambiguous": "❓ Ambiguë",
+        }
+
+        for req in report.get("requirements", []):
+            if req.get("status") not in status_filter:
+                continue
+            label = status_badge.get(req.get("status"), req.get("status", ""))
+            with st.expander(
+                f"{label} · {req.get('id', '')} — {req.get('title', '')}",
+                expanded=(req.get("status") in {"missing", "partial"}),
+            ):
+                st.markdown(
+                    f"**Catégorie** : {req.get('category', 'Autre')}  \n"
+                    f"**Description** : {req.get('description', '')}"
+                )
+                verdict = req.get("verdict") or ""
+                if verdict:
+                    st.markdown(f"**Verdict** : {verdict}")
+                evidence = req.get("evidence") or []
+                if evidence:
+                    st.markdown("**Extraits pertinents :**")
+                    for ev in evidence:
+                        st.markdown(f"> {ev}")
+                sources = req.get("sources") or []
+                if sources:
+                    st.markdown("**Sources :**")
+                    for s in sources:
+                        st.caption(
+                            f"📄 {s.get('source', '?')} — page {s.get('page', '?')} "
+                            f"· score {s.get('score', 0):.3f}"
+                        )
+
+        # ------------------------------------------------------------------
+        # Exports
+        # ------------------------------------------------------------------
+        st.markdown("### 📥 Export du rapport")
+
+        def _build_markdown_report(rep: dict) -> str:
+            s = rep.get("summary", {})
+            lines = [
+                f"# Analyse d'écarts — {rep.get('filename', '')}",
+                "",
+                "## Synthèse",
+                "",
+                f"- Exigences analysées : **{s.get('total', 0)}**",
+                f"- ✅ Couvertes : **{s.get('covered', 0)}**",
+                f"- ⚠️ Partiellement couvertes : **{s.get('partial', 0)}**",
+                f"- ❌ Manquantes : **{s.get('missing', 0)}**",
+                f"- ❓ Ambiguës : **{s.get('ambiguous', 0)}**",
+                f"- **Taux de couverture : {s.get('coverage_percent', 0)}%**",
+                "",
+                "## Détail des exigences",
+                "",
+            ]
+            for r in rep.get("requirements", []):
+                lines += [
+                    f"### {status_badge.get(r.get('status'), r.get('status', ''))}"
+                    f" · {r.get('id', '')} — {r.get('title', '')}",
+                    "",
+                    f"- **Catégorie** : {r.get('category', 'Autre')}",
+                    f"- **Description** : {r.get('description', '')}",
+                    f"- **Verdict** : {r.get('verdict', '')}",
+                ]
+                if r.get("evidence"):
+                    lines.append("- **Extraits** :")
+                    for ev in r["evidence"]:
+                        lines.append(f"  - {ev}")
+                if r.get("sources"):
+                    lines.append("- **Sources** :")
+                    for src in r["sources"]:
+                        lines.append(
+                            f"  - {src.get('source', '?')} — page "
+                            f"{src.get('page', '?')} (score "
+                            f"{src.get('score', 0):.3f})"
+                        )
+                lines.append("")
+            return "\n".join(lines)
+
+        def _build_excel_report(rep: dict) -> bytes:
+            import io
+            import pandas as pd
+
+            rows = []
+            for r in rep.get("requirements", []):
+                srcs = " ; ".join(
+                    f"{s.get('source','?')} p.{s.get('page','?')}"
+                    for s in (r.get("sources") or [])
+                )
+                rows.append({
+                    "ID": r.get("id", ""),
+                    "Titre": r.get("title", ""),
+                    "Catégorie": r.get("category", ""),
+                    "Description": r.get("description", ""),
+                    "Statut": status_badge.get(
+                        r.get("status"), r.get("status", "")
+                    ),
+                    "Verdict": r.get("verdict", ""),
+                    "Extraits": " | ".join(r.get("evidence") or []),
+                    "Sources": srcs,
+                })
+            df_req = pd.DataFrame(rows)
+
+            s = rep.get("summary", {})
+            df_sum = pd.DataFrame([
+                {"Indicateur": "Exigences analysées", "Valeur": s.get("total", 0)},
+                {"Indicateur": "Couvertes", "Valeur": s.get("covered", 0)},
+                {"Indicateur": "Partielles", "Valeur": s.get("partial", 0)},
+                {"Indicateur": "Manquantes", "Valeur": s.get("missing", 0)},
+                {"Indicateur": "Ambiguës", "Valeur": s.get("ambiguous", 0)},
+                {
+                    "Indicateur": "Taux de couverture (%)",
+                    "Valeur": s.get("coverage_percent", 0),
+                },
+            ])
+
+            buf = io.BytesIO()
+            with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+                df_sum.to_excel(writer, index=False, sheet_name="Synthèse")
+                df_req.to_excel(writer, index=False, sheet_name="Exigences")
+            return buf.getvalue()
+
+        base_name = (report.get("filename") or "cahier-des-charges").rsplit(".", 1)[0]
+        md_bytes = _build_markdown_report(report).encode("utf-8")
+        try:
+            xlsx_bytes = _build_excel_report(report)
+            xlsx_err = None
+        except Exception as exc:
+            xlsx_bytes = None
+            xlsx_err = str(exc)
+
+        dl1, dl2 = st.columns(2)
+        with dl1:
+            st.download_button(
+                label="📝 Télécharger (Markdown)",
+                data=md_bytes,
+                file_name=f"analyse-ecarts-{base_name}.md",
+                mime="text/markdown",
+                use_container_width=True,
+            )
+        with dl2:
+            if xlsx_bytes:
+                st.download_button(
+                    label="📊 Télécharger (Excel)",
+                    data=xlsx_bytes,
+                    file_name=f"analyse-ecarts-{base_name}.xlsx",
+                    mime=(
+                        "application/vnd.openxmlformats-officedocument"
+                        ".spreadsheetml.sheet"
+                    ),
+                    use_container_width=True,
+                )
+            else:
+                st.caption(f"Export Excel indisponible : {xlsx_err}")
 
 
 # ===========================================================================

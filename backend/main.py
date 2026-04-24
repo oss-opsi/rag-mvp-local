@@ -72,6 +72,7 @@ from rag.auth import (
     verify_user,
 )
 from rag.chain import answer_question, get_answer_non_streaming, stream_answer
+from rag.gap_analysis import run_gap_analysis
 from rag.config import (
     BM25_DIR,
     CONVERSATIONS_DB_PATH,
@@ -838,6 +839,98 @@ async def evaluate(
         "per_question": results["per_question"],
         "aggregate": results["means"],
     }
+
+
+# ---------------------------------------------------------------------------
+# Gap Analysis (v3.5) — analyser un cahier des charges vs. les documents indexés
+# ---------------------------------------------------------------------------
+
+
+@app.post("/gap-analysis", tags=["Analyse d'écarts"])
+async def gap_analysis(
+    file: UploadFile = File(
+        ...,
+        description="Cahier des charges client (PDF, DOCX, TXT, MD)",
+    ),
+    openai_api_key: str = Form(""),
+    authorization: str = Header(None),
+) -> dict:
+    """
+    Analyse d'écarts : extrait les exigences du cahier des charges, puis
+    évalue pour chacune si elle est couverte par les documents indexés de
+    l'utilisateur. Retourne un rapport structuré.
+    """
+    user_id = get_current_user(authorization)
+
+    # Resolve OpenAI key: prefer form input, else use stored key
+    effective_key = (openai_api_key or "").strip()
+    if not effective_key and user_id != "guest":
+        effective_key = get_user_api_key(user_id)
+    if not effective_key:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "La clé API OpenAI est requise (saisissez-la ou enregistrez-la "
+                "dans vos paramètres)."
+            ),
+        )
+
+    # Ensure user has indexed documents
+    corpus = load_bm25_corpus(user_id)
+    if not corpus:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Aucun document indexé pour cet utilisateur. Veuillez d'abord "
+                "indexer vos documents produit avant de lancer une analyse d'écarts."
+            ),
+        )
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Nom de fichier manquant.")
+
+    import pathlib
+    ext = pathlib.Path(file.filename).suffix.lower()
+    if ext not in SUPPORTED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Format non supporté : '{ext}'. "
+                f"Formats acceptés : {', '.join(sorted(SUPPORTED_EXTENSIONS))}"
+            ),
+        )
+
+    # Save upload to a temp file for parsing
+    with tempfile.NamedTemporaryFile(
+        delete=False, suffix=ext, prefix="rag_cdc_"
+    ) as tmp:
+        tmp.write(await file.read())
+        tmp_path = tmp.name
+
+    try:
+        report = await run_gap_analysis(
+            cdc_file_path=tmp_path,
+            cdc_ext=ext,
+            cdc_filename=file.filename,
+            user_id=user_id,
+            openai_api_key=effective_key,
+            qdrant_url=QDRANT_URL,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.exception("Gap analysis failed for file %s", file.filename)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erreur pendant l'analyse d'écarts : {exc}",
+        )
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+    return report
 
 
 # ---------------------------------------------------------------------------
