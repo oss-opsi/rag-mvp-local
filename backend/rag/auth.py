@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import USERS_DB_PATH
+from .crypto_utils import decrypt_str, encrypt_str
 from .jwt_utils import create_token, decode_token  # re-export for convenience
 
 logger = logging.getLogger(__name__)
@@ -32,11 +33,12 @@ _DB_PATH = Path(USERS_DB_PATH)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS users (
-    username        TEXT PRIMARY KEY,
-    email           TEXT NOT NULL DEFAULT '',
-    name            TEXT NOT NULL DEFAULT '',
-    hashed_password TEXT NOT NULL,
-    created_at      TIMESTAMP NOT NULL
+    username           TEXT PRIMARY KEY,
+    email              TEXT NOT NULL DEFAULT '',
+    name               TEXT NOT NULL DEFAULT '',
+    hashed_password    TEXT NOT NULL,
+    created_at         TIMESTAMP NOT NULL,
+    openai_api_key_enc TEXT NOT NULL DEFAULT ''
 );
 """
 
@@ -62,6 +64,13 @@ class _UserDB:
     def _init_schema(self) -> None:
         with self._lock:
             self._conn.executescript(_DDL)
+            # Migration: add openai_api_key_enc to existing tables
+            cur = self._conn.execute("PRAGMA table_info(users)")
+            cols = [r["name"] for r in cur.fetchall()]
+            if "openai_api_key_enc" not in cols:
+                self._conn.execute(
+                    "ALTER TABLE users ADD COLUMN openai_api_key_enc TEXT NOT NULL DEFAULT ''"
+                )
             self._conn.commit()
 
     def register(self, username: str, email: str, name: str, password: str) -> None:
@@ -100,6 +109,39 @@ class _UserDB:
             )
             row = cur.fetchone()
         return dict(row) if row else None
+
+    def set_api_key(self, username: str, plaintext_key: str) -> None:
+        """Encrypt and persist the OpenAI API key for a user."""
+        enc = encrypt_str(plaintext_key) if plaintext_key else ""
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE users SET openai_api_key_enc=? WHERE username=?",
+                (enc, username.lower()),
+            )
+            if cur.rowcount == 0:
+                raise ValueError(f"Utilisateur inconnu : {username}")
+            self._conn.commit()
+
+    def get_api_key(self, username: str) -> str:
+        """Return the decrypted OpenAI API key (empty string if none)."""
+        with self._lock:
+            cur = self._conn.execute(
+                "SELECT openai_api_key_enc FROM users WHERE username=?",
+                (username.lower(),),
+            )
+            row = cur.fetchone()
+        if not row or not row["openai_api_key_enc"]:
+            return ""
+        return decrypt_str(row["openai_api_key_enc"])
+
+    def delete_api_key(self, username: str) -> None:
+        """Clear the stored API key for a user."""
+        with self._lock:
+            self._conn.execute(
+                "UPDATE users SET openai_api_key_enc='' WHERE username=?",
+                (username.lower(),),
+            )
+            self._conn.commit()
 
     def all_users(self) -> list[dict[str, Any]]:
         with self._lock:
@@ -163,6 +205,21 @@ def get_user(username: str) -> dict[str, Any] | None:
     return _get_db().get_user(username)
 
 
+def set_user_api_key(username: str, plaintext_key: str) -> None:
+    """Persist the user's OpenAI API key (encrypted at rest)."""
+    _get_db().set_api_key(username, plaintext_key)
+
+
+def get_user_api_key(username: str) -> str:
+    """Return the decrypted OpenAI API key for a user (empty string if none)."""
+    return _get_db().get_api_key(username)
+
+
+def delete_user_api_key(username: str) -> None:
+    """Remove the stored API key for a user."""
+    _get_db().delete_api_key(username)
+
+
 def list_users_for_authenticator() -> dict[str, Any]:
     """
     Return credentials in the format expected by streamlit-authenticator:
@@ -194,6 +251,9 @@ __all__ = [
     "register_user",
     "verify_user",
     "get_user",
+    "set_user_api_key",
+    "get_user_api_key",
+    "delete_user_api_key",
     "list_users_for_authenticator",
     "create_token",
     "decode_token",

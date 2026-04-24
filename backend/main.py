@@ -13,6 +13,11 @@ Document endpoints (require auth):
   DELETE /collection/document?source=... — delete a single document
   DELETE /collection               — reset the user's index
 
+API key endpoints (require auth):
+  GET    /auth/api-key             — check if a key is stored (returns mask)
+  PUT    /auth/api-key             — store the user's OpenAI API key
+  DELETE /auth/api-key             — remove the stored key
+
 Query endpoints (require auth):
   POST /query            — ask a question (non-streaming)
   POST /query/stream     — ask a question (SSE streaming)
@@ -56,7 +61,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from rag.auth import create_token, decode_token, get_user, register_user, verify_user
+from rag.auth import (
+    create_token,
+    decode_token,
+    delete_user_api_key,
+    get_user,
+    get_user_api_key,
+    register_user,
+    set_user_api_key,
+    verify_user,
+)
 from rag.chain import answer_question, get_answer_non_streaming, stream_answer
 from rag.config import (
     BM25_DIR,
@@ -264,6 +278,68 @@ async def auth_me(user_id: str = Depends(get_current_user)) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# User OpenAI API key (stored encrypted in users DB)
+# ---------------------------------------------------------------------------
+
+
+def _mask_key(key: str) -> str:
+    """Return a masked preview like 'sk-…abcd' for display."""
+    if not key:
+        return ""
+    if len(key) <= 8:
+        return "•" * len(key)
+    return f"{key[:3]}…{key[-4:]}"
+
+
+@app.get("/auth/api-key", tags=["Auth"])
+async def get_api_key(user_id: str = Depends(get_current_user)) -> dict:
+    """Return whether the user has a stored API key + a masked preview."""
+    if user_id == "guest":
+        return {"has_key": False, "masked": "", "reason": "guest"}
+    key = get_user_api_key(user_id)
+    return {"has_key": bool(key), "masked": _mask_key(key)}
+
+
+class ApiKeyRequest(BaseModel):
+    api_key: str
+
+
+@app.put("/auth/api-key", tags=["Auth"])
+async def set_api_key(
+    req: ApiKeyRequest,
+    user_id: str = Depends(get_current_user),
+) -> dict:
+    """Store (encrypted at rest) the user's OpenAI API key."""
+    if user_id == "guest":
+        raise HTTPException(
+            status_code=403,
+            detail="La sauvegarde de la clé API n'est pas disponible en mode invité.",
+        )
+    key = (req.api_key or "").strip()
+    if not key:
+        raise HTTPException(status_code=400, detail="La clé API est requise.")
+    if not key.startswith("sk-"):
+        raise HTTPException(
+            status_code=400,
+            detail="La clé API OpenAI doit commencer par 'sk-'.",
+        )
+    try:
+        set_user_api_key(user_id, key)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Erreur : {exc}")
+    return {"has_key": True, "masked": _mask_key(key)}
+
+
+@app.delete("/auth/api-key", tags=["Auth"])
+async def delete_api_key(user_id: str = Depends(get_current_user)) -> dict:
+    """Remove the user's stored OpenAI API key."""
+    if user_id == "guest":
+        return {"has_key": False, "masked": ""}
+    delete_user_api_key(user_id)
+    return {"has_key": False, "masked": ""}
+
+
+# ---------------------------------------------------------------------------
 # Health
 # ---------------------------------------------------------------------------
 
@@ -407,8 +483,15 @@ async def query(
     Répond à une question en recherchant dans les documents indexés (RAG hybride).
     Non-streaming.
     """
-    if not request.openai_api_key:
-        raise HTTPException(status_code=400, detail="La clé API OpenAI est requise.")
+    # Resolve OpenAI key: prefer request.openai_api_key, else use stored key
+    effective_key = (request.openai_api_key or "").strip()
+    if not effective_key and user_id != "guest":
+        effective_key = get_user_api_key(user_id)
+    if not effective_key:
+        raise HTTPException(
+            status_code=400,
+            detail="La clé API OpenAI est requise (saisissez-la ou enregistrez-la dans vos paramètres).",
+        )
     if not request.question.strip():
         raise HTTPException(status_code=400, detail="La question ne peut pas être vide.")
 
@@ -423,7 +506,7 @@ async def query(
     try:
         result = answer_question(
             question=request.question,
-            openai_api_key=request.openai_api_key,
+            openai_api_key=effective_key,
             qdrant_url=QDRANT_URL,
             k=request.k,
             rerank=request.rerank,
@@ -467,8 +550,14 @@ async def query_stream(
       data: [SOURCES]{json}\\n\\n
       data: [DONE]\\n\\n
     """
-    if not request.openai_api_key:
-        raise HTTPException(status_code=400, detail="La clé API OpenAI est requise.")
+    effective_key = (request.openai_api_key or "").strip()
+    if not effective_key and user_id != "guest":
+        effective_key = get_user_api_key(user_id)
+    if not effective_key:
+        raise HTTPException(
+            status_code=400,
+            detail="La clé API OpenAI est requise (saisissez-la ou enregistrez-la dans vos paramètres).",
+        )
     if not request.question.strip():
         raise HTTPException(status_code=400, detail="La question ne peut pas être vide.")
 
@@ -483,7 +572,7 @@ async def query_stream(
     try:
         token_gen, sources = stream_answer(
             question=request.question,
-            openai_api_key=request.openai_api_key,
+            openai_api_key=effective_key,
             qdrant_url=QDRANT_URL,
             k=request.k,
             rerank=request.rerank,
@@ -652,7 +741,7 @@ async def export_conversation(
 @app.post("/evaluate", tags=["Évaluation"])
 async def evaluate(
     file: UploadFile = File(..., description="CSV avec colonnes question,ground_truth"),
-    openai_api_key: str = Form(...),
+    openai_api_key: str = Form(""),
     authorization: str = Header(None),
 ) -> dict:
     """
@@ -663,6 +752,16 @@ async def evaluate(
     """
     # Auth
     user_id = get_current_user(authorization)
+
+    # Resolve OpenAI key: prefer form input, else use stored key
+    effective_key = (openai_api_key or "").strip()
+    if not effective_key and user_id != "guest":
+        effective_key = get_user_api_key(user_id)
+    if not effective_key:
+        raise HTTPException(
+            status_code=400,
+            detail="La clé API OpenAI est requise (saisissez-la ou enregistrez-la dans vos paramètres).",
+        )
 
     # Check the user has documents indexed
     corpus = load_bm25_corpus(user_id)
@@ -715,7 +814,7 @@ async def evaluate(
         return ret.retrieve(q, k=5)
 
     def _answer(q: str, context: str) -> str:
-        return get_answer_non_streaming(q, context, openai_api_key)
+        return get_answer_non_streaming(q, context, effective_key)
 
     # Run evaluation
     try:
@@ -726,7 +825,7 @@ async def evaluate(
             ground_truths=ground_truths,
             retrieve_fn=_retrieve,
             answer_fn=_answer,
-            openai_api_key=openai_api_key,
+            openai_api_key=effective_key,
         )
     except Exception as exc:
         logger.exception("RAGAS evaluation failed.")

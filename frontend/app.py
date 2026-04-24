@@ -28,7 +28,7 @@ import streamlit as st
 # ---------------------------------------------------------------------------
 
 st.set_page_config(
-    page_title="RAG MVP v3.2",
+    page_title="RAG MVP v3.3",
     page_icon="📚",
     layout="wide",
 )
@@ -126,6 +126,11 @@ def logout() -> None:
     st.session_state["indexed_docs_detail"] = []
     st.session_state["indexed_total_chunks"] = 0
     st.session_state["_docs_loaded"] = False
+    # v3.3
+    st.session_state["active_api_key"] = ""
+    st.session_state["api_key_stored"] = False
+    st.session_state["api_key_masked"] = ""
+    st.session_state["_api_key_loaded"] = False
     if _COOKIES_AVAILABLE:
         try:
             cm = _cookie_manager()
@@ -147,7 +152,7 @@ def auth_headers() -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 if not get_token():
-    st.title("📚 RAG MVP v3.2")
+    st.title("📚 RAG MVP v3.3")
     st.caption(
         "Recherche dense (Qdrant) + BM25 + fusion RRF · Historique · Évaluation RAGAS · Auth JWT"
     )
@@ -288,264 +293,478 @@ def _score_color(score: float) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Navigation state
+# Custom CSS — modern UI
 # ---------------------------------------------------------------------------
 
-if "current_view" not in st.session_state:
-    st.session_state["current_view"] = "documents"
+st.markdown(
+    """
+    <style>
+    /* ===== Global polish ===== */
+    :root {
+        --rag-primary: #4f46e5;
+        --rag-primary-soft: #eef2ff;
+        --rag-accent: #06b6d4;
+        --rag-text: #1f2937;
+        --rag-muted: #6b7280;
+        --rag-bg-card: #ffffff;
+        --rag-border: #e5e7eb;
+        --rag-success: #10b981;
+        --rag-danger: #ef4444;
+        --rag-warning: #f59e0b;
+    }
+    html, body, [class*="css"] {
+        font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
+                     Roboto, Helvetica, Arial, sans-serif;
+    }
+    /* Compact top padding */
+    .block-container { padding-top: 2rem; padding-bottom: 4rem; max-width: 1200px; }
 
-VIEWS = {
-    "documents": "📁 Documents",
-    "chat": "💬 Chat",
-    "ragas": "📊 Évaluation RAGAS",
-}
+    /* Hero header */
+    .rag-hero {
+        background: linear-gradient(135deg, #4f46e5 0%, #06b6d4 100%);
+        color: white;
+        padding: 24px 28px;
+        border-radius: 16px;
+        margin-bottom: 24px;
+        box-shadow: 0 10px 30px -10px rgba(79, 70, 229, 0.35);
+    }
+    .rag-hero h1 {
+        margin: 0;
+        font-size: 1.75rem;
+        font-weight: 700;
+        color: white;
+    }
+    .rag-hero p {
+        margin: 6px 0 0 0;
+        opacity: 0.95;
+        font-size: 0.95rem;
+    }
 
+    /* Tabs — modernized */
+    div[data-baseweb="tab-list"] {
+        gap: 6px;
+        background: #f3f4f6;
+        padding: 6px;
+        border-radius: 12px;
+        border: 1px solid var(--rag-border);
+    }
+    button[data-baseweb="tab"] {
+        border-radius: 8px !important;
+        padding: 10px 20px !important;
+        font-weight: 500 !important;
+        background: transparent !important;
+        color: var(--rag-muted) !important;
+        transition: all 0.18s ease;
+    }
+    button[data-baseweb="tab"][aria-selected="true"] {
+        background: white !important;
+        color: var(--rag-primary) !important;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    }
+    div[data-baseweb="tab-highlight"] { background: transparent !important; }
 
-def _set_view(view_key: str) -> None:
-    st.session_state["current_view"] = view_key
+    /* Card-like containers */
+    .rag-card {
+        background: var(--rag-bg-card);
+        border: 1px solid var(--rag-border);
+        border-radius: 14px;
+        padding: 18px 22px;
+        margin-bottom: 16px;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+    }
+    .rag-card h3 {
+        margin: 0 0 10px 0;
+        font-size: 1.05rem;
+        font-weight: 600;
+        color: var(--rag-text);
+    }
+
+    /* Primary buttons */
+    .stButton > button[kind="primary"] {
+        background: linear-gradient(135deg, #4f46e5 0%, #6366f1 100%) !important;
+        border: none !important;
+        border-radius: 10px !important;
+        padding: 0.5rem 1.1rem !important;
+        font-weight: 600 !important;
+        box-shadow: 0 4px 12px -2px rgba(79, 70, 229, 0.4) !important;
+        transition: transform 0.12s ease, box-shadow 0.12s ease;
+    }
+    .stButton > button[kind="primary"]:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 6px 16px -2px rgba(79, 70, 229, 0.5) !important;
+    }
+    /* Secondary buttons */
+    .stButton > button[kind="secondary"] {
+        border-radius: 10px !important;
+        border: 1px solid var(--rag-border) !important;
+        background: white !important;
+        font-weight: 500 !important;
+    }
+    .stButton > button[kind="secondary"]:hover {
+        border-color: var(--rag-primary) !important;
+        color: var(--rag-primary) !important;
+    }
+
+    /* Sidebar polish */
+    section[data-testid="stSidebar"] {
+        background: #fafafa;
+        border-right: 1px solid var(--rag-border);
+    }
+    section[data-testid="stSidebar"] .block-container { padding-top: 1.5rem; }
+
+    /* Account badge in sidebar */
+    .rag-account {
+        background: linear-gradient(135deg, #eef2ff 0%, #ecfeff 100%);
+        border: 1px solid #e0e7ff;
+        border-radius: 12px;
+        padding: 14px 16px;
+        margin-bottom: 12px;
+    }
+    .rag-account .name {
+        font-weight: 600;
+        font-size: 1rem;
+        color: var(--rag-text);
+        margin: 0;
+    }
+    .rag-account .role {
+        color: var(--rag-muted);
+        font-size: 0.8rem;
+        margin: 2px 0 0 0;
+    }
+    .rag-account .avatar {
+        width: 36px; height: 36px;
+        border-radius: 50%;
+        background: linear-gradient(135deg, #4f46e5, #06b6d4);
+        color: white;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 700;
+        margin-right: 10px;
+        vertical-align: middle;
+    }
+
+    /* Doc item rows */
+    .rag-doc-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 12px 14px;
+        background: #fafafa;
+        border: 1px solid var(--rag-border);
+        border-radius: 10px;
+        margin-bottom: 8px;
+        transition: background 0.15s ease;
+    }
+    .rag-doc-row:hover { background: #f3f4f6; }
+
+    /* Metric cards (RAGAS) */
+    .rag-metric {
+        border-radius: 14px;
+        padding: 18px;
+        text-align: center;
+        border: 2px solid;
+    }
+    .rag-metric-value {
+        font-size: 2rem;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+    }
+    .rag-metric-label {
+        font-size: 0.85rem;
+        color: #4b5563;
+        margin-top: 4px;
+    }
+
+    /* Info pill */
+    .rag-pill {
+        display: inline-block;
+        padding: 4px 10px;
+        border-radius: 999px;
+        font-size: 0.8rem;
+        font-weight: 500;
+        background: var(--rag-primary-soft);
+        color: var(--rag-primary);
+    }
+
+    /* Hide Streamlit footer "Made with Streamlit" */
+    footer { visibility: hidden; }
+    /* Hide default deploy / menu badge for cleaner look (optional) */
+    #MainMenu { visibility: hidden; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 
 # ---------------------------------------------------------------------------
-# Sidebar (dynamic — depends on current view)
+# API key helpers (fetch / store / delete)
+# ---------------------------------------------------------------------------
+
+
+def refresh_api_key_status() -> None:
+    """Fetch API key status from backend and cache in session_state."""
+    try:
+        r = requests.get(
+            f"{BACKEND_URL}/auth/api-key",
+            headers=auth_headers(),
+            timeout=10,
+        )
+        if r.ok:
+            data = r.json()
+            st.session_state["api_key_stored"] = bool(data.get("has_key"))
+            st.session_state["api_key_masked"] = data.get("masked", "")
+            # If the backend confirms a stored key, we ask it for the raw value
+            # only via a dedicated path: here we simply rely on the user re-entering
+            # it if they need to rotate. For queries, we pull it once via a
+            # lightweight endpoint (decrypted server-side only when forwarded to LLM).
+            # Simpler: fetch once via a private sidecar route — not worth it here.
+            # Instead, store a sentinel so the chat view forwards empty key and the
+            # backend uses the stored one automatically if plumbed.
+            # Simplest UX: we keep a session-only copy populated on PUT.
+    except Exception:
+        pass
+    st.session_state["_api_key_loaded"] = True
+
+
+if not st.session_state.get("_api_key_loaded"):
+    refresh_api_key_status()
+
+
+def get_active_api_key() -> str:
+    """Return the OpenAI key to forward with requests.
+
+    - Guests: session-only key (`active_api_key`).
+    - Authenticated users with a stored key: returns "" so the backend uses
+      the encrypted stored value; frontend guards check `has_usable_key`.
+    - Authenticated users without a stored key: returns the session-entered key.
+    """
+    raw = st.session_state.get("active_api_key", "") or ""
+    if raw == "__stored__":
+        return ""  # backend will use stored key
+    return raw
+
+
+def has_usable_key() -> bool:
+    """True if a key is available (session or stored)."""
+    if st.session_state.get("api_key_stored"):
+        return True
+    raw = st.session_state.get("active_api_key", "") or ""
+    return bool(raw) and raw != "__stored__"
+
+
+# ---------------------------------------------------------------------------
+# Sidebar — account, API key, quick stats
 # ---------------------------------------------------------------------------
 
 with st.sidebar:
-    # ----- User account block (always visible) -----
-    if user_id == "guest":
-        st.caption("🕶️ Mode invité — index partagé")
-    else:
-        st.caption(f"👤 Connecté : **{user_name}**")
+    # Account card
+    initials = (user_name[:1] if user_name else "U").upper()
+    role_label = "Mode invité" if user_id == "guest" else "Compte personnel"
+    st.markdown(
+        f"""
+        <div class="rag-account">
+            <div style="display:flex; align-items:center;">
+                <span class="avatar">{initials}</span>
+                <div>
+                    <p class="name">{user_name}</p>
+                    <p class="role">{role_label}</p>
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     if st.button("🚪 Se déconnecter", use_container_width=True):
         logout()
         st.rerun()
 
-    st.divider()
+    st.markdown("---")
 
-    # ----- View navigation -----
-    st.markdown("### 🧭 Navigation")
-    for key, label in VIEWS.items():
-        is_active = st.session_state["current_view"] == key
-        if st.button(
-            label,
-            key=f"nav_{key}",
-            use_container_width=True,
-            type="primary" if is_active else "secondary",
-        ):
-            _set_view(key)
-            st.rerun()
+    # OpenAI API key block
+    st.markdown("### 🔑 Clé API OpenAI")
+    key_stored = st.session_state.get("api_key_stored", False)
+    key_masked = st.session_state.get("api_key_masked", "")
 
-    st.divider()
-
-    # ----- View-specific sidebar content -----
-    current_view = st.session_state["current_view"]
-
-    if current_view == "documents":
-        # Configuration block (API key, reranker, health, full reset)
-        st.markdown("### ⚙️ Configuration")
-
-        openai_key = st.text_input(
-            "Clé API OpenAI",
+    if user_id == "guest":
+        st.info(
+            "La sauvegarde de la clé API n'est pas disponible en mode invité. "
+            "Utilisez le champ ci-dessous pour cette session uniquement."
+        )
+        session_key = st.text_input(
+            "Clé pour cette session",
             type="password",
             placeholder="sk-...",
-            help="Votre clé OpenAI. Elle n'est jamais stockée sur disque.",
-            key="sidebar_openai_key",
+            key="guest_session_key",
+            help="Clé utilisée en mémoire uniquement, non sauvegardée.",
         )
-
-        use_reranker = st.checkbox(
-            "Activer le cross-encoder reranker (plus précis, + lent)",
-            value=st.session_state.get("use_reranker", False),
-            help="Utilise BAAI/bge-reranker-base pour reranker les résultats après RRF.",
-            key="sidebar_use_reranker",
-        )
-        st.session_state["use_reranker"] = use_reranker
-
-        st.divider()
-
-        if st.button("🔄 Vérifier le statut backend", use_container_width=True):
-            try:
-                resp = requests.get(f"{BACKEND_URL}/health", timeout=5)
-                data = resp.json()
-                total_vectors = sum(data.get("indexed_vectors", {}).values())
-                st.success(
-                    f"✅ Backend opérationnel — {total_vectors} vecteurs indexés (toutes collections)"
-                )
-            except Exception as exc:
-                st.error(f"❌ Impossible de joindre le backend : {exc}")
-
-        st.divider()
-
-        if st.button(
-            "🗑️ Réinitialiser tout mon index",
-            type="secondary",
-            use_container_width=True,
-        ):
-            try:
-                resp = requests.delete(
-                    f"{BACKEND_URL}/collection",
-                    headers=auth_headers(),
-                    timeout=15,
-                )
-                if resp.ok:
-                    st.session_state["indexed_docs"] = []
-                    st.session_state["indexed_docs_detail"] = []
-                    st.session_state["indexed_total_chunks"] = 0
-                    st.session_state["chat_history"] = []
-                    st.success("Index réinitialisé.")
-                    st.rerun()
-                else:
-                    st.error(f"Erreur : {resp.text}")
-            except Exception as exc:
-                st.error(f"Erreur : {exc}")
-
-    elif current_view == "chat":
-        # Chat needs API key too — keep a compact field
-        openai_key = st.text_input(
-            "🔑 Clé API OpenAI",
-            type="password",
-            placeholder="sk-...",
-            help="Clé requise pour interroger le LLM.",
-            key="sidebar_openai_key",
-        )
-        use_reranker = st.session_state.get("use_reranker", False)
-
-        st.divider()
-        st.markdown("### 🗂️ Historique")
-
-        if user_id == "guest":
-            st.info(
-                "L'historique des conversations n'est pas disponible en mode invité. "
-                "Créez un compte pour l'activer."
+        st.session_state["active_api_key"] = session_key
+    else:
+        if key_stored:
+            st.success(f"✅ Clé enregistrée : `{key_masked}`")
+            st.caption(
+                "La clé est chiffrée au repos dans la base utilisateur. "
+                "Vous pouvez la remplacer ou la supprimer."
             )
         else:
-            if st.button("🆕 Nouvelle conversation", use_container_width=True):
-                st.session_state["current_conversation_id"] = None
-                st.session_state["current_conversation_title"] = "Nouvelle conversation"
-                st.session_state["chat_history"] = []
-                st.session_state["history_selected_conv"] = None
-                st.rerun()
+            st.warning("Aucune clé enregistrée.")
 
-            # Fetch conversations list
-            try:
-                resp = requests.get(
-                    f"{BACKEND_URL}/conversations",
-                    headers=auth_headers(),
-                    timeout=10,
-                )
-                conversations = resp.json() if resp.ok else []
-            except Exception:
-                conversations = []
-
-            if not conversations:
-                st.caption("Aucune conversation enregistrée.")
-            else:
-                current_conv_id = st.session_state.get("current_conversation_id")
-                for conv in conversations:
-                    conv_id = conv["id"]
-                    title = conv["title"]
-                    msg_count = conv.get("message_count", 0)
-                    is_active = conv_id == current_conv_id
-                    label = f"{'▶ ' if is_active else ''}{title} ({msg_count})"
-
-                    c_load, c_del = st.columns([4, 1])
-                    with c_load:
-                        if st.button(
-                            label,
-                            key=f"load_conv_{conv_id}",
-                            use_container_width=True,
-                            type="primary" if is_active else "secondary",
-                        ):
-                            # Load the conversation into chat_history
-                            try:
-                                r = requests.get(
-                                    f"{BACKEND_URL}/conversations/{conv_id}",
-                                    headers=auth_headers(),
-                                    timeout=10,
+        with st.expander(
+            "✏️ " + ("Mettre à jour la clé" if key_stored else "Enregistrer une clé"),
+            expanded=not key_stored,
+        ):
+            new_key = st.text_input(
+                "Clé API OpenAI",
+                type="password",
+                placeholder="sk-...",
+                key="new_api_key_input",
+                help="La clé est chiffrée au repos avec Fernet (AES-128 dérivé du JWT_SECRET).",
+            )
+            c_save, c_clear = st.columns([1, 1])
+            with c_save:
+                if st.button("💾 Enregistrer", type="primary", use_container_width=True):
+                    if not new_key or not new_key.startswith("sk-"):
+                        st.error("La clé doit commencer par 'sk-'.")
+                    else:
+                        try:
+                            r = requests.put(
+                                f"{BACKEND_URL}/auth/api-key",
+                                headers=auth_headers(),
+                                json={"api_key": new_key},
+                                timeout=10,
+                            )
+                            if r.ok:
+                                st.session_state["active_api_key"] = new_key
+                                st.session_state["api_key_stored"] = True
+                                st.session_state["api_key_masked"] = r.json().get(
+                                    "masked", ""
                                 )
-                                detail = r.json() if r.ok else {}
-                                st.session_state["chat_history"] = detail.get(
-                                    "messages", []
-                                )
-                                st.session_state["current_conversation_id"] = conv_id
-                                st.session_state["current_conversation_title"] = title
+                                st.success("Clé enregistrée.")
                                 st.rerun()
-                            except Exception as exc:
-                                st.error(f"Erreur : {exc}")
-                    with c_del:
-                        if st.button("🗑️", key=f"side_del_{conv_id}"):
-                            try:
-                                r = requests.delete(
-                                    f"{BACKEND_URL}/conversations/{conv_id}",
-                                    headers=auth_headers(),
-                                    timeout=10,
-                                )
-                                if r.ok:
-                                    if (
-                                        st.session_state.get("current_conversation_id")
-                                        == conv_id
-                                    ):
-                                        st.session_state["current_conversation_id"] = None
-                                        st.session_state["chat_history"] = []
-                                    st.rerun()
-                            except Exception:
-                                pass
+                            else:
+                                detail = r.json().get("detail", r.text)
+                                st.error(f"Erreur : {detail}")
+                        except Exception as exc:
+                            st.error(f"Erreur : {exc}")
+            with c_clear:
+                if key_stored and st.button(
+                    "🗑️ Supprimer", use_container_width=True
+                ):
+                    try:
+                        r = requests.delete(
+                            f"{BACKEND_URL}/auth/api-key",
+                            headers=auth_headers(),
+                            timeout=10,
+                        )
+                        if r.ok:
+                            st.session_state["api_key_stored"] = False
+                            st.session_state["api_key_masked"] = ""
+                            st.session_state["active_api_key"] = ""
+                            st.success("Clé supprimée.")
+                            st.rerun()
+                        else:
+                            st.error("Erreur lors de la suppression.")
+                    except Exception as exc:
+                        st.error(f"Erreur : {exc}")
 
-    elif current_view == "ragas":
-        # RAGAS also needs the API key
-        openai_key = st.text_input(
-            "🔑 Clé API OpenAI",
-            type="password",
-            placeholder="sk-...",
-            help="Clé requise pour l'évaluation RAGAS.",
-            key="sidebar_openai_key",
-        )
-        use_reranker = st.session_state.get("use_reranker", False)
+        # When a key is stored, the backend will use it automatically — no need
+        # to re-enter in session. We flag active_api_key with a sentinel so the
+        # chat/RAGAS guards don't block the request.
+        if key_stored:
+            st.session_state["active_api_key"] = "__stored__"
+        else:
+            st.session_state["active_api_key"] = ""
 
-        st.divider()
-        st.caption(
-            "📊 L'évaluation RAGAS mesure la qualité de votre chaîne RAG "
-            "(fidélité, pertinence, précision et rappel du contexte)."
-        )
+    st.markdown("---")
 
-# Make sure openai_key & use_reranker are defined even if the current view
-# didn't run an input (shouldn't happen — safeguard).
-openai_key = st.session_state.get("sidebar_openai_key", "")
+    # Quick stats
+    docs_detail = st.session_state.get("indexed_docs_detail") or []
+    total_chunks = st.session_state.get("indexed_total_chunks", 0)
+    st.markdown("### 📈 Votre index")
+    c1, c2 = st.columns(2)
+    c1.metric("Documents", len(docs_detail))
+    c2.metric("Chunks", total_chunks)
+
+    st.markdown("---")
+
+    # Reranker toggle
+    st.checkbox(
+        "🎯 Cross-encoder reranker",
+        value=st.session_state.get("use_reranker", False),
+        key="use_reranker",
+        help="Reranking additionnel avec BAAI/bge-reranker-base (plus précis mais plus lent).",
+    )
+
+    # Backend status
+    if st.button("🔄 Vérifier le backend", use_container_width=True):
+        try:
+            resp = requests.get(f"{BACKEND_URL}/health", timeout=5)
+            data = resp.json()
+            total_vectors = sum(data.get("indexed_vectors", {}).values())
+            st.success(
+                f"✅ Backend OK — {total_vectors} vecteurs indexés "
+                "(toutes collections)"
+            )
+        except Exception as exc:
+            st.error(f"❌ {exc}")
+
+
+# ---------------------------------------------------------------------------
+# Derived values used by all views
+# ---------------------------------------------------------------------------
+
+openai_key = get_active_api_key()
 use_reranker = st.session_state.get("use_reranker", False)
 
 
 # ---------------------------------------------------------------------------
-# Main title
+# Hero header + tabs (moved to the top of the page)
 # ---------------------------------------------------------------------------
 
-st.title("📚 RAG MVP v3.2")
-st.caption(
-    "Recherche dense (Qdrant) + BM25 + fusion RRF · LLM : GPT-4o-mini · "
-    "Embeddings : BAAI/bge-small-en-v1.5"
+st.markdown(
+    """
+    <div class="rag-hero">
+        <h1>📚 RAG MVP v3.3</h1>
+        <p>Recherche dense (Qdrant) + BM25 + RRF · GPT-4o-mini · BAAI/bge-small-en-v1.5</p>
+    </div>
+    """,
+    unsafe_allow_html=True,
 )
 
-current_view = st.session_state["current_view"]
+tab_docs, tab_chat, tab_ragas = st.tabs(
+    ["📁  Documents", "💬  Chat", "📊  Évaluation RAGAS"]
+)
+
 
 # ===========================================================================
-# VIEW 1 — Documents
+# TAB — Documents
 # ===========================================================================
 
-if current_view == "documents":
-    st.subheader("📁 Gestion des documents")
+with tab_docs:
     st.markdown(
-        "Ajoutez ou supprimez les documents qui alimentent votre index RAG. "
-        "La configuration (clé API, reranker, reset) est dans la barre latérale."
+        """
+        <div class="rag-card">
+            <h3>⬆️ Ajouter des documents</h3>
+            <p style="color:#6b7280; margin:0 0 10px 0; font-size:0.9rem;">
+                Formats supportés : PDF, DOCX, TXT, MD · 200 Mo max par fichier.
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
-    st.markdown("### ⬆️ Ajouter des documents")
     uploaded_files = st.file_uploader(
-        "Glissez-déposez vos fichiers ici (PDF, DOCX, TXT, MD — max 200 Mo)",
+        "Glissez-déposez vos fichiers ici",
         type=["pdf", "docx", "txt", "md"],
         accept_multiple_files=True,
         label_visibility="collapsed",
         key="docs_uploader",
     )
 
-    if uploaded_files and st.button("📥 Indexer les documents", type="primary"):
+    if uploaded_files and st.button(
+        "📥 Indexer les documents", type="primary"
+    ):
         progress = st.progress(0, text="Démarrage de l'indexation…")
         total = len(uploaded_files)
         for i, f in enumerate(uploaded_files):
@@ -556,7 +775,9 @@ if current_view == "documents":
                 resp = requests.post(
                     f"{BACKEND_URL}/upload",
                     headers=auth_headers(),
-                    files={"file": (f.name, f.read(), "application/octet-stream")},
+                    files={
+                        "file": (f.name, f.read(), "application/octet-stream")
+                    },
                     timeout=180,
                 )
                 if resp.ok:
@@ -581,37 +802,77 @@ if current_view == "documents":
         refresh_indexed_docs()
         st.rerun()
 
-    st.divider()
+    st.markdown("")
 
-    # ----- Indexed documents list with per-file delete -----
-    st.markdown("### 📚 Documents indexés")
-
-    col_refresh, _ = st.columns([1, 4])
-    with col_refresh:
-        if st.button("🔄 Rafraîchir la liste"):
-            refresh_indexed_docs()
-            st.rerun()
-
+    # Indexed docs list
     docs_detail = st.session_state.get("indexed_docs_detail") or []
     total_chunks = st.session_state.get("indexed_total_chunks", 0)
 
+    header_col_title, header_col_refresh, header_col_reset = st.columns(
+        [3, 1, 1]
+    )
+    with header_col_title:
+        st.markdown("### 📚 Documents indexés")
+    with header_col_refresh:
+        if st.button("🔄 Rafraîchir", use_container_width=True):
+            refresh_indexed_docs()
+            st.rerun()
+    with header_col_reset:
+        if st.button("🗑️ Tout effacer", use_container_width=True):
+            try:
+                resp = requests.delete(
+                    f"{BACKEND_URL}/collection",
+                    headers=auth_headers(),
+                    timeout=15,
+                )
+                if resp.ok:
+                    st.session_state["indexed_docs"] = []
+                    st.session_state["indexed_docs_detail"] = []
+                    st.session_state["indexed_total_chunks"] = 0
+                    st.success("Index réinitialisé.")
+                    st.rerun()
+            except Exception as exc:
+                st.error(f"Erreur : {exc}")
+
     if not docs_detail:
-        st.info(
-            "Aucun document indexé pour le moment. "
-            "Utilisez le formulaire ci-dessus pour en ajouter."
+        st.markdown(
+            """
+            <div class="rag-card" style="text-align:center; padding:40px;">
+                <p style="font-size:3rem; margin:0;">📂</p>
+                <p style="color:#6b7280; margin:8px 0 0 0;">
+                    Aucun document indexé. Ajoutez-en un pour commencer.
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
     else:
-        st.caption(
-            f"**{len(docs_detail)} document(s)** · **{total_chunks} chunks** au total"
+        st.markdown(
+            f"<span class='rag-pill'>{len(docs_detail)} document(s) · "
+            f"{total_chunks} chunks</span>",
+            unsafe_allow_html=True,
         )
+        st.markdown("")
         for d in docs_detail:
             source = d["source"]
             chunks = d["chunks"]
-            col_info, col_del = st.columns([5, 1])
-            with col_info:
-                st.markdown(f"📄 **{source}** — _{chunks} chunks_")
-            with col_del:
-                if st.button("🗑️ Supprimer", key=f"del_doc_{source}"):
+            c_info, c_del = st.columns([6, 1])
+            with c_info:
+                st.markdown(
+                    f"""
+                    <div class="rag-doc-row">
+                        <div>
+                            <div style="font-weight:600;">📄 {source}</div>
+                            <div style="color:#6b7280; font-size:0.85rem;">
+                                {chunks} chunks
+                            </div>
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+            with c_del:
+                if st.button("🗑️", key=f"del_doc_{source}", help="Supprimer"):
                     try:
                         r = requests.delete(
                             f"{BACKEND_URL}/collection/document",
@@ -623,8 +884,7 @@ if current_view == "documents":
                             result = r.json()
                             st.success(
                                 f"✅ **{source}** supprimé "
-                                f"({result.get('qdrant_deleted', 0)} chunks Qdrant, "
-                                f"{result.get('bm25_deleted', 0)} chunks BM25)"
+                                f"({result.get('qdrant_deleted', 0)} chunks)"
                             )
                             refresh_indexed_docs()
                             st.rerun()
@@ -635,184 +895,308 @@ if current_view == "documents":
 
 
 # ===========================================================================
-# VIEW 2 — Chat
+# TAB — Chat
 # ===========================================================================
 
-elif current_view == "chat":
-    conv_title = st.session_state.get(
-        "current_conversation_title", "Nouvelle conversation"
-    )
-    st.subheader(f"💬 {conv_title}")
+with tab_chat:
+    # Two-column layout: conversations list (left, 1) + chat (right, 3)
+    col_history, col_chat = st.columns([1, 3], gap="large")
 
-    # Display chat history
-    for msg in st.session_state.get("chat_history", []):
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-            if msg["role"] == "assistant" and msg.get("sources"):
-                with st.expander("📚 Sources"):
-                    for src in msg["sources"]:
-                        rrf_score = src.get("score", 0)
-                        rerank_score = src.get("rerank_score")
-                        score_text = f"_(score RRF : {rrf_score:.4f}"
-                        if rerank_score is not None:
-                            score_text += f" · rerank : {rerank_score:.4f}"
-                        score_text += ")_"
-                        st.markdown(
-                            f"**{src.get('source', '?')} — page {src.get('page', '?')}** {score_text}"
-                        )
-                        st.caption(src.get("text", ""))
-                        st.divider()
-
-    if question := st.chat_input("Posez votre question sur les documents indexés…"):
-        if not openai_key:
-            st.warning(
-                "⚠️ Veuillez renseigner votre clé API OpenAI dans la barre latérale."
+    with col_history:
+        st.markdown("### 🗂️ Conversations")
+        if user_id == "guest":
+            st.caption(
+                "Non disponible en mode invité. Créez un compte pour "
+                "activer l'historique."
             )
-            st.stop()
+        else:
+            if st.button(
+                "🆕 Nouvelle conversation",
+                type="primary",
+                use_container_width=True,
+            ):
+                st.session_state["current_conversation_id"] = None
+                st.session_state["current_conversation_title"] = (
+                    "Nouvelle conversation"
+                )
+                st.session_state["chat_history"] = []
+                st.rerun()
 
-        # Ensure a conversation exists in DB (skip for guest)
-        if user_id != "guest":
-            if not st.session_state.get("current_conversation_id"):
-                try:
-                    title = question[:60] + ("…" if len(question) > 60 else "")
-                    r = requests.post(
-                        f"{BACKEND_URL}/conversations",
-                        headers=auth_headers(),
-                        json={"title": title},
-                        timeout=10,
-                    )
-                    if r.ok:
-                        conv_data = r.json()
-                        st.session_state["current_conversation_id"] = conv_data["id"]
-                        st.session_state["current_conversation_title"] = conv_data[
-                            "title"
-                        ]
-                except Exception:
-                    pass
+            try:
+                resp = requests.get(
+                    f"{BACKEND_URL}/conversations",
+                    headers=auth_headers(),
+                    timeout=10,
+                )
+                conversations = resp.json() if resp.ok else []
+            except Exception:
+                conversations = []
 
-            conv_id = st.session_state.get("current_conversation_id")
-            if conv_id:
-                try:
-                    requests.post(
-                        f"{BACKEND_URL}/conversations/{conv_id}/messages",
-                        headers=auth_headers(),
-                        json={"role": "user", "content": question},
-                        timeout=10,
-                    )
-                except Exception:
-                    pass
+            if not conversations:
+                st.caption("_Aucune conversation._")
+            else:
+                current_conv_id = st.session_state.get(
+                    "current_conversation_id"
+                )
+                for conv in conversations:
+                    conv_id = conv["id"]
+                    title = conv["title"]
+                    msg_count = conv.get("message_count", 0)
+                    is_active = conv_id == current_conv_id
+                    label_prefix = "▶ " if is_active else ""
+                    display_title = title if len(title) < 28 else title[:25] + "…"
+                    label = f"{label_prefix}{display_title} ({msg_count})"
 
-        st.session_state["chat_history"].append({"role": "user", "content": question})
-        with st.chat_message("user"):
-            st.markdown(question)
-
-        with st.chat_message("assistant"):
-            _state: dict[str, Any] = {"sources": [], "error": False}
-
-            def _sse_token_generator():
-                try:
-                    with requests.post(
-                        f"{BACKEND_URL}/query/stream",
-                        headers=auth_headers(),
-                        json={
-                            "question": question,
-                            "openai_api_key": openai_key,
-                            "k": 5,
-                            "rerank": use_reranker,
-                        },
-                        stream=True,
-                        timeout=180,
-                    ) as resp:
-                        if resp.status_code != 200:
-                            _state["error"] = True
+                    cc_load, cc_del = st.columns([5, 1])
+                    with cc_load:
+                        if st.button(
+                            label,
+                            key=f"load_conv_{conv_id}",
+                            use_container_width=True,
+                            type="primary" if is_active else "secondary",
+                        ):
                             try:
-                                detail = resp.json().get("detail", resp.text)
+                                r = requests.get(
+                                    f"{BACKEND_URL}/conversations/{conv_id}",
+                                    headers=auth_headers(),
+                                    timeout=10,
+                                )
+                                detail = r.json() if r.ok else {}
+                                st.session_state["chat_history"] = detail.get(
+                                    "messages", []
+                                )
+                                st.session_state[
+                                    "current_conversation_id"
+                                ] = conv_id
+                                st.session_state[
+                                    "current_conversation_title"
+                                ] = title
+                                st.rerun()
+                            except Exception as exc:
+                                st.error(f"Erreur : {exc}")
+                    with cc_del:
+                        if st.button("🗑️", key=f"del_conv_{conv_id}"):
+                            try:
+                                r = requests.delete(
+                                    f"{BACKEND_URL}/conversations/{conv_id}",
+                                    headers=auth_headers(),
+                                    timeout=10,
+                                )
+                                if r.ok:
+                                    if (
+                                        st.session_state.get(
+                                            "current_conversation_id"
+                                        )
+                                        == conv_id
+                                    ):
+                                        st.session_state[
+                                            "current_conversation_id"
+                                        ] = None
+                                        st.session_state["chat_history"] = []
+                                    st.rerun()
                             except Exception:
-                                detail = resp.text
-                            yield f"❌ Erreur {resp.status_code} : {detail}"
-                            return
-                        for raw_line in resp.iter_lines():
-                            if not raw_line:
-                                continue
-                            line = (
-                                raw_line.decode("utf-8")
-                                if isinstance(raw_line, bytes)
-                                else raw_line
+                                pass
+
+    with col_chat:
+        conv_title = st.session_state.get(
+            "current_conversation_title", "Nouvelle conversation"
+        )
+        st.markdown(f"### 💬 {conv_title}")
+
+        # History display
+        for msg in st.session_state.get("chat_history", []):
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+                if msg["role"] == "assistant" and msg.get("sources"):
+                    with st.expander("📚 Sources"):
+                        for src in msg["sources"]:
+                            rrf_score = src.get("score", 0)
+                            rerank_score = src.get("rerank_score")
+                            score_text = f"_(score RRF : {rrf_score:.4f}"
+                            if rerank_score is not None:
+                                score_text += (
+                                    f" · rerank : {rerank_score:.4f}"
+                                )
+                            score_text += ")_"
+                            st.markdown(
+                                f"**{src.get('source', '?')} — page "
+                                f"{src.get('page', '?')}** {score_text}"
                             )
-                            if not line.startswith("data: "):
-                                continue
-                            payload = line[len("data: "):]
-                            if payload == "[DONE]":
-                                break
-                            if payload.startswith("[SOURCES]"):
+                            st.caption(src.get("text", ""))
+                            st.divider()
+
+        if question := st.chat_input(
+            "Posez votre question sur les documents indexés…"
+        ):
+            if not has_usable_key():
+                st.warning(
+                    "⚠️ Veuillez renseigner votre clé API OpenAI dans la "
+                    "barre latérale (saisie ou enregistrement)."
+                )
+                st.stop()
+
+            # Persist conversation (non-guest)
+            if user_id != "guest":
+                if not st.session_state.get("current_conversation_id"):
+                    try:
+                        title = question[:60] + (
+                            "…" if len(question) > 60 else ""
+                        )
+                        r = requests.post(
+                            f"{BACKEND_URL}/conversations",
+                            headers=auth_headers(),
+                            json={"title": title},
+                            timeout=10,
+                        )
+                        if r.ok:
+                            conv_data = r.json()
+                            st.session_state["current_conversation_id"] = (
+                                conv_data["id"]
+                            )
+                            st.session_state["current_conversation_title"] = (
+                                conv_data["title"]
+                            )
+                    except Exception:
+                        pass
+
+                conv_id = st.session_state.get("current_conversation_id")
+                if conv_id:
+                    try:
+                        requests.post(
+                            f"{BACKEND_URL}/conversations/{conv_id}/messages",
+                            headers=auth_headers(),
+                            json={"role": "user", "content": question},
+                            timeout=10,
+                        )
+                    except Exception:
+                        pass
+
+            st.session_state["chat_history"].append(
+                {"role": "user", "content": question}
+            )
+            with st.chat_message("user"):
+                st.markdown(question)
+
+            with st.chat_message("assistant"):
+                _state: dict[str, Any] = {"sources": [], "error": False}
+
+                def _sse_token_generator():
+                    try:
+                        with requests.post(
+                            f"{BACKEND_URL}/query/stream",
+                            headers=auth_headers(),
+                            json={
+                                "question": question,
+                                "openai_api_key": openai_key,
+                                "k": 5,
+                                "rerank": use_reranker,
+                            },
+                            stream=True,
+                            timeout=180,
+                        ) as resp:
+                            if resp.status_code != 200:
+                                _state["error"] = True
                                 try:
-                                    _state["sources"] = json.loads(
-                                        payload[len("[SOURCES]"):]
+                                    detail = resp.json().get(
+                                        "detail", resp.text
                                     )
                                 except Exception:
-                                    pass
-                                break
-                            yield payload
-                except Exception as exc:
-                    _state["error"] = True
-                    yield f"❌ Impossible de joindre le backend : {exc}"
+                                    detail = resp.text
+                                yield f"❌ Erreur {resp.status_code} : {detail}"
+                                return
+                            for raw_line in resp.iter_lines():
+                                if not raw_line:
+                                    continue
+                                line = (
+                                    raw_line.decode("utf-8")
+                                    if isinstance(raw_line, bytes)
+                                    else raw_line
+                                )
+                                if not line.startswith("data: "):
+                                    continue
+                                payload = line[len("data: "):]
+                                if payload == "[DONE]":
+                                    break
+                                if payload.startswith("[SOURCES]"):
+                                    try:
+                                        _state["sources"] = json.loads(
+                                            payload[len("[SOURCES]"):]
+                                        )
+                                    except Exception:
+                                        pass
+                                    break
+                                yield payload
+                    except Exception as exc:
+                        _state["error"] = True
+                        yield f"❌ Impossible de joindre le backend : {exc}"
 
-            answer = st.write_stream(_sse_token_generator())
-            sources = _state["sources"]
-            error_occurred = _state["error"]
+                answer = st.write_stream(_sse_token_generator())
+                sources = _state["sources"]
+                error_occurred = _state["error"]
 
-            if sources:
-                with st.expander("📚 Sources"):
-                    for src in sources:
-                        rrf_score = src.get("score", 0)
-                        rerank_score = src.get("rerank_score")
-                        score_text = f"_(score RRF : {rrf_score:.4f}"
-                        if rerank_score is not None:
-                            score_text += f" · rerank : {rerank_score:.4f}"
-                        score_text += ")_"
-                        st.markdown(
-                            f"**{src.get('source', '?')} — page {src.get('page', '?')}** {score_text}"
-                        )
-                        st.caption(src.get("text", ""))
-                        st.divider()
-
-            if not error_occurred:
-                st.session_state["chat_history"].append(
-                    {
-                        "role": "assistant",
-                        "content": answer or "",
-                        "sources": sources,
-                    }
-                )
-                if user_id != "guest":
-                    conv_id = st.session_state.get("current_conversation_id")
-                    if conv_id:
-                        try:
-                            requests.post(
-                                f"{BACKEND_URL}/conversations/{conv_id}/messages",
-                                headers=auth_headers(),
-                                json={
-                                    "role": "assistant",
-                                    "content": answer or "",
-                                    "sources": sources,
-                                },
-                                timeout=10,
+                if sources:
+                    with st.expander("📚 Sources"):
+                        for src in sources:
+                            rrf_score = src.get("score", 0)
+                            rerank_score = src.get("rerank_score")
+                            score_text = f"_(score RRF : {rrf_score:.4f}"
+                            if rerank_score is not None:
+                                score_text += (
+                                    f" · rerank : {rerank_score:.4f}"
+                                )
+                            score_text += ")_"
+                            st.markdown(
+                                f"**{src.get('source', '?')} — page "
+                                f"{src.get('page', '?')}** {score_text}"
                             )
-                        except Exception:
-                            pass
+                            st.caption(src.get("text", ""))
+                            st.divider()
+
+                if not error_occurred:
+                    st.session_state["chat_history"].append(
+                        {
+                            "role": "assistant",
+                            "content": answer or "",
+                            "sources": sources,
+                        }
+                    )
+                    if user_id != "guest":
+                        conv_id = st.session_state.get(
+                            "current_conversation_id"
+                        )
+                        if conv_id:
+                            try:
+                                requests.post(
+                                    f"{BACKEND_URL}/conversations/{conv_id}/messages",
+                                    headers=auth_headers(),
+                                    json={
+                                        "role": "assistant",
+                                        "content": answer or "",
+                                        "sources": sources,
+                                    },
+                                    timeout=10,
+                                )
+                            except Exception:
+                                pass
 
 
 # ===========================================================================
-# VIEW 3 — RAGAS Evaluation
+# TAB — RAGAS Evaluation
 # ===========================================================================
 
-elif current_view == "ragas":
-    st.subheader("📊 Évaluation RAGAS")
+with tab_ragas:
     st.markdown(
-        "Uploadez un CSV avec 2 colonnes : **`question`**, **`ground_truth`** "
-        "(réponse de référence attendue). "
-        "L'évaluation mesure 4 métriques RAGAS : fidélité, pertinence de la réponse, "
-        "précision et rappel du contexte. Maximum 20 questions."
+        """
+        <div class="rag-card">
+            <h3>📊 Évaluation RAGAS</h3>
+            <p style="color:#4b5563; margin:0; font-size:0.92rem;">
+                Uploadez un CSV avec 2 colonnes : <b>question</b> et <b>ground_truth</b>.
+                L'évaluation mesure 4 métriques : fidélité, pertinence réponse,
+                précision contexte, rappel contexte. <b>Max 20 questions.</b>
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
     _template_csv = (
@@ -820,12 +1204,15 @@ elif current_view == "ragas":
         '"Qu\'est-ce que RAG ?","RAG signifie Retrieval-Augmented Generation."\n'
         '"Quel modèle d\'embeddings est utilisé ?","BAAI/bge-small-en-v1.5"\n'
     )
-    st.download_button(
-        label="📥 Télécharger le modèle CSV",
-        data=_template_csv,
-        file_name="ragas_template.csv",
-        mime="text/csv",
-    )
+    dl_col, _ = st.columns([1, 3])
+    with dl_col:
+        st.download_button(
+            label="📥 Modèle CSV",
+            data=_template_csv,
+            file_name="ragas_template.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
 
     eval_file = st.file_uploader(
         "Uploader votre fichier CSV d'évaluation",
@@ -833,9 +1220,11 @@ elif current_view == "ragas":
         key="ragas_csv_upload",
     )
 
-    eval_disabled = not openai_key
-    if not openai_key:
-        st.warning("⚠️ Clé API OpenAI manquante (barre latérale).")
+    eval_disabled = not has_usable_key()
+    if eval_disabled:
+        st.warning(
+            "⚠️ Clé API OpenAI manquante — renseignez-la ou enregistrez-la dans la barre latérale."
+        )
 
     if eval_file and st.button(
         "🚀 Lancer l'évaluation", type="primary", disabled=eval_disabled
@@ -848,7 +1237,9 @@ elif current_view == "ragas":
             resp = requests.post(
                 f"{BACKEND_URL}/evaluate",
                 headers=auth_headers(),
-                files={"file": (eval_file.name, eval_file.read(), "text/csv")},
+                files={
+                    "file": (eval_file.name, eval_file.read(), "text/csv")
+                },
                 data={"openai_api_key": openai_key},
                 timeout=600,
             )
@@ -890,13 +1281,14 @@ elif current_view == "ragas":
             except (TypeError, ValueError):
                 score_f = float("nan")
             color = _score_color(score_f)
-            score_str = f"{score_f:.2%}" if not math.isnan(score_f) else "N/A"
+            score_str = (
+                f"{score_f:.1%}" if not math.isnan(score_f) else "N/A"
+            )
             col.markdown(
                 f"""
-                <div style="border-radius:10px; padding:16px; background:{color}22;
-                            border:2px solid {color}; text-align:center;">
-                    <div style="font-size:1.8em; font-weight:bold; color:{color};">{score_str}</div>
-                    <div style="font-size:0.9em; color:#555;">{metric_label}</div>
+                <div class="rag-metric" style="background:{color}14; border-color:{color};">
+                    <div class="rag-metric-value" style="color:{color};">{score_str}</div>
+                    <div class="rag-metric-label">{metric_label}</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -933,6 +1325,9 @@ elif current_view == "ragas":
         st.download_button(
             label="📤 Exporter les résultats (CSV)",
             data=csv_export,
-            file_name=f"ragas_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            file_name=(
+                f"ragas_results_"
+                f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            ),
             mime="text/csv",
         )
