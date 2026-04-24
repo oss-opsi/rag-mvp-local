@@ -6,6 +6,8 @@ import os
 
 # Qdrant
 QDRANT_URL: str = os.getenv("QDRANT_URL", "http://localhost:6333")
+# Optional API key for Qdrant Cloud (leave unset for local/self-hosted Qdrant)
+QDRANT_API_KEY: str | None = os.getenv("QDRANT_API_KEY", None)
 QDRANT_COLLECTION: str = os.getenv("QDRANT_COLLECTION", "rag_documents")
 
 # Embedding model

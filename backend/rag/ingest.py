@@ -31,6 +31,7 @@ from .config import (
     CHUNK_SIZE,
     EMBEDDING_DIM,
     EMBEDDING_MODEL,
+    QDRANT_API_KEY,
     QDRANT_COLLECTION,
     QDRANT_URL,
 )
@@ -67,7 +68,10 @@ def get_embeddings() -> HuggingFaceEmbeddings:
 def get_qdrant_client(qdrant_url: str = QDRANT_URL) -> QdrantClient:
     global _qdrant_client
     if _qdrant_client is None:
-        _qdrant_client = QdrantClient(url=qdrant_url)
+        if QDRANT_API_KEY:
+            _qdrant_client = QdrantClient(url=qdrant_url, api_key=QDRANT_API_KEY)
+        else:
+            _qdrant_client = QdrantClient(url=qdrant_url)
     return _qdrant_client
 
 

@@ -273,6 +273,18 @@ docker-compose down -v
 
 ---
 
+## Déploiement sur Render
+
+Pour déployer le backend FastAPI sur [Render.com](https://render.com), consultez le guide détaillé : **[DEPLOY_RENDER.md](./DEPLOY_RENDER.md)**.
+
+Deux options disponibles :
+- **Option A** (recommandée) — Backend Render Free + [Qdrant Cloud](https://cloud.qdrant.io) Free (1 Go, sans carte bancaire)
+- **Option B** — Blueprint Render (`render.yaml`) avec Qdrant hébergé sur Render (plan payant requis pour Qdrant)
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/oss-opsi/rag-mvp-local)
+
+---
+
 ## Technologies utilisées
 
 - [Qdrant](https://qdrant.tech/) v1.11 — base de données vectorielle
