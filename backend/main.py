@@ -2,10 +2,11 @@
 FastAPI backend for the RAG MVP.
 
 Endpoints:
-  POST /upload        — ingest a PDF
-  POST /query         — ask a question (RAG)
-  GET  /health        — status + indexed doc count
-  DELETE /collection  — reset the index
+  POST /upload          — ingest a document (PDF, DOCX, TXT, MD)
+  POST /query           — ask a question (RAG, non-streaming)
+  POST /query/stream    — ask a question (RAG, streaming SSE)
+  GET  /health          — status + indexed doc count
+  DELETE /collection    — reset the index
 """
 from __future__ import annotations
 
@@ -14,21 +15,27 @@ import os
 import tempfile
 from typing import Any
 
-from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from rag.chain import answer_question
+from rag.chain import answer_question, stream_answer
 from rag.config import QDRANT_URL
-from rag.ingest import get_indexed_doc_count, ingest_pdf, reset_collection
+from rag.ingest import (
+    SUPPORTED_EXTENSIONS,
+    get_indexed_doc_count,
+    ingest_file,
+    reset_collection,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="RAG MVP API",
-    description="API de recherche hybride (dense + BM25 + RRF) sur documents PDF.",
-    version="1.0.0",
+    description="API de recherche hybride (dense + BM25 + RRF) sur documents PDF, DOCX, TXT et MD.",
+    version="2.0.0",
 )
 
 # ---------------------------------------------------------------------------
@@ -52,6 +59,7 @@ class QueryRequest(BaseModel):
     question: str
     openai_api_key: str
     k: int = 5
+    rerank: bool = False
 
 
 class SourceItem(BaseModel):
@@ -59,6 +67,7 @@ class SourceItem(BaseModel):
     source: str
     page: Any
     score: float
+    rerank_score: float | None = None
 
 
 class QueryResponse(BaseModel):
@@ -96,28 +105,37 @@ async def health() -> HealthResponse:
 
 
 @app.post("/upload", response_model=UploadResponse, tags=["Documents"])
-async def upload_pdf(
-    file: UploadFile = File(..., description="Fichier PDF à indexer"),
+async def upload_document(
+    file: UploadFile = File(..., description="Fichier à indexer (PDF, DOCX, TXT, MD)"),
 ) -> UploadResponse:
     """
-    Reçoit un fichier PDF, l'ingère dans Qdrant (dense) et le corpus BM25 (sparse).
+    Reçoit un fichier, l'ingère dans Qdrant (dense) et le corpus BM25 (sparse).
+    Formats acceptés : PDF, DOCX, TXT, MD.
     """
-    if not file.filename or not file.filename.lower().endswith(".pdf"):
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Nom de fichier manquant.")
+
+    import pathlib
+    ext = pathlib.Path(file.filename).suffix.lower()
+    if ext not in SUPPORTED_EXTENSIONS:
         raise HTTPException(
             status_code=400,
-            detail="Seuls les fichiers PDF sont acceptés.",
+            detail=(
+                f"Format non supporté : '{ext}'. "
+                f"Formats acceptés : {', '.join(sorted(SUPPORTED_EXTENSIONS))}"
+            ),
         )
 
-    # Write to a temporary file for PyPDFLoader
+    # Write to a temporary file for the loader
     with tempfile.NamedTemporaryFile(
-        delete=False, suffix=".pdf", prefix="rag_upload_"
+        delete=False, suffix=ext, prefix="rag_upload_"
     ) as tmp:
         content = await file.read()
         tmp.write(content)
         tmp_path = tmp.name
 
     try:
-        chunk_count = ingest_pdf(
+        chunk_count = ingest_file(
             file_path=tmp_path,
             source_name=file.filename,
             qdrant_url=QDRANT_URL,
@@ -146,6 +164,7 @@ async def upload_pdf(
 async def query(request: QueryRequest) -> QueryResponse:
     """
     Répond à une question en recherchant dans les documents indexés (RAG hybride).
+    Non-streaming.
     """
     if not request.openai_api_key:
         raise HTTPException(
@@ -164,6 +183,7 @@ async def query(request: QueryRequest) -> QueryResponse:
             openai_api_key=request.openai_api_key,
             qdrant_url=QDRANT_URL,
             k=request.k,
+            rerank=request.rerank,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -180,11 +200,77 @@ async def query(request: QueryRequest) -> QueryResponse:
             source=s["source"],
             page=s["page"],
             score=s["score"],
+            rerank_score=s.get("rerank_score"),
         )
         for s in result["sources"]
     ]
 
     return QueryResponse(answer=result["answer"], sources=sources)
+
+
+@app.post("/query/stream", tags=["Recherche"])
+async def query_stream(request: QueryRequest) -> StreamingResponse:
+    """
+    Répond à une question avec une réponse en streaming (Server-Sent Events).
+
+    Format SSE :
+      data: {token}\\n\\n
+      data: [SOURCES]{json}\\n\\n
+      data: [DONE]\\n\\n
+    """
+    import json
+
+    if not request.openai_api_key:
+        raise HTTPException(
+            status_code=400,
+            detail="La clé API OpenAI est requise.",
+        )
+    if not request.question.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="La question ne peut pas être vide.",
+        )
+
+    try:
+        token_gen, sources = stream_answer(
+            question=request.question,
+            openai_api_key=request.openai_api_key,
+            qdrant_url=QDRANT_URL,
+            k=request.k,
+            rerank=request.rerank,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.exception("Erreur lors du traitement de la question (streaming).")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erreur interne : {exc}",
+        )
+
+    def event_generator():
+        # Stream tokens
+        for token in token_gen:
+            yield f"data: {token}\n\n"
+        # Send sources as a single SSE event
+        sources_payload = [
+            {
+                "text": s["text"],
+                "source": s["source"],
+                "page": s["page"],
+                "score": s["score"],
+                "rerank_score": s.get("rerank_score"),
+            }
+            for s in sources
+        ]
+        yield f"data: [SOURCES]{json.dumps(sources_payload, ensure_ascii=False)}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.delete("/collection", tags=["Système"])

@@ -5,8 +5,11 @@ Toute l'interface est en français.
 """
 from __future__ import annotations
 
+import json
 import os
+
 import httpx
+import requests
 import streamlit as st
 
 # ---------------------------------------------------------------------------
@@ -47,6 +50,15 @@ with st.sidebar:
         "URL du backend",
         value=os.getenv("BACKEND_URL", "http://backend:8000"),
         help="URL du service FastAPI (mode Docker).",
+    )
+
+    st.divider()
+
+    # Cross-encoder reranker toggle
+    use_reranker = st.checkbox(
+        "Activer le cross-encoder reranker (plus précis, + lent)",
+        value=False,
+        help="Utilise BAAI/bge-reranker-base pour reranker les résultats après RRF.",
     )
 
     st.divider()
@@ -92,14 +104,14 @@ st.caption(
 )
 
 # ---------------------------------------------------------------------------
-# PDF Upload Section
+# Document Upload Section
 # ---------------------------------------------------------------------------
 
 st.subheader("1. Indexer vos documents")
 
 uploaded_files = st.file_uploader(
-    "Glissez-déposez vos fichiers PDF ici",
-    type=["pdf"],
+    "Glissez-déposez vos fichiers ici (PDF, DOCX, TXT, MD — max 200 Mo)",
+    type=["pdf", "docx", "txt", "md"],
     accept_multiple_files=True,
     label_visibility="collapsed",
 )
@@ -118,7 +130,7 @@ if uploaded_files and st.button("📥 Indexer les documents", type="primary"):
             try:
                 resp = httpx.post(
                     f"{backend_url}/upload",
-                    files={"file": (f.name, f.read(), "application/pdf")},
+                    files={"file": (f.name, f.read(), "application/octet-stream")},
                     timeout=120,
                 )
                 if resp.status_code == 200:
@@ -150,9 +162,14 @@ for msg in st.session_state.chat_history:
         if msg["role"] == "assistant" and msg.get("sources"):
             with st.expander("📚 Sources"):
                 for src in msg["sources"]:
+                    rrf_score = src.get("score", 0)
+                    rerank_score = src.get("rerank_score")
+                    score_text = f"_(score RRF : {rrf_score:.4f}"
+                    if rerank_score is not None:
+                        score_text += f" · rerank : {rerank_score:.4f}"
+                    score_text += ")_"
                     st.markdown(
-                        f"**{src.get('source', '?')} — page {src.get('page', '?')}** "
-                        f"_(score RRF : {src.get('score', 0):.4f})_"
+                        f"**{src.get('source', '?')} — page {src.get('page', '?')}** {score_text}"
                     )
                     st.caption(src.get("text", ""))
                     st.divider()
@@ -169,45 +186,75 @@ if question := st.chat_input("Posez votre question sur les documents indexés…
     with st.chat_message("user"):
         st.markdown(question)
 
-    # Call backend
+    # Call backend with streaming
     with st.chat_message("assistant"):
-        with st.spinner("Recherche en cours…"):
+        # Use mutable containers to allow mutation from within the generator
+        _state = {"sources": [], "error": False}
+
+        def _sse_token_generator():
+            """Parse SSE stream from /query/stream and yield tokens."""
             try:
-                resp = httpx.post(
-                    f"{backend_url}/query",
+                with requests.post(
+                    f"{backend_url}/query/stream",
                     json={
                         "question": question,
                         "openai_api_key": openai_key,
                         "k": 5,
+                        "rerank": use_reranker,
                     },
-                    timeout=60,
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    answer = data.get("answer", "Pas de réponse.")
-                    sources = data.get("sources", [])
-
-                    st.markdown(answer)
-                    if sources:
-                        with st.expander("📚 Sources"):
-                            for src in sources:
-                                st.markdown(
-                                    f"**{src.get('source', '?')} — page {src.get('page', '?')}** "
-                                    f"_(score RRF : {src.get('score', 0):.4f})_"
-                                )
-                                st.caption(src.get("text", ""))
-                                st.divider()
-
-                    # Save to history
-                    st.session_state.chat_history.append(
-                        {
-                            "role": "assistant",
-                            "content": answer,
-                            "sources": sources,
-                        }
-                    )
-                else:
-                    detail = resp.json().get("detail", resp.text)
-                    st.error(f"❌ Erreur {resp.status_code} : {detail}")
+                    stream=True,
+                    timeout=120,
+                ) as resp:
+                    if resp.status_code != 200:
+                        _state["error"] = True
+                        yield f"❌ Erreur {resp.status_code} : {resp.text}"
+                        return
+                    for raw_line in resp.iter_lines():
+                        if not raw_line:
+                            continue
+                        line = raw_line.decode("utf-8") if isinstance(raw_line, bytes) else raw_line
+                        if not line.startswith("data: "):
+                            continue
+                        payload = line[len("data: "):]
+                        if payload == "[DONE]":
+                            break
+                        if payload.startswith("[SOURCES]"):
+                            try:
+                                _state["sources"] = json.loads(payload[len("[SOURCES]"):])
+                            except Exception:
+                                pass
+                            break
+                        yield payload
             except Exception as exc:
-                st.error(f"❌ Impossible de joindre le backend : {exc}")
+                _state["error"] = True
+                yield f"❌ Impossible de joindre le backend : {exc}"
+
+        answer = st.write_stream(_sse_token_generator())
+        sources = _state["sources"]
+        error_occurred = _state["error"]
+
+        # Show sources expander after streaming
+        if sources:
+            with st.expander("📚 Sources"):
+                for src in sources:
+                    rrf_score = src.get("score", 0)
+                    rerank_score = src.get("rerank_score")
+                    score_text = f"_(score RRF : {rrf_score:.4f}"
+                    if rerank_score is not None:
+                        score_text += f" · rerank : {rerank_score:.4f}"
+                    score_text += ")_"
+                    st.markdown(
+                        f"**{src.get('source', '?')} — page {src.get('page', '?')}** {score_text}"
+                    )
+                    st.caption(src.get("text", ""))
+                    st.divider()
+
+        if not error_occurred:
+            # Save to history
+            st.session_state.chat_history.append(
+                {
+                    "role": "assistant",
+                    "content": answer or "",
+                    "sources": sources,
+                }
+            )

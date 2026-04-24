@@ -6,6 +6,11 @@ Reciprocal Rank Fusion:
 
 where rrf_k=60 is a constant that dampens the influence of high-rank items,
 and the sum is over all retrieval lists in which the document appears.
+
+Optional cross-encoder reranking:
+    Pass rerank=True to retrieve() to run a CrossEncoderReranker on top of
+    the RRF results.  In that case RRF retrieves top-15 candidates which are
+    then narrowed to top-k by the reranker.
 """
 from __future__ import annotations
 
@@ -29,11 +34,16 @@ from .ingest import get_embeddings, get_qdrant_client, load_bm25_corpus
 
 logger = logging.getLogger(__name__)
 
+# When reranking, retrieve this many RRF candidates before reranking to top-k
+_RERANK_CANDIDATE_K = 15
+
 
 class HybridRetriever:
     """
     Combines dense vector search (Qdrant) and sparse BM25 search,
     then fuses results using Reciprocal Rank Fusion.
+
+    Optionally applies cross-encoder reranking as a second stage.
     """
 
     def __init__(
@@ -168,17 +178,24 @@ class HybridRetriever:
         k: int = RETRIEVAL_K,
         k_dense: int = RETRIEVAL_K_DENSE,
         k_sparse: int = RETRIEVAL_K_SPARSE,
+        rerank: bool = False,
     ) -> list[dict[str, Any]]:
         """
         Hybrid search: returns top-k chunks ranked by RRF fusion score.
 
+        If rerank=True, retrieves _RERANK_CANDIDATE_K via RRF first, then
+        narrows to k using the CrossEncoderReranker.
+
         Each result is a dict:
             {
                 "text":      str,
-                "metadata":  dict (source, page, chunk_id, ...),
+                "metadata":  dict (source, page, chunk_id, [rerank_score]),
                 "rrf_score": float,
             }
         """
+        # When reranking we want more RRF candidates to feed the cross-encoder
+        rrf_k = _RERANK_CANDIDATE_K if rerank else k
+
         dense_results = self._dense_search(query, k_dense)
         sparse_results = self._sparse_search(query, k_sparse)
 
@@ -188,4 +205,12 @@ class HybridRetriever:
             len(sparse_results),
         )
 
-        return self._fuse_rrf(dense_results, sparse_results, k)
+        fused = self._fuse_rrf(dense_results, sparse_results, rrf_k)
+
+        if rerank and fused:
+            from .reranker import CrossEncoderReranker
+
+            reranker = CrossEncoderReranker()
+            fused = reranker.rerank(query, fused, top_n=k)
+
+        return fused

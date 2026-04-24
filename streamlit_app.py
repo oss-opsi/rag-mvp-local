@@ -1,7 +1,8 @@
 """
 streamlit_app.py — Version autonome (sans Docker, sans FastAPI).
 
-Qdrant en mode local (stockage sur disque : ./qdrant_data).
+Qdrant en mode mémoire (pas de persistance sur disque).
+L'index est réinitialisé à chaque redémarrage de l'application.
 Toute l'interface est en français.
 
 Usage :
@@ -13,7 +14,6 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
-import pickle
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -37,15 +37,15 @@ st.set_page_config(
 logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
-# Local Qdrant data directory
-_QDRANT_DATA_DIR = "./qdrant_data"
-_BM25_CORPUS_FILE = "./qdrant_data/bm25_corpus.pkl"
 _COLLECTION_NAME = "rag_documents_standalone"
 _EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
 _EMBEDDING_DIM = 384
 _CHUNK_SIZE = 800
 _CHUNK_OVERLAP = 120
 _RRF_K = 60
+
+# Supported file extensions
+_SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".txt", ".md"}
 
 
 # ---------------------------------------------------------------------------
@@ -63,12 +63,12 @@ def _get_embeddings():
     )
 
 
-@st.cache_resource(show_spinner="Connexion à Qdrant (mode local)…")
+@st.cache_resource(show_spinner="Initialisation de Qdrant en mémoire…")
 def _get_qdrant_client():
     from qdrant_client import QdrantClient
 
-    Path(_QDRANT_DATA_DIR).mkdir(parents=True, exist_ok=True)
-    return QdrantClient(path=_QDRANT_DATA_DIR)
+    # In-memory mode: no data persisted to disk
+    return QdrantClient(":memory:")
 
 
 def _ensure_collection(client) -> None:
@@ -93,34 +93,87 @@ def _get_vector_store(client, embeddings):
 
 
 # ---------------------------------------------------------------------------
-# BM25 corpus management (file-based persistence)
+# BM25 corpus management (in-memory only — no pickle file)
 # ---------------------------------------------------------------------------
 
 
 def _load_bm25_corpus() -> list[dict[str, Any]]:
-    if "bm25_corpus" in st.session_state:
-        return st.session_state.bm25_corpus
-    Path(_QDRANT_DATA_DIR).mkdir(parents=True, exist_ok=True)
-    if Path(_BM25_CORPUS_FILE).exists():
-        with open(_BM25_CORPUS_FILE, "rb") as fh:
-            corpus = pickle.load(fh)
-        st.session_state.bm25_corpus = corpus
-        return corpus
-    st.session_state.bm25_corpus = []
-    return []
+    """Return the BM25 corpus stored in session state (in-memory only)."""
+    if "bm25_corpus" not in st.session_state:
+        st.session_state.bm25_corpus = []
+    return st.session_state.bm25_corpus
 
 
 def _save_bm25_corpus(corpus: list[dict[str, Any]]) -> None:
-    Path(_QDRANT_DATA_DIR).mkdir(parents=True, exist_ok=True)
-    with open(_BM25_CORPUS_FILE, "wb") as fh:
-        pickle.dump(corpus, fh)
+    """Persist BM25 corpus to session state (in-memory only)."""
     st.session_state.bm25_corpus = corpus
 
 
 def _reset_bm25_corpus() -> None:
-    if Path(_BM25_CORPUS_FILE).exists():
-        os.remove(_BM25_CORPUS_FILE)
+    """Clear the BM25 corpus in session state."""
     st.session_state.bm25_corpus = []
+
+
+# ---------------------------------------------------------------------------
+# Cross-encoder reranker (lazy-loaded singleton)
+# ---------------------------------------------------------------------------
+
+_cross_encoder_instance = None
+
+
+def _get_cross_encoder():
+    """Lazy-load and return the CrossEncoder singleton."""
+    global _cross_encoder_instance
+    if _cross_encoder_instance is None:
+        from sentence_transformers import CrossEncoder
+        _cross_encoder_instance = CrossEncoder("BAAI/bge-reranker-base")
+    return _cross_encoder_instance
+
+
+def _cross_encoder_rerank(
+    query: str,
+    chunks: list[dict[str, Any]],
+    top_n: int = 5,
+) -> list[dict[str, Any]]:
+    """Score chunks with the cross-encoder and return top_n."""
+    if not chunks:
+        return []
+    ce = _get_cross_encoder()
+    pairs = [(query, c["text"]) for c in chunks]
+    scores = ce.predict(pairs)
+    scored = []
+    for chunk, score in zip(chunks, scores):
+        enriched = dict(chunk)
+        enriched["metadata"] = dict(chunk["metadata"])
+        enriched["metadata"]["rerank_score"] = float(score)
+        scored.append((float(score), enriched))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [doc for _, doc in scored[:top_n]]
+
+
+# ---------------------------------------------------------------------------
+# Document loading by extension
+# ---------------------------------------------------------------------------
+
+
+def _load_documents(file_path: str, ext: str):
+    """Load a document using the appropriate loader for the file extension."""
+    ext = ext.lower()
+    if ext == ".pdf":
+        from langchain_community.document_loaders import PyPDFLoader
+        loader = PyPDFLoader(file_path)
+    elif ext == ".docx":
+        from langchain_community.document_loaders import Docx2txtLoader
+        loader = Docx2txtLoader(file_path)
+    elif ext in {".txt", ".md"}:
+        from langchain_community.document_loaders import TextLoader
+        loader = TextLoader(file_path, encoding="utf-8")
+    else:
+        raise ValueError(
+            f"Format non supporté : '{ext}'. "
+            f"Formats acceptés : PDF, DOCX, TXT, MD"
+        )
+    return loader.load()
 
 
 # ---------------------------------------------------------------------------
@@ -128,14 +181,12 @@ def _reset_bm25_corpus() -> None:
 # ---------------------------------------------------------------------------
 
 
-def ingest_pdf_standalone(file_path: str, source_name: str) -> int:
-    """Ingest a PDF into the local Qdrant and the BM25 corpus."""
-    from langchain_community.document_loaders import PyPDFLoader
+def ingest_document_standalone(file_path: str, source_name: str, ext: str) -> int:
+    """Ingest a document into the in-memory Qdrant and the BM25 corpus."""
     from langchain_text_splitters import RecursiveCharacterTextSplitter
 
     # Load
-    loader = PyPDFLoader(file_path)
-    pages = loader.load()
+    pages = _load_documents(file_path, ext)
 
     # Split
     splitter = RecursiveCharacterTextSplitter(
@@ -155,14 +206,14 @@ def ingest_pdf_standalone(file_path: str, source_name: str) -> int:
         else:
             doc.metadata["page"] = 1
 
-    # Qdrant
+    # Qdrant (in-memory)
     embeddings = _get_embeddings()
     client = _get_qdrant_client()
     _ensure_collection(client)
     vector_store = _get_vector_store(client, embeddings)
     vector_store.add_documents(docs)
 
-    # BM25
+    # BM25 (in-memory via session state)
     corpus = _load_bm25_corpus()
     for doc in docs:
         corpus.append(
@@ -243,42 +294,45 @@ def _rrf_fuse(
     ]
 
 
-def hybrid_retrieve(query: str, k: int = 5) -> list[dict[str, Any]]:
+def hybrid_retrieve(
+    query: str,
+    k: int = 5,
+    use_reranker: bool = False,
+) -> list[dict[str, Any]]:
+    """Hybrid search with optional cross-encoder reranking."""
+    # Retrieve more candidates when reranking
+    rrf_k = 15 if use_reranker else k
     dense = _dense_search(query, k_dense := 20)
     sparse = _sparse_search(query, k_sparse := 20)
-    return _rrf_fuse(dense, sparse, k)
+    fused = _rrf_fuse(dense, sparse, rrf_k)
+
+    if use_reranker and fused:
+        fused = _cross_encoder_rerank(query, fused, top_n=k)
+
+    return fused
 
 
 # ---------------------------------------------------------------------------
-# RAG chain
+# RAG chain — non-streaming
 # ---------------------------------------------------------------------------
 
 
-def answer_question_standalone(
-    question: str, openai_api_key: str, k: int = 5
-) -> dict[str, Any]:
+def _build_context(chunks: list[dict[str, Any]]) -> str:
+    parts = []
+    for chunk in chunks:
+        meta = chunk["metadata"]
+        src = meta.get("source", "inconnu")
+        page = meta.get("page", "?")
+        parts.append(f"[{src} p.{page}]\n{chunk['text']}")
+    return "\n\n---\n\n".join(parts)
+
+
+def _build_llm_chain(openai_api_key: str):
     from langchain_core.output_parsers import StrOutputParser
     from langchain_core.prompts import ChatPromptTemplate
     from langchain_core.runnables import RunnablePassthrough
     from langchain_openai import ChatOpenAI
 
-    chunks = hybrid_retrieve(question, k=k)
-    if not chunks:
-        return {
-            "answer": "Je ne sais pas. Aucun document pertinent n'a été trouvé dans l'index.",
-            "sources": [],
-        }
-
-    # Format context
-    context_parts = []
-    for chunk in chunks:
-        meta = chunk["metadata"]
-        src = meta.get("source", "inconnu")
-        page = meta.get("page", "?")
-        context_parts.append(f"[{src} p.{page}]\n{chunk['text']}")
-    context = "\n\n---\n\n".join(context_parts)
-
-    # Prompt
     system_prompt = (
         "Tu es un assistant expert en analyse de documents.\n"
         "Tu réponds UNIQUEMENT à partir du contexte fourni ci-dessous.\n"
@@ -290,21 +344,37 @@ def answer_question_standalone(
     prompt = ChatPromptTemplate.from_messages(
         [("system", system_prompt), ("human", "{question}")]
     )
-
     llm = ChatOpenAI(
         model="gpt-4o-mini",
         temperature=0.1,
         api_key=openai_api_key,
+        streaming=True,
     )
-
     chain = (
         {"context": RunnablePassthrough(), "question": RunnablePassthrough()}
         | prompt
         | llm
         | StrOutputParser()
     )
+    return chain
 
-    answer = chain.invoke({"context": context, "question": question})
+
+def stream_answer_standalone(
+    question: str,
+    openai_api_key: str,
+    k: int = 5,
+    use_reranker: bool = False,
+):
+    """
+    Returns (token_generator, sources) for streaming display.
+    Retrieval is done synchronously first; only LLM generation is streamed.
+    """
+    chunks = hybrid_retrieve(question, k=k, use_reranker=use_reranker)
+
+    if not chunks:
+        def _empty():
+            yield "Je ne sais pas. Aucun document pertinent n'a été trouvé dans l'index."
+        return _empty(), []
 
     sources = [
         {
@@ -312,10 +382,19 @@ def answer_question_standalone(
             "source": c["metadata"].get("source", "inconnu"),
             "page": c["metadata"].get("page", "?"),
             "score": c["rrf_score"],
+            "rerank_score": c["metadata"].get("rerank_score"),
         }
         for c in chunks
     ]
-    return {"answer": answer, "sources": sources}
+
+    context = _build_context(chunks)
+    chain = _build_llm_chain(openai_api_key)
+
+    def _token_gen():
+        for token in chain.stream({"context": context, "question": question}):
+            yield token
+
+    return _token_gen(), sources
 
 
 # ---------------------------------------------------------------------------
@@ -328,7 +407,7 @@ if "chat_history" not in st.session_state:
 if "indexed_docs" not in st.session_state:
     st.session_state.indexed_docs: list[str] = []
 
-# Pre-load BM25 corpus
+# Initialise BM25 corpus (in-memory)
 _load_bm25_corpus()
 
 # ---------------------------------------------------------------------------
@@ -345,7 +424,16 @@ with st.sidebar:
         help="Votre clé OpenAI. Elle n'est jamais stockée sur disque.",
     )
 
-    st.info("Mode autonome — Qdrant stocké localement dans `./qdrant_data/`")
+    st.info("Qdrant en mémoire — l'index est réinitialisé à chaque redémarrage")
+
+    st.divider()
+
+    # Cross-encoder reranker toggle
+    use_reranker = st.checkbox(
+        "Activer le cross-encoder reranker (plus précis, + lent)",
+        value=False,
+        help="Utilise BAAI/bge-reranker-base pour reranker les résultats après RRF.",
+    )
 
     st.divider()
 
@@ -364,7 +452,7 @@ with st.sidebar:
 
     st.divider()
 
-    # Reset
+    # Reset — recreates the in-memory collection
     if st.button("🗑️ Réinitialiser l'index", type="secondary"):
         try:
             client = _get_qdrant_client()
@@ -375,8 +463,6 @@ with st.sidebar:
             _reset_bm25_corpus()
             st.session_state.indexed_docs = []
             st.session_state.chat_history = []
-            # Invalidate cached resources
-            st.cache_resource.clear()
             st.success("Index réinitialisé.")
             st.rerun()
         except Exception as exc:
@@ -394,7 +480,7 @@ with st.sidebar:
 
 st.title("📚 RAG MVP — Mode Autonome (sans Docker)")
 st.caption(
-    "Recherche dense (Qdrant local) + BM25 + fusion RRF · LLM : GPT-4o-mini · "
+    "Recherche dense (Qdrant mémoire) + BM25 + fusion RRF · LLM : GPT-4o-mini · "
     "Embeddings : BAAI/bge-small-en-v1.5"
 )
 
@@ -405,8 +491,8 @@ st.caption(
 st.subheader("1. Indexer vos documents")
 
 uploaded_files = st.file_uploader(
-    "Glissez-déposez vos fichiers PDF ici",
-    type=["pdf"],
+    "Glissez-déposez vos fichiers ici (PDF, DOCX, TXT, MD — max 200 Mo)",
+    type=["pdf", "docx", "txt", "md"],
     accept_multiple_files=True,
     label_visibility="collapsed",
 )
@@ -416,11 +502,15 @@ if uploaded_files and st.button("📥 Indexer les documents", type="primary"):
     total = len(uploaded_files)
     for i, f in enumerate(uploaded_files):
         progress.progress(i / total, text=f"Indexation de {f.name} ({i+1}/{total})…")
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+        ext = Path(f.name).suffix.lower()
+        if ext not in _SUPPORTED_EXTENSIONS:
+            st.error(f"❌ Format non supporté : {f.name}")
+            continue
+        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
             tmp.write(f.read())
             tmp_path = tmp.name
         try:
-            chunk_count = ingest_pdf_standalone(tmp_path, f.name)
+            chunk_count = ingest_document_standalone(tmp_path, f.name, ext)
             if f.name not in st.session_state.indexed_docs:
                 st.session_state.indexed_docs.append(f.name)
             st.success(f"✅ **{f.name}** — {chunk_count} fragments indexés")
@@ -444,9 +534,14 @@ for msg in st.session_state.chat_history:
         if msg["role"] == "assistant" and msg.get("sources"):
             with st.expander("📚 Sources"):
                 for src in msg["sources"]:
+                    rrf_score = src.get("score", 0)
+                    rerank_score = src.get("rerank_score")
+                    score_text = f"_(score RRF : {rrf_score:.4f}"
+                    if rerank_score is not None:
+                        score_text += f" · rerank : {rerank_score:.4f}"
+                    score_text += ")_"
                     st.markdown(
-                        f"**{src.get('source', '?')} — page {src.get('page', '?')}** "
-                        f"_(score RRF : {src.get('score', 0):.4f})_"
+                        f"**{src.get('source', '?')} — page {src.get('page', '?')}** {score_text}"
                     )
                     st.caption(src.get("text", ""))
                     st.divider()
@@ -461,25 +556,31 @@ if question := st.chat_input("Posez votre question sur les documents indexés…
         st.markdown(question)
 
     with st.chat_message("assistant"):
-        with st.spinner("Recherche en cours…"):
-            try:
-                result = answer_question_standalone(question, openai_key)
-                answer = result["answer"]
-                sources = result["sources"]
+        try:
+            token_gen, sources = stream_answer_standalone(
+                question, openai_key, k=5, use_reranker=use_reranker
+            )
+            # Stream tokens token-by-token
+            answer = st.write_stream(token_gen)
 
-                st.markdown(answer)
-                if sources:
-                    with st.expander("📚 Sources"):
-                        for src in sources:
-                            st.markdown(
-                                f"**{src.get('source', '?')} — page {src.get('page', '?')}** "
-                                f"_(score RRF : {src.get('score', 0):.4f})_"
-                            )
-                            st.caption(src.get("text", ""))
-                            st.divider()
+            # Show sources after streaming completes
+            if sources:
+                with st.expander("📚 Sources"):
+                    for src in sources:
+                        rrf_score = src.get("score", 0)
+                        rerank_score = src.get("rerank_score")
+                        score_text = f"_(score RRF : {rrf_score:.4f}"
+                        if rerank_score is not None:
+                            score_text += f" · rerank : {rerank_score:.4f}"
+                        score_text += ")_"
+                        st.markdown(
+                            f"**{src.get('source', '?')} — page {src.get('page', '?')}** {score_text}"
+                        )
+                        st.caption(src.get("text", ""))
+                        st.divider()
 
-                st.session_state.chat_history.append(
-                    {"role": "assistant", "content": answer, "sources": sources}
-                )
-            except Exception as exc:
-                st.error(f"❌ Erreur : {exc}")
+            st.session_state.chat_history.append(
+                {"role": "assistant", "content": answer or "", "sources": sources}
+            )
+        except Exception as exc:
+            st.error(f"❌ Erreur : {exc}")

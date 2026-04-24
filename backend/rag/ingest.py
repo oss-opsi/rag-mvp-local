@@ -1,6 +1,12 @@
 """
-PDF ingestion pipeline:
-  PDF → text extraction → chunking → embedding → Qdrant indexing
+Document ingestion pipeline:
+  File → text extraction → chunking → embedding → Qdrant indexing
+
+Supported formats:
+  .pdf   — PyPDFLoader
+  .docx  — Docx2txtLoader
+  .txt   — TextLoader (utf-8)
+  .md    — TextLoader (utf-8)  [UnstructuredMarkdownLoader is too heavy]
 
 Also maintains an in-memory BM25 corpus for sparse retrieval.
 """
@@ -14,7 +20,6 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from langchain_community.document_loaders import PyPDFLoader
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_qdrant import QdrantVectorStore
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -31,6 +36,9 @@ from .config import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Supported file extensions
+SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".txt", ".md"}
 
 # ---------------------------------------------------------------------------
 # Shared singletons (lazy initialisation)
@@ -101,13 +109,48 @@ def reset_bm25_corpus() -> None:
         os.remove(_BM25_CORPUS_FILE)
 
 
-def ingest_pdf(
+# ---------------------------------------------------------------------------
+# Loader selection by extension
+# ---------------------------------------------------------------------------
+
+
+def _load_documents(file_path: str, ext: str):
+    """
+    Load a document using the appropriate loader for the file extension.
+    Returns a list of LangChain Document objects.
+    """
+    ext = ext.lower()
+    if ext == ".pdf":
+        from langchain_community.document_loaders import PyPDFLoader
+        loader = PyPDFLoader(file_path)
+    elif ext == ".docx":
+        from langchain_community.document_loaders import Docx2txtLoader
+        loader = Docx2txtLoader(file_path)
+    elif ext in {".txt", ".md"}:
+        from langchain_community.document_loaders import TextLoader
+        loader = TextLoader(file_path, encoding="utf-8")
+    else:
+        raise ValueError(
+            f"Format non supporté : '{ext}'. "
+            f"Formats acceptés : {', '.join(sorted(SUPPORTED_EXTENSIONS))}"
+        )
+    return loader.load()
+
+
+# ---------------------------------------------------------------------------
+# Main ingestion function
+# ---------------------------------------------------------------------------
+
+
+def ingest_file(
     file_path: str,
     source_name: str,
     qdrant_url: str = QDRANT_URL,
 ) -> int:
     """
-    Ingest a PDF file into Qdrant (dense) and the BM25 corpus (sparse).
+    Ingest a document file into Qdrant (dense) and the BM25 corpus (sparse).
+
+    Supported formats: PDF, DOCX, TXT, MD.
 
     Returns the number of chunks indexed.
     """
@@ -116,10 +159,14 @@ def ingest_pdf(
     # Ensure corpus is loaded
     load_bm25_corpus()
 
-    # 1. Load PDF
-    loader = PyPDFLoader(file_path)
-    pages = loader.load()
-    logger.info("Loaded %d pages from '%s'.", len(pages), source_name)
+    # Determine extension
+    ext = Path(source_name).suffix.lower()
+    if not ext:
+        ext = Path(file_path).suffix.lower()
+
+    # 1. Load document
+    pages = _load_documents(file_path, ext)
+    logger.info("Loaded %d page(s)/section(s) from '%s'.", len(pages), source_name)
 
     # 2. Split into chunks
     splitter = RecursiveCharacterTextSplitter(
@@ -134,7 +181,7 @@ def ingest_pdf(
     for i, doc in enumerate(docs):
         doc.metadata["source"] = source_name
         doc.metadata["chunk_id"] = f"{doc_hash}_{i}"
-        # page comes from PyPDFLoader as 'page' (0-indexed) — convert to 1-indexed
+        # PyPDFLoader sets 'page' (0-indexed) — convert to 1-indexed
         if "page" in doc.metadata:
             doc.metadata["page"] = int(doc.metadata["page"]) + 1
         else:
@@ -170,6 +217,20 @@ def ingest_pdf(
         len(_bm25_corpus),
     )
     return len(docs)
+
+
+# ---------------------------------------------------------------------------
+# Legacy alias (kept for backwards compatibility)
+# ---------------------------------------------------------------------------
+
+
+def ingest_pdf(
+    file_path: str,
+    source_name: str,
+    qdrant_url: str = QDRANT_URL,
+) -> int:
+    """Alias for ingest_file — retained for backwards compatibility."""
+    return ingest_file(file_path, source_name, qdrant_url)
 
 
 def get_indexed_doc_count(qdrant_url: str = QDRANT_URL) -> int:

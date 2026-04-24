@@ -3,14 +3,19 @@ LangChain RAG chain (LCEL) using GPT-4o-mini.
 
 The chain:
   1. Retrieves relevant chunks via HybridRetriever (RRF)
-  2. Formats the context
-  3. Sends prompt to ChatOpenAI (gpt-4o-mini)
-  4. Returns the answer + source chunks
+  2. Optionally reranks with CrossEncoderReranker
+  3. Formats the context
+  4. Sends prompt to ChatOpenAI (gpt-4o-mini)
+  5. Returns the answer + source chunks
+
+Streaming:
+  Use stream_answer() to yield tokens one-by-one from the LLM.
+  Retrieval is done synchronously first; only the LLM generation is streamed.
 """
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Generator
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
@@ -61,8 +66,24 @@ def _format_context(chunks: list[dict[str, Any]]) -> str:
     return "\n\n---\n\n".join(parts)
 
 
+def _build_llm_chain(openai_api_key: str):
+    """Build and return the LangChain LCEL chain (prompt → LLM → parser)."""
+    llm = ChatOpenAI(
+        model=LLM_MODEL,
+        temperature=LLM_TEMPERATURE,
+        api_key=openai_api_key,
+    )
+    chain = (
+        {"context": RunnablePassthrough(), "question": RunnablePassthrough()}
+        | _PROMPT
+        | llm
+        | StrOutputParser()
+    )
+    return chain
+
+
 # ---------------------------------------------------------------------------
-# Main entry point
+# Main entry points
 # ---------------------------------------------------------------------------
 
 
@@ -71,24 +92,26 @@ def answer_question(
     openai_api_key: str,
     qdrant_url: str = QDRANT_URL,
     k: int = 5,
+    rerank: bool = False,
 ) -> dict[str, Any]:
     """
-    Run the full RAG pipeline for a single question.
+    Run the full RAG pipeline for a single question (non-streaming).
 
     Returns:
         {
             "answer": str,
             "sources": [
-                {"text": str, "source": str, "page": int|str, "score": float}
+                {"text": str, "source": str, "page": int|str, "score": float,
+                 "rerank_score": float|None}
             ]
         }
     """
     if not openai_api_key:
         raise ValueError("La clé API OpenAI est manquante.")
 
-    # 1. Retrieve chunks
+    # 1. Retrieve chunks (use larger k_rrf when reranking)
     retriever = HybridRetriever(qdrant_url=qdrant_url)
-    chunks = retriever.retrieve(question, k=k)
+    chunks = retriever.retrieve(question, k=k, rerank=rerank)
 
     if not chunks:
         return {
@@ -99,13 +122,80 @@ def answer_question(
     # 2. Build context
     context = _format_context(chunks)
 
-    # 3. Build LangChain LCEL chain
+    # 3. Build and invoke LangChain chain
+    chain = _build_llm_chain(openai_api_key)
+    answer = chain.invoke({"context": context, "question": question})
+
+    # 4. Format sources for API response
+    sources = []
+    for chunk in chunks:
+        src = {
+            "text": chunk["text"],
+            "source": chunk["metadata"].get("source", "inconnu"),
+            "page": chunk["metadata"].get("page", "?"),
+            "score": chunk["rrf_score"],
+            "rerank_score": chunk["metadata"].get("rerank_score"),
+        }
+        sources.append(src)
+
+    return {"answer": answer, "sources": sources}
+
+
+def stream_answer(
+    question: str,
+    openai_api_key: str,
+    qdrant_url: str = QDRANT_URL,
+    k: int = 5,
+    rerank: bool = False,
+) -> tuple[Generator[str, None, None], list[dict[str, Any]]]:
+    """
+    Run the RAG pipeline with streaming LLM output.
+
+    Strategy:
+      1. Retrieve docs synchronously (RRF + optional reranker).
+      2. Return (token_generator, sources) so the caller can:
+         - Stream tokens to the UI via st.write_stream / SSE.
+         - Display sources after streaming completes.
+
+    Returns:
+        (generator_of_tokens, list_of_source_dicts)
+    """
+    if not openai_api_key:
+        raise ValueError("La clé API OpenAI est manquante.")
+
+    # 1. Retrieve chunks (sync)
+    retriever = HybridRetriever(qdrant_url=qdrant_url)
+    chunks = retriever.retrieve(question, k=k, rerank=rerank)
+
+    if not chunks:
+        # Return a generator that yields the "no doc" message
+        def _empty_gen():
+            yield "Je ne sais pas. Aucun document pertinent n'a été trouvé dans l'index."
+
+        return _empty_gen(), []
+
+    # 2. Format sources
+    sources = []
+    for chunk in chunks:
+        src = {
+            "text": chunk["text"],
+            "source": chunk["metadata"].get("source", "inconnu"),
+            "page": chunk["metadata"].get("page", "?"),
+            "score": chunk["rrf_score"],
+            "rerank_score": chunk["metadata"].get("rerank_score"),
+        }
+        sources.append(src)
+
+    # 3. Build context
+    context = _format_context(chunks)
+
+    # 4. Build LLM chain and stream
     llm = ChatOpenAI(
         model=LLM_MODEL,
         temperature=LLM_TEMPERATURE,
         api_key=openai_api_key,
+        streaming=True,
     )
-
     chain = (
         {"context": RunnablePassthrough(), "question": RunnablePassthrough()}
         | _PROMPT
@@ -113,18 +203,8 @@ def answer_question(
         | StrOutputParser()
     )
 
-    # 4. Invoke chain — pass context and question separately
-    answer = chain.invoke({"context": context, "question": question})
+    def _token_gen() -> Generator[str, None, None]:
+        for token in chain.stream({"context": context, "question": question}):
+            yield token
 
-    # 5. Format sources for API response
-    sources = [
-        {
-            "text": chunk["text"],
-            "source": chunk["metadata"].get("source", "inconnu"),
-            "page": chunk["metadata"].get("page", "?"),
-            "score": chunk["rrf_score"],
-        }
-        for chunk in chunks
-    ]
-
-    return {"answer": answer, "sources": sources}
+    return _token_gen(), sources

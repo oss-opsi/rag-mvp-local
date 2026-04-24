@@ -1,8 +1,19 @@
 # RAG MVP — Recherche Documentaire Hybride
 
+## Nouveautés v2
+
+| # | Amélioration | Détail |
+|---|---|---|
+| 1 | **Mode mémoire (clean-session)** | `streamlit_app.py` utilise désormais `QdrantClient(":memory:")` : l'index Qdrant et le corpus BM25 sont entièrement en mémoire et réinitialisés à chaque redémarrage. Aucun fichier n'est écrit sur le disque. |
+| 2 | **Réponses en streaming (token par token)** | Le LLM génère les réponses en flux continu via `chain.stream(...)`. Dans `streamlit_app.py` et `frontend/app.py`, `st.write_stream(...)` affiche les tokens au fur et à mesure. Le backend FastAPI expose un nouvel endpoint `POST /query/stream` (Server-Sent Events). |
+| 3 | **Cross-encoder reranker** | Un reranker `CrossEncoderReranker` basé sur `BAAI/bge-reranker-base` est disponible en option (chargement différé). Activé via une case à cocher dans la barre latérale. Quand il est actif, RRF sélectionne 15 candidats, puis le cross-encoder les reclasse et retient les 5 meilleurs. Les scores RRF et rerank sont affichés dans le panneau **📚 Sources**. |
+| 4 | **Support DOCX, TXT, Markdown** | L'indexation accepte désormais `.pdf`, `.docx`, `.txt` et `.md`. Le bon loader est choisi automatiquement selon l'extension. Les interfaces de dépôt de fichiers ont été mises à jour en conséquence. |
+
+---
+
 ## Description du projet
 
-RAG MVP est une application de **Retrieval-Augmented Generation** (RAG) locale et complète. Elle permet d'indexer des documents PDF et de poser des questions en langage naturel, en obtenant des réponses sourcées générées par GPT-4o-mini.
+RAG MVP est une application de **Retrieval-Augmented Generation** (RAG) locale et complète. Elle permet d'indexer des documents (PDF, DOCX, TXT, MD) et de poser des questions en langage naturel, en obtenant des réponses sourcées générées par GPT-4o-mini.
 
 L'application implémente une **recherche hybride** combinant :
 - **Recherche dense** (embeddings BAAI/bge-small-en-v1.5 dans Qdrant)
@@ -110,7 +121,7 @@ pip install -r requirements.txt
 streamlit run streamlit_app.py
 ```
 
-Les données sont persistées dans `./qdrant_data/` (Qdrant local) et `./qdrant_data/bm25_corpus.pkl` (corpus BM25).
+En mode autonome, Qdrant et le corpus BM25 sont entièrement **en mémoire** : l'index est réinitialisé à chaque redémarrage (aucune donnée persistée sur disque).
 
 ---
 
@@ -119,8 +130,8 @@ Les données sont persistées dans `./qdrant_data/` (Qdrant local) et `./qdrant_
 ### 1. Renseigner la clé OpenAI
 Dans la barre latérale gauche, entrez votre clé API OpenAI (`sk-...`). Elle est transmise directement à l'API OpenAI sans être stockée.
 
-### 2. Indexer un PDF
-1. Glissez-déposez un ou plusieurs fichiers PDF dans la zone de dépôt
+### 2. Indexer un document
+1. Glissez-déposez un ou plusieurs fichiers PDF, DOCX, TXT ou MD dans la zone de dépôt
 2. Cliquez sur **Indexer les documents**
 3. Attendez la confirmation (nombre de fragments indexés)
 
@@ -176,8 +187,9 @@ rag-mvp/
 │       ├── __init__.py
 │       ├── config.py            # Configuration centralisée
 │       ├── ingest.py            # Ingestion PDF → Qdrant + BM25
-│       ├── retriever.py         # Recherche hybride + fusion RRF
-│       └── chain.py             # Chaîne LangChain (LCEL) + GPT-4o-mini
+│       ├── retriever.py         # Recherche hybride + fusion RRF (+ reranking)
+│       ├── reranker.py          # Cross-encoder reranker (BAAI/bge-reranker-base)
+│       └── chain.py             # Chaîne LangChain (LCEL) + GPT-4o-mini + streaming
 └── frontend/
     ├── Dockerfile
     ├── app.py                   # Interface Streamlit (mode Docker)
