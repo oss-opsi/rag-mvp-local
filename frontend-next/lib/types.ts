@@ -136,17 +136,34 @@ export type Report = {
   cdc_id?: number;
 };
 
+// Analysis row as returned by backend get_latest_analysis:
+// flat columns + an embedded `report` that contains summary + requirements.
+export type AnalysisRow = {
+  id: number;
+  cdc_id?: number;
+  created_at?: string;
+  total?: number;
+  covered?: number;
+  partial?: number;
+  missing?: number;
+  ambiguous?: number;
+  coverage_percent?: number;
+  chunks_processed?: number;
+  pipeline_version?: string;
+  corpus_fingerprint?: string;
+  report?: {
+    filename?: string;
+    summary?: Partial<AnalysisSummary>;
+    requirements?: Requirement[];
+    pipeline_version?: string;
+    [key: string]: unknown;
+  } | null;
+};
+
 export type CdcDetail = {
   cdc: Cdc;
   status: CdcStatus;
   pipeline_version: string;
   corpus_fingerprint?: string;
-  analysis:
-    | {
-        id: number;
-        summary: AnalysisSummary;
-        requirements: Requirement[];
-        pipeline_version: string;
-      }
-    | null;
+  analysis: AnalysisRow | null;
 };

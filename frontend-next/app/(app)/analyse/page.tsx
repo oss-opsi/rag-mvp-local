@@ -92,20 +92,7 @@ export default function AnalysePage() {
       try {
         const detail = await api.cdc(cdcId);
         setCdcDetail(detail);
-        if (detail.analysis) {
-          const a = detail.analysis;
-          const rpt: Report = {
-            filename: detail.cdc.filename,
-            summary: a.summary,
-            requirements: a.requirements,
-            pipeline_version: a.pipeline_version,
-            analysis_id: a.id,
-            cdc_id: detail.cdc.id,
-          };
-          setReport(rpt);
-        } else {
-          setReport(null);
-        }
+        setReport(buildReportFromDetail(detail));
         return detail;
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Erreur chargement CDC";
@@ -222,9 +209,11 @@ export default function AnalysePage() {
     });
     try {
       const rpt = await api.analyseCdc(selectedCdcId, force);
-      // Normalize possible requirement shape
       const requirements: Requirement[] = rpt.requirements || [];
-      const summary: AnalysisSummary = rpt.summary;
+      const summary: AnalysisSummary = normalizeSummary(
+        rpt.summary,
+        requirements
+      );
       setReport({
         filename: rpt.filename,
         summary,
@@ -474,6 +463,68 @@ export default function AnalysePage() {
       />
     </>
   );
+}
+
+function normalizeSummary(
+  raw: Partial<AnalysisSummary> | null | undefined,
+  requirements: Requirement[]
+): AnalysisSummary {
+  const s = raw || {};
+  const total = Number.isFinite(s.total as number)
+    ? (s.total as number)
+    : requirements.length;
+  const countBy = (st: Requirement["status"]) =>
+    requirements.filter((r) => r.status === st).length;
+  const covered = Number.isFinite(s.covered as number)
+    ? (s.covered as number)
+    : countBy("covered");
+  const partial = Number.isFinite(s.partial as number)
+    ? (s.partial as number)
+    : countBy("partial");
+  const missing = Number.isFinite(s.missing as number)
+    ? (s.missing as number)
+    : countBy("missing");
+  const ambiguous = Number.isFinite(s.ambiguous as number)
+    ? (s.ambiguous as number)
+    : countBy("ambiguous");
+  let coverage_percent = s.coverage_percent as number | undefined;
+  if (!Number.isFinite(coverage_percent as number)) {
+    coverage_percent = total > 0 ? (covered / total) * 100 : 0;
+  }
+  return { total, covered, partial, missing, ambiguous, coverage_percent: coverage_percent as number };
+}
+
+function buildReportFromDetail(detail: CdcDetail): Report | null {
+  const a = detail.analysis;
+  if (!a) return null;
+  const report = a.report || {};
+  const requirements: Requirement[] = Array.isArray(report.requirements)
+    ? (report.requirements as Requirement[])
+    : [];
+  // Prefer report.summary, then fall back to flat columns on the analysis row.
+  const flatSummary: Partial<AnalysisSummary> = {
+    total: a.total,
+    covered: a.covered,
+    partial: a.partial,
+    missing: a.missing,
+    ambiguous: a.ambiguous,
+    coverage_percent: a.coverage_percent,
+  };
+  const summary = normalizeSummary(
+    (report.summary as Partial<AnalysisSummary> | undefined) || flatSummary,
+    requirements
+  );
+  return {
+    filename: (report.filename as string) || detail.cdc.filename,
+    summary,
+    requirements,
+    pipeline_version:
+      (report.pipeline_version as string | undefined) ||
+      a.pipeline_version ||
+      detail.pipeline_version,
+    analysis_id: a.id,
+    cdc_id: detail.cdc.id,
+  };
 }
 
 function StatusPill({ status }: { status: string }) {

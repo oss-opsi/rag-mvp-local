@@ -58,7 +58,7 @@ export function CdcReport({
   reanalysing,
 }: {
   filename: string;
-  summary: AnalysisSummary;
+  summary: AnalysisSummary | Partial<AnalysisSummary> | null | undefined;
   requirements: Requirement[];
   pipelineVersion?: string;
   onReanalyse: () => void | Promise<void>;
@@ -107,9 +107,19 @@ export function CdcReport({
     setSheetOpen(true);
   };
 
+  const coveragePercent =
+    typeof summary?.coverage_percent === "number" ? summary.coverage_percent : 0;
+  const safeSummary = {
+    total: summary?.total ?? 0,
+    covered: summary?.covered ?? 0,
+    partial: summary?.partial ?? 0,
+    missing: summary?.missing ?? 0,
+    ambiguous: summary?.ambiguous ?? 0,
+    coverage_percent: coveragePercent,
+  };
   const statusBadgeVariant = (() => {
-    if (summary.coverage_percent >= 70) return "success" as const;
-    if (summary.coverage_percent >= 40) return "warning" as const;
+    if (coveragePercent >= 70) return "success" as const;
+    if (coveragePercent >= 40) return "warning" as const;
     return "destructive" as const;
   })();
 
@@ -119,7 +129,7 @@ export function CdcReport({
         <div className="flex min-w-0 items-center gap-3">
           <h1 className="truncate text-base font-semibold">{filename}</h1>
           <Badge variant={statusBadgeVariant}>
-            {summary.coverage_percent.toFixed(0)}% couvert
+            {coveragePercent.toFixed(0)}% couvert
           </Badge>
         </div>
         <div className="flex items-center gap-2">
@@ -138,29 +148,29 @@ export function CdcReport({
       <div className="flex min-h-0 flex-1">
         <aside className="sticky top-14 flex w-80 shrink-0 flex-col gap-4 self-start border-r border-border p-6">
           <div className="flex justify-center">
-            <CoverageDonut percent={summary.coverage_percent} />
+            <CoverageDonut percent={coveragePercent} />
           </div>
 
           <dl className="grid grid-cols-2 gap-2 text-sm">
             <dt className="text-muted-foreground">Total</dt>
             <dd className="text-right font-semibold tabular-nums">
-              {summary.total}
+              {safeSummary.total}
             </dd>
             <dt className="text-success">Couverts</dt>
             <dd className="text-right font-semibold tabular-nums">
-              {summary.covered}
+              {safeSummary.covered}
             </dd>
             <dt className="text-warning">Partiels</dt>
             <dd className="text-right font-semibold tabular-nums">
-              {summary.partial}
+              {safeSummary.partial}
             </dd>
             <dt className="text-danger">Manquants</dt>
             <dd className="text-right font-semibold tabular-nums">
-              {summary.missing}
+              {safeSummary.missing}
             </dd>
             <dt className="text-muted-foreground">Ambigus</dt>
             <dd className="text-right font-semibold tabular-nums">
-              {summary.ambiguous}
+              {safeSummary.ambiguous}
             </dd>
           </dl>
 
