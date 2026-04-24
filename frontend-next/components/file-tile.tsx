@@ -32,13 +32,16 @@ export function FileTile({
 }) {
   const ext = getExt(filename);
   return (
-    <div className="group relative flex items-center gap-3 rounded-md border border-border bg-background p-3 transition-colors hover:border-accent/40">
+    <div className="group relative flex items-start gap-3 rounded-md border border-border bg-background p-3 transition-colors hover:border-accent/40">
       <FileIcon ext={ext} />
       <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium" title={filename}>
+        <p
+          className="break-words text-sm font-medium leading-snug line-clamp-2"
+          title={filename}
+        >
           {filename}
         </p>
-        <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
+        <p className="mt-1 text-xs text-muted-foreground tabular-nums">
           {chunks} chunks · <span className="text-success">indexé</span>
         </p>
       </div>
