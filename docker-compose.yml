@@ -41,7 +41,8 @@ services:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1"]
+      # Use Python (always present in the backend image) since curl is not installed
+      test: ["CMD-SHELL", "python -c 'import urllib.request,sys; sys.exit(0 if urllib.request.urlopen(\"http://localhost:8000/health\", timeout=5).status==200 else 1)' || exit 1"]
       interval: 15s
       timeout: 10s
       retries: 5
