@@ -65,6 +65,62 @@ except ImportError:
 # Session state initialisation
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# JS fallback: when native position: sticky fails (mobile/tablet), clone the
+# tab-list into a position: fixed banner at the top of the viewport.
+# ---------------------------------------------------------------------------
+
+STICKY_TABS_JS = """
+<script>
+(function() {
+    const ensureStickyTabs = () => {
+        const root = window.parent ? window.parent.document : document;
+        const tabList = root.querySelector('[data-baseweb="tab-list"]');
+        const main = root.querySelector('[data-testid="stMain"]');
+        if (!tabList || !main) return;
+
+        // Attach a scroll listener once.
+        if (main.dataset.tellmeStickyBound === '1') return;
+        main.dataset.tellmeStickyBound = '1';
+
+        const placeholder = root.createElement ? root.createElement('div') : document.createElement('div');
+        placeholder.style.display = 'none';
+        tabList.parentElement.insertBefore(placeholder, tabList);
+
+        const update = () => {
+            const rect = placeholder.getBoundingClientRect();
+            if (rect.top < 0) {
+                tabList.style.position = 'fixed';
+                tabList.style.top = '0px';
+                tabList.style.left = (main.getBoundingClientRect().left) + 'px';
+                tabList.style.width = main.clientWidth + 'px';
+                tabList.style.zIndex = '99999';
+                placeholder.style.display = 'block';
+                placeholder.style.height = tabList.offsetHeight + 'px';
+            } else {
+                tabList.style.position = '';
+                tabList.style.top = '';
+                tabList.style.left = '';
+                tabList.style.width = '';
+                tabList.style.zIndex = '';
+                placeholder.style.display = 'none';
+            }
+        };
+        main.addEventListener('scroll', update, { passive: true });
+        window.addEventListener('resize', update);
+        update();
+    };
+    // Retry a few times until Streamlit has rendered.
+    let tries = 0;
+    const iv = setInterval(() => {
+        ensureStickyTabs();
+        if (++tries > 20) clearInterval(iv);
+    }, 500);
+})();
+</script>
+"""
+
+
 for _key, _default in [
     ("token", None),
     ("user_id", None),
@@ -389,10 +445,7 @@ st.markdown(
         margin-left: 0 !important;
     }
 
-    /* Tabs — keep visible at all times via a JS-maintained sticky.
-       We use position: sticky on the grandparent wrapper (.st-ae), which
-       naturally contains the full tab content and gives sticky a place to go.
-       This is the ONLY wrapper whose height spans the whole tab area. */
+    /* Tabs — sticky on grandparent wrapper (desktop) + ancestors overflow: visible. */
     div[data-testid="stTabs"] > div:first-child {
         position: sticky !important;
         top: 0 !important;
@@ -400,7 +453,12 @@ st.markdown(
         background: transparent !important;
         overflow: visible !important;
     }
-    /* Style the tab-list inside so it reads as a floating bar. */
+    div[data-testid="stMainBlockContainer"],
+    div[data-testid="stVerticalBlock"],
+    div[data-testid="stTabs"] {
+        overflow: visible !important;
+    }
+    /* Style the tab-list as a floating bar. */
     div[data-baseweb="tab-list"] {
         gap: 6px;
         background: var(--rag-bg);
@@ -410,12 +468,6 @@ st.markdown(
         margin: 0 -1rem !important;
         padding-left: 1rem !important;
         padding-right: 1rem !important;
-    }
-    /* Ancestors up to stMain must not clip the sticky. */
-    div[data-testid="stMainBlockContainer"],
-    div[data-testid="stVerticalBlock"],
-    div[data-testid="stTabs"] {
-        overflow: visible !important;
     }
     button[data-baseweb="tab"] {
         border-radius: 8px !important;
@@ -825,6 +877,10 @@ use_reranker = st.session_state.get("use_reranker", False)
 tab_docs, tab_chat, tab_ragas = st.tabs(
     ["📁  Documents", "💬  Chat", "📊  Évaluation RAGAS"]
 )
+
+# JS fallback for sticky tabs (position: fixed on scroll, esp. on mobile).
+import streamlit.components.v1 as components
+components.html(STICKY_TABS_JS, height=0)
 
 
 # ===========================================================================
