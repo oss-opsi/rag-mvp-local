@@ -1,5 +1,17 @@
 # RAG MVP — Recherche Documentaire Hybride
 
+## Nouveautés v3 Phase A
+
+| # | Fonctionnalité | Détail |
+|---|---|---|
+| 1 | **Évaluation RAGAS** | Onglet dédié `📊 Évaluation RAGAS` : uploadez un CSV `question,ground_truth`, lancez l'évaluation et obtenez les scores RAGAS (faithfulness, answer_relevancy, context_precision, context_recall) avec indicateurs visuels colorés et export CSV. |
+| 2 | **Historique des conversations (SQLite)** | Onglet `🗂️ Historique` : toutes vos conversations sont persistées en SQLite (`./data/conversations.db`). Vous pouvez les consulter, les exporter en JSON ou les supprimer. Chaque échange est horodaté. |
+| 3 | **Authentification multi-utilisateurs** | Système de login/inscription avec `streamlit-authenticator`. Chaque utilisateur a son propre index Qdrant isolé (`rag_<username>`). **Mode invité** disponible sur l'écran de connexion — index partagé avec tous les invités, peut être réinitialisé à tout moment. |
+
+> **Note sur la persistance des données** : Les conversations et les comptes utilisateurs sont stockés dans des fichiers SQLite dans le répertoire `./data/`. Sur **Streamlit Community Cloud**, ce répertoire est **éphémère** : il est réinitialisé à chaque redéploiement de l'application. L'index Qdrant (vecteurs) est également en mémoire et se perd au redémarrage. Pour une persistance durable, un déploiement auto-hébergé est recommandé.
+
+---
+
 ## Nouveautés v2
 
 | # | Amélioration | Détail |
@@ -49,7 +61,7 @@ Deux modes de déploiement sont disponibles depuis la même base de code :
 └─────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────┐
-│                        Mode Autonome                             │
+│                        Mode Autonome (v3)                        │
 │                                                                  │
 │   ┌──────────────────────────────────────────────────────────┐  │
 │   │                  streamlit_app.py                         │  │
@@ -57,14 +69,17 @@ Deux modes de déploiement sont disponibles depuis la même base de code :
 │   │  │  Ingest    │  │  Retriever │  │   LangChain Chain  │  │  │
 │   │  │  (PDF→HF)  │  │  BM25+RRF │  │   GPT-4o-mini      │  │  │
 │   │  └────────────┘  └────────────┘  └────────────────────┘  │  │
-│   │              ↕ Qdrant local (./qdrant_data/)              │  │
+│   │  ┌────────────┐  ┌────────────┐  ┌────────────────────┐  │  │
+│   │  │  Auth      │  │  History   │  │   RAGAS Eval       │  │  │
+│   │  │  (SQLite)  │  │  (SQLite)  │  │   (datasets)       │  │  │
+│   │  └────────────┘  └────────────┘  └────────────────────┘  │  │
 │   └──────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
 
 Pipeline RAG :
   PDF → PyPDFLoader → RecursiveCharacterTextSplitter (800/120)
       → HuggingFaceEmbeddings (bge-small-en-v1.5, dim=384)
-      → Qdrant (COSINE) + BM25 corpus
+      → Qdrant (COSINE) + BM25 corpus  [par utilisateur]
       → Requête : Dense (top 20) + Sparse (top 20)
       → RRF Fusion → Top 5
       → ChatOpenAI (gpt-4o-mini) → Réponse sourcée
@@ -121,25 +136,45 @@ pip install -r requirements.txt
 streamlit run streamlit_app.py
 ```
 
-En mode autonome, Qdrant et le corpus BM25 sont entièrement **en mémoire** : l'index est réinitialisé à chaque redémarrage (aucune donnée persistée sur disque).
+En mode autonome, Qdrant et le corpus BM25 sont entièrement **en mémoire** : l'index est réinitialisé à chaque redémarrage (aucune donnée vectorielle persistée sur disque).
+
+Les données utilisateurs et l'historique des conversations sont persistées dans `./data/` (SQLite). Ce répertoire est **éphémère sur Streamlit Community Cloud**.
 
 ---
 
 ## Usage
 
-### 1. Renseigner la clé OpenAI
+### 1. Connexion / Mode invité (v3)
+Sur l'écran d'accueil, vous pouvez :
+- **Se connecter** avec un compte existant
+- **S'inscrire** pour créer un compte (onglet Inscription)
+- **Mode invité** : cliquez sur le bouton dédié pour accéder directement sans créer de compte. *Attention : l'index invité est partagé entre tous les visiteurs en mode invité et peut être réinitialisé à tout moment.*
+
+### 2. Renseigner la clé OpenAI
 Dans la barre latérale gauche, entrez votre clé API OpenAI (`sk-...`). Elle est transmise directement à l'API OpenAI sans être stockée.
 
-### 2. Indexer un document
+### 3. Indexer un document
 1. Glissez-déposez un ou plusieurs fichiers PDF, DOCX, TXT ou MD dans la zone de dépôt
 2. Cliquez sur **Indexer les documents**
 3. Attendez la confirmation (nombre de fragments indexés)
 
-### 3. Poser une question
+### 4. Poser une question (onglet 💬 Chat)
 Tapez votre question dans le champ de saisie en bas de la page. L'assistant :
 1. Recherche les passages les plus pertinents (dense + BM25 + RRF)
 2. Génère une réponse en français, sourcée avec `[fichier.pdf p.X]`
 3. Affiche les fragments sources dans un panneau dépliable **📚 Sources**
+
+### 5. Évaluation RAGAS (onglet 📊 Évaluation RAGAS) — v3
+1. Préparez un CSV avec les colonnes `question` et `ground_truth`
+2. Uploadez-le dans l'onglet Évaluation
+3. Cliquez sur **Lancer l'évaluation**
+4. Consultez les scores (fidélité, pertinence, précision, rappel) et exportez les résultats
+
+### 6. Historique (onglet 🗂️ Historique) — v3
+- Toutes vos conversations sont sauvegardées automatiquement
+- Cliquez sur une conversation pour la relire
+- Exportez n'importe quelle conversation en JSON
+- Démarrez une nouvelle conversation avec le bouton **🆕 Nouvelle conversation**
 
 ---
 
@@ -178,7 +213,10 @@ rag-mvp/
 ├── .gitignore
 ├── .dockerignore
 ├── requirements.txt             # Dépendances (mode autonome)
-├── streamlit_app.py             # Application autonome (mode embedded)
+├── streamlit_app.py             # Application autonome v3 (auth + RAGAS + historique)
+├── data/                        # SQLite databases (éphémère, non versionné)
+│   ├── conversations.db         # Historique des conversations
+│   └── users.db                 # Comptes utilisateurs
 ├── backend/
 │   ├── Dockerfile
 │   ├── main.py                  # API FastAPI
@@ -189,10 +227,13 @@ rag-mvp/
 │       ├── ingest.py            # Ingestion PDF → Qdrant + BM25
 │       ├── retriever.py         # Recherche hybride + fusion RRF (+ reranking)
 │       ├── reranker.py          # Cross-encoder reranker (BAAI/bge-reranker-base)
-│       └── chain.py             # Chaîne LangChain (LCEL) + GPT-4o-mini + streaming
+│       ├── chain.py             # Chaîne LangChain (LCEL) + GPT-4o-mini + streaming
+│       ├── evaluation.py        # [v3] Évaluation RAGAS
+│       ├── history.py           # [v3] Historique SQLite des conversations
+│       └── auth.py              # [v3] Authentification utilisateurs (SQLite + bcrypt)
 └── frontend/
     ├── Dockerfile
-    ├── app.py                   # Interface Streamlit (mode Docker)
+    ├── app.py                   # Interface Streamlit (mode Docker — v2 features only)
     └── requirements.txt
 ```
 
@@ -214,6 +255,7 @@ rag-mvp/
 | `RETRIEVAL_K_SPARSE` | `20` | Candidats recherche BM25 |
 | `RRF_K` | `60` | Constante de fusion RRF |
 | `BACKEND_URL` | `http://backend:8000` | URL backend (frontend Docker) |
+| `AUTH_COOKIE_KEY` | *(dev default)* | Clé secrète pour les cookies d'auth (v3) |
 
 > **Important** : La clé API OpenAI n'est **jamais** stockée dans les variables d'environnement. Elle est saisie par l'utilisateur dans l'interface Streamlit et transmise directement aux requêtes.
 
@@ -237,6 +279,8 @@ docker-compose down -v
 - [LangChain](https://python.langchain.com/) — chaîne RAG (LCEL)
 - [HuggingFace / sentence-transformers](https://huggingface.co/) — modèle d'embeddings
 - [rank-bm25](https://github.com/dorianbrown/rank_bm25) — recherche BM25
+- [RAGAS](https://docs.ragas.io/) — framework d'évaluation RAG
+- [streamlit-authenticator](https://github.com/mkhorasani/Streamlit-Authenticator) — authentification
 - [FastAPI](https://fastapi.tiangolo.com/) — API REST backend
 - [Streamlit](https://streamlit.io/) — interface utilisateur
 - [pypdf](https://pypdf.readthedocs.io/) — lecture de fichiers PDF

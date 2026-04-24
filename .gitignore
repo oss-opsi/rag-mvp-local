@@ -54,3 +54,8 @@ temp/
 .env
 *.pem
 *.key
+
+# SQLite databases (ephemeral — do not commit)
+data/*.db
+data/*.db-shm
+data/*.db-wal

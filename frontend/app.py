@@ -1,3 +1,4 @@
+# NOTE: v3 features (RAGAS eval, history, auth) are only in streamlit_app.py standalone mode. Docker backend will catch up in a future version.
 """
 Interface Streamlit — mode Docker (appelle le backend FastAPI).
 
