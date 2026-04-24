@@ -1,0 +1,241 @@
+import type {
+  ApiKeyInfo,
+  Client,
+  ClientCdcsResponse,
+  CdcDetail,
+  CollectionInfo,
+  Conversation,
+  ConversationDetail,
+  QueryResponse,
+  Report,
+  User,
+} from "./types";
+
+async function handle<T>(res: Response): Promise<T> {
+  if (!res.ok) {
+    let detail = "Erreur inconnue";
+    try {
+      const j = await res.json();
+      detail = (j && (j.detail || j.message)) || detail;
+    } catch {
+      try {
+        detail = await res.text();
+      } catch {
+        // ignore
+      }
+    }
+    throw new Error(detail);
+  }
+  const text = await res.text();
+  if (!text) return {} as T;
+  return JSON.parse(text) as T;
+}
+
+export const api = {
+  async login(username: string, password: string): Promise<User> {
+    const res = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+    return handle<User>(res);
+  },
+
+  async logout(): Promise<void> {
+    await fetch("/api/auth/logout", { method: "POST" });
+  },
+
+  async me(): Promise<User> {
+    const res = await fetch("/api/auth/me");
+    return handle<User>(res);
+  },
+
+  async getApiKey(): Promise<ApiKeyInfo> {
+    const res = await fetch("/api/auth/api-key");
+    return handle<ApiKeyInfo>(res);
+  },
+
+  async setApiKey(api_key: string): Promise<ApiKeyInfo> {
+    const res = await fetch("/api/auth/api-key", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_key }),
+    });
+    return handle<ApiKeyInfo>(res);
+  },
+
+  async deleteApiKey(): Promise<ApiKeyInfo> {
+    const res = await fetch("/api/auth/api-key", { method: "DELETE" });
+    return handle<ApiKeyInfo>(res);
+  },
+
+  async uploadDocument(file: File): Promise<{
+    doc_id: string;
+    filename: string;
+    chunk_count: number;
+    message: string;
+  }> {
+    const fd = new FormData();
+    fd.append("file", file);
+    const res = await fetch("/api/upload", { method: "POST", body: fd });
+    return handle(res);
+  },
+
+  async collectionInfo(): Promise<CollectionInfo> {
+    const res = await fetch("/api/collection/info");
+    return handle<CollectionInfo>(res);
+  },
+
+  async deleteDocument(source: string): Promise<unknown> {
+    const res = await fetch(
+      `/api/collection/document?source=${encodeURIComponent(source)}`,
+      { method: "DELETE" }
+    );
+    return handle(res);
+  },
+
+  async resetCollection(): Promise<unknown> {
+    const res = await fetch("/api/collection", { method: "DELETE" });
+    return handle(res);
+  },
+
+  async query(
+    question: string,
+    k = 10,
+    rerank = true
+  ): Promise<QueryResponse> {
+    const res = await fetch("/api/query", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question, openai_api_key: "", k, rerank }),
+    });
+    return handle<QueryResponse>(res);
+  },
+
+  /**
+   * Open the SSE stream endpoint. Caller is responsible for reading the body.
+   */
+  async queryStream(
+    question: string,
+    k = 10,
+    rerank = true,
+    signal?: AbortSignal
+  ): Promise<Response> {
+    const res = await fetch("/api/query/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question, openai_api_key: "", k, rerank }),
+      signal,
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(text || "Erreur streaming");
+    }
+    return res;
+  },
+
+  async conversations(): Promise<Conversation[]> {
+    const res = await fetch("/api/conversations");
+    return handle<Conversation[]>(res);
+  },
+
+  async createConversation(title?: string): Promise<Conversation> {
+    const res = await fetch("/api/conversations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title }),
+    });
+    return handle<Conversation>(res);
+  },
+
+  async conversation(id: number): Promise<ConversationDetail> {
+    const res = await fetch(`/api/conversations/${id}`);
+    return handle<ConversationDetail>(res);
+  },
+
+  async postMessage(
+    id: number,
+    role: "user" | "assistant",
+    content: string,
+    sources?: unknown
+  ): Promise<unknown> {
+    const res = await fetch(`/api/conversations/${id}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ role, content, sources }),
+    });
+    return handle(res);
+  },
+
+  async deleteConversation(id: number): Promise<unknown> {
+    const res = await fetch(`/api/conversations/${id}`, { method: "DELETE" });
+    return handle(res);
+  },
+
+  async renameConversation(id: number, title: string): Promise<unknown> {
+    const res = await fetch(`/api/conversations/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title }),
+    });
+    return handle(res);
+  },
+
+  async clients(): Promise<Client[]> {
+    const res = await fetch("/api/workspace/clients");
+    const data = await handle<{ clients: Client[] }>(res);
+    return data.clients || [];
+  },
+
+  async createClient(name: string): Promise<Client> {
+    const res = await fetch("/api/workspace/clients", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    return handle<Client>(res);
+  },
+
+  async deleteClient(id: number): Promise<unknown> {
+    const res = await fetch(`/api/workspace/clients/${id}`, {
+      method: "DELETE",
+    });
+    return handle(res);
+  },
+
+  async clientCdcs(clientId: number): Promise<ClientCdcsResponse> {
+    const res = await fetch(`/api/workspace/clients/${clientId}/cdcs`);
+    return handle<ClientCdcsResponse>(res);
+  },
+
+  async uploadCdc(clientId: number, file: File): Promise<{ id: number; filename: string }> {
+    const fd = new FormData();
+    fd.append("file", file);
+    const res = await fetch(`/api/workspace/clients/${clientId}/cdcs`, {
+      method: "POST",
+      body: fd,
+    });
+    return handle(res);
+  },
+
+  async cdc(id: number): Promise<CdcDetail> {
+    const res = await fetch(`/api/workspace/cdcs/${id}`);
+    return handle<CdcDetail>(res);
+  },
+
+  async deleteCdc(id: number): Promise<unknown> {
+    const res = await fetch(`/api/workspace/cdcs/${id}`, { method: "DELETE" });
+    return handle(res);
+  },
+
+  async analyseCdc(id: number, forceRefresh = false): Promise<Report> {
+    const fd = new FormData();
+    fd.append("openai_api_key", "");
+    fd.append("force_refresh", forceRefresh ? "true" : "false");
+    const res = await fetch(`/api/workspace/cdcs/${id}/analyse`, {
+      method: "POST",
+      body: fd,
+    });
+    return handle<Report>(res);
+  },
+};
