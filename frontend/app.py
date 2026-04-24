@@ -1397,7 +1397,7 @@ with tab_gap:
         help="Le fichier est analysé à la volée et n'est pas indexé dans votre base.",
     )
 
-    run_col, _ = st.columns([1, 3])
+    run_col, opt_col = st.columns([1, 3])
     with run_col:
         run_gap = st.button(
             "🚀 Lancer l'analyse",
@@ -1405,6 +1405,17 @@ with tab_gap:
             use_container_width=True,
             disabled=(gap_file is None),
             key="btn_run_gap",
+        )
+    with opt_col:
+        force_refresh = st.checkbox(
+            "Forcer une nouvelle analyse (ignorer le cache)",
+            value=False,
+            key="gap_force_refresh",
+            help=(
+                "Par défaut, un CDC déjà analysé réutilise le résultat caché "
+                "(mêmes exigences, même taux de couverture). Cochez pour forcer "
+                "une nouvelle analyse LLM."
+            ),
         )
 
     if run_gap and gap_file is not None:
@@ -1417,6 +1428,9 @@ with tab_gap:
                     f"{BACKEND_URL}/gap-analysis",
                     files={
                         "file": (gap_file.name, gap_file.getvalue()),
+                    },
+                    data={
+                        "force_refresh": "true" if force_refresh else "false",
                     },
                     headers=auth_headers(),
                     timeout=600,
@@ -1462,6 +1476,11 @@ with tab_gap:
             st.caption(
                 f"📄 CDC de {cdc_chars:,} caractères analysé en {chunks_used} "
                 f"extrait(s) parallèles (map-reduce).".replace(",", " ")
+            )
+        if report.get("from_cache"):
+            st.info(
+                "♻️ Résultat issu du cache (même CDC déjà analysé avec le même "
+                "corpus). Cochez « Forcer une nouvelle analyse » pour re-lancer."
             )
 
         st.markdown("### 📋 Exigences analysées")

@@ -17,25 +17,37 @@ vers OpenAI (évite les rate-limits).
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
+import os
 import re
+import time
+from pathlib import Path
 from typing import Any
 
 from langchain_openai import ChatOpenAI
 
 from .chain import _format_context
-from .config import LLM_MODEL, LLM_TEMPERATURE, QDRANT_URL
+from .config import BM25_DIR, DATA_DIR, LLM_MODEL, LLM_TEMPERATURE, QDRANT_URL
 from .ingest import _load_documents
 from .retriever import get_retriever_for_user
 
 logger = logging.getLogger(__name__)
+
+# Bump this when prompts or pipeline change to invalidate old cache entries.
+PIPELINE_VERSION = "v3.5.3"
+
+# Persistent cache directory on disk.
+GAP_CACHE_DIR = os.path.join(DATA_DIR, "gap_cache")
 
 # Concurrency cap for OpenAI calls (extraction + verdicts).
 MAX_PARALLEL_LLM = 5
 # Max chars of CDC sent to the extractor LLM (~60k tokens worst case, safely
 # under gpt-4o-mini's 128k window).
 MAX_CDC_CHARS = 180_000
+# Cache: how long an entry stays valid (24h). After this, it's recomputed.
+GAP_CACHE_TTL_SECONDS = 24 * 3600
 # Map-reduce extraction: chunk size (chars) and overlap between chunks.
 # 30k chars ≈ 7.5k tokens input; leaves ample room for the system prompt and
 # a rich JSON output (up to ~40 requirements per chunk).
@@ -637,6 +649,70 @@ async def analyse_requirement(
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# On-disk cache (stabilise les résultats pour un même CDC + même corpus)
+# ---------------------------------------------------------------------------
+
+
+def _corpus_fingerprint(user_id: str) -> str:
+    """Return a short signature of the user's indexed corpus.
+
+    Uses the BM25 pickle (size + mtime) as a proxy for 'the corpus hasn't
+    changed'. When the user indexes or removes a document, the pickle is
+    rewritten and the fingerprint changes, invalidating the cache.
+    """
+    bm25_path = os.path.join(BM25_DIR, f"{user_id}.pkl")
+    try:
+        st = os.stat(bm25_path)
+        return f"{st.st_size}-{int(st.st_mtime)}"
+    except OSError:
+        return "no-corpus"
+
+
+def _cache_key(cdc_bytes: bytes, user_id: str) -> str:
+    """Compute a deterministic cache key for this CDC + user + pipeline state."""
+    h = hashlib.sha256()
+    h.update(PIPELINE_VERSION.encode())
+    h.update(b"|")
+    h.update(LLM_MODEL.encode())
+    h.update(b"|")
+    h.update(user_id.encode())
+    h.update(b"|")
+    h.update(_corpus_fingerprint(user_id).encode())
+    h.update(b"|")
+    h.update(cdc_bytes)
+    return h.hexdigest()
+
+
+def _cache_path(user_id: str, key: str) -> str:
+    user_dir = os.path.join(GAP_CACHE_DIR, user_id)
+    Path(user_dir).mkdir(parents=True, exist_ok=True)
+    return os.path.join(user_dir, f"{key}.json")
+
+
+def _read_cache(path: str) -> dict[str, Any] | None:
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    if time.time() - st.st_mtime > GAP_CACHE_TTL_SECONDS:
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("Failed to read cache %s: %s", path, exc)
+        return None
+
+
+def _write_cache(path: str, report: dict[str, Any]) -> None:
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(report, f, ensure_ascii=False)
+    except OSError as exc:
+        logger.warning("Failed to write cache %s: %s", path, exc)
+
+
 async def run_gap_analysis(
     cdc_file_path: str,
     cdc_ext: str,
@@ -644,6 +720,7 @@ async def run_gap_analysis(
     user_id: str,
     openai_api_key: str,
     qdrant_url: str = QDRANT_URL,
+    force_refresh: bool = False,
 ) -> dict[str, Any]:
     """
     Full pipeline: parse CDC → extract requirements → analyse each → summary.
@@ -667,6 +744,29 @@ async def run_gap_analysis(
     if not openai_api_key:
         raise ValueError("La clé API OpenAI est manquante.")
 
+    # Compute cache key from the raw file bytes (so the same file always
+    # hits the same cache entry, regardless of parsing variations).
+    try:
+        with open(cdc_file_path, "rb") as f:
+            cdc_bytes = f.read()
+    except OSError as exc:
+        raise ValueError(f"Impossible de lire le CDC : {exc}")
+    cache_key = _cache_key(cdc_bytes, user_id)
+    cache_path = _cache_path(user_id, cache_key)
+    if not force_refresh:
+        cached = _read_cache(cache_path)
+        if cached is not None:
+            logger.info(
+                "Gap analysis cache HIT for user=%s key=%s", user_id, cache_key[:12]
+            )
+            # Always reflect the current filename + mark as cached.
+            cached["filename"] = cdc_filename
+            cached["from_cache"] = True
+            return cached
+        logger.info(
+            "Gap analysis cache MISS for user=%s key=%s", user_id, cache_key[:12]
+        )
+
     # Step 1 — parse CDC
     cdc_text = extract_cdc_text(cdc_file_path, cdc_ext)
     if not cdc_text.strip():
@@ -676,16 +776,19 @@ async def run_gap_analysis(
     cdc_chunks_count = len(_chunk_cdc_text(cdc_text))
     requirements = await extract_requirements(cdc_text, openai_api_key)
     if not requirements:
-        return {
+        empty_report = {
             "filename": cdc_filename,
             "cdc_chars": len(cdc_text),
             "chunks_processed": cdc_chunks_count,
+            "from_cache": False,
             "summary": {
                 "total": 0, "covered": 0, "partial": 0,
                 "missing": 0, "ambiguous": 0, "coverage_percent": 0.0,
             },
             "requirements": [],
         }
+        _write_cache(cache_path, empty_report)
+        return empty_report
 
     # Step 3 — analyse each requirement in parallel
     llm = ChatOpenAI(
@@ -726,10 +829,11 @@ async def run_gap_analysis(
     # Coverage = covered + 0.5 * partial
     coverage = (counts["covered"] + 0.5 * counts["partial"]) / total if total else 0.0
 
-    return {
+    report = {
         "filename": cdc_filename,
         "cdc_chars": len(cdc_text),
         "chunks_processed": cdc_chunks_count,
+        "from_cache": False,
         "summary": {
             "total": total,
             **counts,
@@ -737,3 +841,5 @@ async def run_gap_analysis(
         },
         "requirements": analysed,
     }
+    _write_cache(cache_path, report)
+    return report

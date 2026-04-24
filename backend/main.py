@@ -853,6 +853,7 @@ async def gap_analysis(
         description="Cahier des charges client (PDF, DOCX, TXT, MD)",
     ),
     openai_api_key: str = Form(""),
+    force_refresh: bool = Form(False),
     authorization: str = Header(None),
 ) -> dict:
     """
@@ -915,6 +916,7 @@ async def gap_analysis(
             user_id=user_id,
             openai_api_key=effective_key,
             qdrant_url=QDRANT_URL,
+            force_refresh=force_refresh,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
