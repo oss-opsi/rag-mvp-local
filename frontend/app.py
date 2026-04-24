@@ -28,7 +28,7 @@ import streamlit as st
 # ---------------------------------------------------------------------------
 
 st.set_page_config(
-    page_title="RAG MVP v3.1",
+    page_title="RAG MVP v3.2",
     page_icon="📚",
     layout="wide",
 )
@@ -147,7 +147,7 @@ def auth_headers() -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 if not get_token():
-    st.title("📚 RAG MVP v3.1")
+    st.title("📚 RAG MVP v3.2")
     st.caption(
         "Recherche dense (Qdrant) + BM25 + fusion RRF · Historique · Évaluation RAGAS · Auth JWT"
     )
