@@ -1968,9 +1968,15 @@ with tab_gap:
                             req.get("priority", "must"),
                             req.get("priority", ""),
                         )
+                        extra_badges = ""
+                        if req.get("hyde_used"):
+                            extra_badges += " · 🧪 HyDE"
+                        if req.get("repass_applied"):
+                            _rm = req.get("repass_model", "gpt-4o")
+                            extra_badges += f" · 🔬 re-pass {_rm}"
                         with st.expander(
                             f"{label} · {prio_lbl} · {req.get('id', '')} — "
-                            f"{req.get('title', '')}",
+                            f"{req.get('title', '')}{extra_badges}",
                             expanded=(
                                 req.get("status") in {"missing", "partial"}
                             ),

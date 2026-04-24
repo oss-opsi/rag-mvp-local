@@ -48,7 +48,7 @@ DEDUP_SIMILARITY_THRESHOLD = 0.88
 logger = logging.getLogger(__name__)
 
 # Bump this when prompts or pipeline change to invalidate old cache entries.
-PIPELINE_VERSION = "v3.7.0"
+PIPELINE_VERSION = "v3.8.0"
 
 # Persistent cache directory on disk.
 GAP_CACHE_DIR = os.path.join(DATA_DIR, "gap_cache")
@@ -66,7 +66,20 @@ GAP_CACHE_TTL_SECONDS = 24 * 3600
 EXTRACT_CHUNK_CHARS = 30_000
 EXTRACT_CHUNK_OVERLAP = 2_000
 # Retrieval params per requirement.
-RETRIEVAL_K = 5
+# v3.8.0: expanded from 5 to 10 to give the verdict LLM more supporting context.
+RETRIEVAL_K = 10
+
+# v3.8.0 — HyDE (Hypothetical Document Embeddings)
+# Generate a short hypothetical answer per requirement before retrieval, then
+# fuse results from (raw query) and (hypothesis) via RRF. Substantially
+# improves recall on abstract or jargon-heavy requirements.
+HYDE_ENABLED = True
+HYDE_MAX_CHARS = 600  # cap on hypothesis length to keep latency low
+
+# v3.8.0 — Re-pass on ambiguous verdicts with a stronger LLM (gpt-4o)
+REPASS_ENABLED = True
+REPASS_MODEL = "gpt-4o"
+REPASS_MAX_PARALLEL = 3
 
 VALID_STATUSES = {"covered", "partial", "missing", "ambiguous"}
 VALID_PRIORITIES = {"must", "should", "could", "wont"}
@@ -730,16 +743,104 @@ async def _judge_requirement(
         }
 
 
+# ---------------------------------------------------------------------------
+# HyDE — Hypothetical Document Embeddings (v3.8.0)
+# ---------------------------------------------------------------------------
+
+_HYDE_SYSTEM = (
+    "Tu es un expert logiciel paie / SIRH. On te donne une exigence d'un "
+    "cahier des charges. Tu dois rédiger, en 2 à 3 phrases, une réponse "
+    "hypothétique qui décrirait comment un produit paie standard couvrirait "
+    "cette exigence. Utilise le vocabulaire métier français (DSN, PAS, "
+    "bulletin, IJSS, congés, absences, cotisations, etc.). N'invente pas de "
+    "nom de produit. Réponds UNIQUEMENT par le texte descriptif, sans "
+    "préambule ni formatage."
+)
+
+_HYDE_HUMAN = (
+    "Exigence :\n"
+    "Titre : {title}\n"
+    "Catégorie : {category}\n"
+    "Description : {description}\n"
+    "Critères d'acceptation : {criteria_block}\n\n"
+    "Réponse hypothétique (2-3 phrases, vocabulaire métier) :"
+)
+
+
+async def _generate_hyde(
+    requirement: dict[str, Any],
+    llm: ChatOpenAI,
+    semaphore: asyncio.Semaphore,
+) -> str:
+    """Produce a short hypothetical answer for a requirement. On failure,
+    returns an empty string so the caller falls back to the raw query."""
+    async with semaphore:
+        crit = requirement.get("acceptance_criteria") or []
+        criteria_block = (
+            "\n".join(f"- {c}" for c in crit) if crit else "(aucun fourni)"
+        )
+        prompt = [
+            {"role": "system", "content": _HYDE_SYSTEM},
+            {"role": "user", "content": _HYDE_HUMAN.format(
+                title=requirement.get("title", ""),
+                category=requirement.get("category", "Autre"),
+                description=requirement.get("description", ""),
+                criteria_block=criteria_block,
+            )},
+        ]
+        try:
+            resp = await llm.ainvoke(prompt)
+            raw = resp.content if isinstance(resp.content, str) else str(resp.content)
+            return (raw or "").strip()[:HYDE_MAX_CHARS]
+        except Exception as exc:
+            logger.warning(
+                "HyDE generation failed for %s: %s",
+                requirement.get("id", "?"), exc,
+            )
+            return ""
+
+
+def _fuse_retrievals(
+    *ranked_lists: list[dict[str, Any]], k: int, rrf_k: int = 60
+) -> list[dict[str, Any]]:
+    """Fuse multiple ranked chunk lists via RRF. Each item must already be
+    a dict with 'text' and 'metadata' (as returned by HybridRetriever)."""
+    def _key(item: dict[str, Any]) -> str:
+        md = item.get("metadata") or {}
+        return md.get("chunk_id") or item.get("text", "")[:80]
+
+    scores: dict[str, float] = {}
+    store: dict[str, dict[str, Any]] = {}
+    for lst in ranked_lists:
+        for rank, item in enumerate(lst):
+            key = _key(item)
+            scores[key] = scores.get(key, 0.0) + 1.0 / (rrf_k + rank + 1)
+            if key not in store:
+                store[key] = item
+    ordered = sorted(scores, key=lambda x: scores[x], reverse=True)
+    out: list[dict[str, Any]] = []
+    for key in ordered[:k]:
+        entry = dict(store[key])
+        entry["rrf_score"] = round(scores[key], 6)
+        out.append(entry)
+    return out
+
+
 async def analyse_requirement(
     requirement: dict[str, Any],
     user_id: str,
     llm: ChatOpenAI,
     qdrant_url: str,
     semaphore: asyncio.Semaphore,
+    hyde_llm: ChatOpenAI | None = None,
 ) -> dict[str, Any]:
-    """Retrieve + judge one requirement (thread-safe)."""
-    # Retrieval query = title + description + acceptance criteria keywords
-    # (the criteria often carry the most specific vocabulary).
+    """Retrieve + judge one requirement (thread-safe).
+
+    v3.8.0: if HyDE is enabled AND a ``hyde_llm`` is provided, generate a
+    hypothetical answer and fuse retrievals from (raw query) + (hypothesis)
+    via RRF before sending the top-K to the verdict LLM.
+    """
+    # Build the raw query (title + description + acceptance criteria)
     criteria_text = " ".join(requirement.get("acceptance_criteria") or [])
     query_parts = [
         requirement.get("title", ""),
@@ -748,10 +849,27 @@ async def analyse_requirement(
     ]
     query = ". ".join(p for p in query_parts if p).strip()
     retriever = get_retriever_for_user(user_id, qdrant_url=qdrant_url)
-    # retrieve() is sync/blocking; run in threadpool to avoid blocking loop.
-    chunks = await asyncio.to_thread(
+
+    hyde_used = False
+    hypothesis = ""
+    if HYDE_ENABLED and hyde_llm is not None:
+        hypothesis = await _generate_hyde(requirement, hyde_llm, semaphore)
+        hyde_used = bool(hypothesis)
+
+    # Retrieve once (raw). retrieve() is sync so run in threadpool.
+    chunks_raw = await asyncio.to_thread(
         retriever.retrieve, query, RETRIEVAL_K, 20, 20, True
     )
+
+    if hyde_used:
+        # Retrieve a second time with the hypothesis, then RRF-merge.
+        chunks_hyp = await asyncio.to_thread(
+            retriever.retrieve, hypothesis, RETRIEVAL_K, 20, 20, True
+        )
+        chunks = _fuse_retrievals(chunks_raw, chunks_hyp, k=RETRIEVAL_K)
+    else:
+        chunks = chunks_raw
+
     sources = [
         {
             "text": c["text"][:500],
@@ -762,7 +880,13 @@ async def analyse_requirement(
         for c in chunks
     ]
     context = _format_context(chunks) if chunks else ""
-    return await _judge_requirement(requirement, sources, context, llm, semaphore)
+    judged = await _judge_requirement(
+        requirement, sources, context, llm, semaphore
+    )
+    if hyde_used:
+        judged["hyde_used"] = True
+        judged["hypothesis"] = hypothesis
+    return judged
 
 
 # ---------------------------------------------------------------------------
@@ -926,9 +1050,21 @@ async def run_gap_analysis(
             "seed": OPENAI_SEED,
         },
     )
+    # v3.8.0 — HyDE uses a separate LLM instance (no JSON mode, light temp)
+    hyde_llm = None
+    if HYDE_ENABLED:
+        hyde_llm = ChatOpenAI(
+            model=LLM_MODEL,
+            temperature=0.2,
+            api_key=openai_api_key,
+            model_kwargs={"seed": OPENAI_SEED},
+            max_tokens=220,
+        )
     semaphore = asyncio.Semaphore(MAX_PARALLEL_LLM)
     tasks = [
-        analyse_requirement(req, user_id, llm, qdrant_url, semaphore)
+        analyse_requirement(
+            req, user_id, llm, qdrant_url, semaphore, hyde_llm=hyde_llm,
+        )
         for req in requirements
     ]
     results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -949,6 +1085,73 @@ async def run_gap_analysis(
             )
         else:
             analysed.append(res)
+
+    # Step 3.5 — Re-pass on ambiguous with a stronger model (GPT-4o)
+    repass_count = 0
+    if REPASS_ENABLED:
+        ambiguous_idx = [
+            i for i, r in enumerate(analysed) if r.get("status") == "ambiguous"
+        ]
+        if ambiguous_idx:
+            logger.info(
+                "Re-pass: %d ambiguous requirement(s) with %s",
+                len(ambiguous_idx), REPASS_MODEL,
+            )
+            try:
+                strong_llm = ChatOpenAI(
+                    model=REPASS_MODEL,
+                    temperature=LLM_TEMPERATURE,
+                    api_key=openai_api_key,
+                    model_kwargs={
+                        "response_format": {"type": "json_object"},
+                        "seed": OPENAI_SEED,
+                    },
+                )
+                repass_sem = asyncio.Semaphore(REPASS_MAX_PARALLEL)
+                # Re-judge using the already-retrieved context (sources).
+                async def _redo(i: int) -> dict[str, Any]:
+                    req = analysed[i]
+                    # Rebuild context from the sources stored on the req
+                    srcs = req.get("sources") or []
+                    chunk_like = [
+                        {
+                            "text": s.get("text", ""),
+                            "metadata": {
+                                "source": s.get("source", "?"),
+                                "page": s.get("page", "?"),
+                            },
+                        }
+                        for s in srcs
+                    ]
+                    ctx = _format_context(chunk_like) if chunk_like else ""
+                    rejudged = await _judge_requirement(
+                        req, srcs, ctx, strong_llm, repass_sem,
+                    )
+                    rejudged["repass_applied"] = True
+                    rejudged["repass_model"] = REPASS_MODEL
+                    # Preserve HyDE metadata from initial pass
+                    if req.get("hyde_used"):
+                        rejudged["hyde_used"] = True
+                        rejudged["hypothesis"] = req.get("hypothesis", "")
+                    return rejudged
+
+                redo_tasks = [_redo(i) for i in ambiguous_idx]
+                redo_results = await asyncio.gather(
+                    *redo_tasks, return_exceptions=True
+                )
+                for i, new_r in zip(ambiguous_idx, redo_results):
+                    if isinstance(new_r, Exception):
+                        logger.warning(
+                            "Re-pass failed for %s: %s",
+                            analysed[i].get("id", "?"), new_r,
+                        )
+                        # Keep original ambiguous verdict
+                        analysed[i]["repass_applied"] = False
+                    else:
+                        analysed[i] = new_r
+                        repass_count += 1
+            except Exception as exc:
+                logger.warning("Re-pass skipped due to error: %s", exc)
 
     # Step 4 — summary
     counts = {"covered": 0, "partial": 0, "missing": 0, "ambiguous": 0}
