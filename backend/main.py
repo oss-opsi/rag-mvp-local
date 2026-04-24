@@ -169,6 +169,77 @@ def _cleanup_mismatched_embedding_collections() -> None:
 
 _cleanup_mismatched_embedding_collections()
 
+
+def _cleanup_old_chunker_collections() -> None:
+    """v3.9.0 upgrade: if the persisted chunker marker does not match the
+    current CHUNKER_VERSION, drop all user collections so everything gets
+    re-chunked with the new semantic+structure-aware chunker.
+
+    Marker file: /data/chunker_version.txt. Absent = treat as old.
+    """
+    try:
+        from rag.semantic_chunker import CHUNKER_VERSION
+        from rag.ingest import get_qdrant_client, reset_bm25_corpus
+        import shutil
+
+        marker_path = os.path.join(DATA_DIR, "chunker_version.txt")
+        current = None
+        if os.path.exists(marker_path):
+            try:
+                current = open(marker_path).read().strip()
+            except Exception:
+                current = None
+        if current == CHUNKER_VERSION:
+            return  # up to date
+
+        client = get_qdrant_client(QDRANT_URL)
+        try:
+            collections = client.get_collections().collections
+        except Exception as exc:
+            logger.warning("Qdrant unreachable on chunker-cleanup startup: %s", exc)
+            return
+        dropped: list[str] = []
+        for c in collections:
+            if not c.name.startswith("rag_"):
+                continue
+            try:
+                client.delete_collection(c.name)
+                dropped.append(c.name)
+                try:
+                    reset_bm25_corpus(c.name.removeprefix("rag_"))
+                except Exception:
+                    pass
+            except Exception as exc:
+                logger.warning(
+                    "Could not drop collection '%s' during chunker upgrade: %s",
+                    c.name, exc,
+                )
+        gap_cache_dir = os.path.join(DATA_DIR, "gap_cache")
+        if os.path.isdir(gap_cache_dir):
+            try:
+                shutil.rmtree(gap_cache_dir, ignore_errors=True)
+            except Exception:
+                pass
+        try:
+            os.makedirs(DATA_DIR, exist_ok=True)
+            with open(marker_path, "w") as fh:
+                fh.write(CHUNKER_VERSION)
+        except Exception:
+            pass
+        if dropped:
+            logger.info(
+                "Chunker upgrade to %s complete: %d collection(s) reset. "
+                "Users must re-index their documents.",
+                CHUNKER_VERSION, len(dropped),
+            )
+        else:
+            logger.info("Chunker upgrade to %s stamped (no collections to drop).", CHUNKER_VERSION)
+    except Exception as exc:
+        logger.warning("Chunker cleanup skipped: %s", exc)
+
+
+_cleanup_old_chunker_collections()
+
 # ---------------------------------------------------------------------------
 # Singletons
 # ---------------------------------------------------------------------------

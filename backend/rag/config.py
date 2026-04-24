@@ -26,9 +26,11 @@ RERANKER_MODEL: str = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-v2-m3")
 # disable (falls back to plain RRF top-K).
 RERANK_ENABLED: bool = os.getenv("RERANK_ENABLED", "1") == "1"
 
-# Chunking
-CHUNK_SIZE: int = int(os.getenv("CHUNK_SIZE", "800"))
-CHUNK_OVERLAP: int = int(os.getenv("CHUNK_OVERLAP", "120"))
+# Chunking (v3.9.0 — semantic + structure-aware is now default)
+# Set CHUNKER="legacy" to fall back to the old fixed-size RecursiveCharacterTextSplitter.
+CHUNKER: str = os.getenv("CHUNKER", "semantic")
+CHUNK_SIZE: int = int(os.getenv("CHUNK_SIZE", "800"))  # legacy only
+CHUNK_OVERLAP: int = int(os.getenv("CHUNK_OVERLAP", "120"))  # legacy only
 
 # Retrieval
 RETRIEVAL_K: int = int(os.getenv("RETRIEVAL_K", "5"))

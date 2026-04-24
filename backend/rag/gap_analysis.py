@@ -48,7 +48,7 @@ DEDUP_SIMILARITY_THRESHOLD = 0.88
 logger = logging.getLogger(__name__)
 
 # Bump this when prompts or pipeline change to invalidate old cache entries.
-PIPELINE_VERSION = "v3.8.0"
+PIPELINE_VERSION = "v3.9.0"
 
 # Persistent cache directory on disk.
 GAP_CACHE_DIR = os.path.join(DATA_DIR, "gap_cache")

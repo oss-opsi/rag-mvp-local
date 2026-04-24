@@ -932,17 +932,17 @@ components.html(STICKY_TABS_JS, height=0)
 # ===========================================================================
 
 with tab_docs:
-    # v3.7.0 : bannière si l'utilisateur a 0 document indexé (migration
-    # embeddings bge-small-en → bge-m3 a purgé son ancien index).
+    # v3.9.0 : bannière si l'utilisateur a 0 document indexé (migration
+    # chunker fixe → chunker sémantique + structure-aware a purgé l'ancien index).
     if not st.session_state.get("indexed_docs"):
         st.info(
-            "ℹ️ **Migration v3.7.0 — Amélioration sémantique multilingue**\n\n"
-            "Le modèle d'embeddings est passé de `bge-small-en` (anglais, 384 dim) "
-            "à `BAAI/bge-m3` (multilingue natif, 1024 dim). Un reranker "
-            "cross-encodeur `bge-reranker-v2-m3` est aussi activé sur l'analyse "
-            "d'écarts. Vos anciennes collections Qdrant incompatibles ont été "
-            "réinitialisées : **ré-uploadez vos documents** ci-dessous pour "
-            "profiter de la nouvelle qualité de recherche en français."
+            "ℹ️ **Migration v3.9.0 — Chunking sémantique + structure-aware**\n\n"
+            "Le découpage des documents est désormais guidé par la hiérarchie "
+            "(articles, sections numérotées) puis par la similarité sémantique "
+            "entre phrases (`bge-m3`). Résultat : chaque chunk correspond à une "
+            "clause cohérente, et non plus à une fenêtre arbitraire de 800 caractères. "
+            "Vos anciennes collections Qdrant ont été réinitialisées : "
+            "**ré-uploadez vos documents** ci-dessous pour bénéficier du nouveau chunker."
         )
 
     st.markdown(

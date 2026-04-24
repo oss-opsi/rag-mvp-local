@@ -31,12 +31,17 @@ from .config import (
     BM25_DIR,
     CHUNK_OVERLAP,
     CHUNK_SIZE,
+    CHUNKER,
     EMBEDDING_DIM,
     EMBEDDING_MODEL,
     QDRANT_API_KEY,
     QDRANT_COLLECTION,
     QDRANT_URL,
     bm25_file,
+)
+from .semantic_chunker import (
+    CHUNKER_VERSION,
+    semantic_chunk_documents,
 )
 
 logger = logging.getLogger(__name__)
@@ -240,13 +245,22 @@ def ingest_file(
     pages = _load_documents(file_path, ext)
     logger.info("Loaded %d page(s)/section(s) from '%s'.", len(pages), source_name)
 
-    # 2. Split into chunks
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=CHUNK_SIZE,
-        chunk_overlap=CHUNK_OVERLAP,
-        separators=["\n\n", "\n", ". ", " ", ""],
-    )
-    docs = splitter.split_documents(pages)
+    # 2. Split into chunks — semantic (v3.9.0 default) or legacy size-based
+    embeddings = get_embeddings()
+    if CHUNKER == "semantic":
+        logger.info(
+            "Chunking '%s' with semantic+structure-aware chunker (%s).",
+            source_name, CHUNKER_VERSION,
+        )
+        docs = semantic_chunk_documents(pages, embeddings.embed_documents)
+    else:
+        logger.info("Chunking '%s' with legacy RecursiveCharacterTextSplitter.", source_name)
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=CHUNK_SIZE,
+            chunk_overlap=CHUNK_OVERLAP,
+            separators=["\n\n", "\n", ". ", " ", ""],
+        )
+        docs = splitter.split_documents(pages)
 
     # 3. Enrich metadata
     doc_hash = hashlib.md5(source_name.encode()).hexdigest()[:8]
@@ -258,9 +272,10 @@ def ingest_file(
             doc.metadata["page"] = int(doc.metadata["page"]) + 1
         else:
             doc.metadata["page"] = 1
+        # Ensure chunker_version is stamped (semantic chunker already sets it)
+        doc.metadata.setdefault("chunker_version", CHUNKER_VERSION if CHUNKER == "semantic" else "legacy")
 
     # 4. Embed & store in user's Qdrant collection
-    embeddings = get_embeddings()
     client = get_qdrant_client(qdrant_url)
     ensure_collection(client, collection_name)
 
