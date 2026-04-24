@@ -46,9 +46,15 @@ BACKEND_URL: str = os.getenv("BACKEND_URL", "http://localhost:8000").rstrip("/")
 try:
     import extra_streamlit_components as stx
 
-    @st.cache_resource
     def _cookie_manager():
-        return stx.CookieManager(key="rag_mvp_cookie_manager")
+        # CookieManager registers a Streamlit widget per call; we must instantiate
+        # it outside any @st.cache_* decorator and store the singleton in
+        # session_state so it survives reruns without triggering CachedWidgetWarning.
+        if "_cookie_mgr" not in st.session_state:
+            st.session_state["_cookie_mgr"] = stx.CookieManager(
+                key="rag_mvp_cookie_manager"
+            )
+        return st.session_state["_cookie_mgr"]
 
     _COOKIES_AVAILABLE = True
 except ImportError:
