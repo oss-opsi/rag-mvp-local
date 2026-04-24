@@ -434,18 +434,18 @@ st.markdown(
         margin: 10px 0 0 0;
     }
 
-    /* Header natif Streamlit : on le garde transparent et sans hauteur pour
-       ne pas couvrir nos onglets sticky, tout en conservant le bouton de
-       rétraction de la sidebar (stSidebarCollapseButton). */
+    /* Header natif Streamlit : on le garde transparent (pour voir les onglets
+       sticky en dessous) mais on conserve sa hauteur réelle, sinon le bouton
+       stExpandSidebarButton (qui permet de rouvrir la sidebar quand elle est
+       repliée) est écrasé à 0x0. */
     header[data-testid="stHeader"] {
         background: transparent !important;
-        height: 0 !important;
-        min-height: 0 !important;
         z-index: 10 !important;
     }
     div[data-testid="stToolbar"] { display: none !important; }
-    /* Bouton replier/déplier sidebar : visible et cliquable au-dessus de tout. */
+    /* Boutons sidebar : au-dessus de tout (y compris onglets sticky). */
     [data-testid="stSidebarCollapseButton"],
+    [data-testid="stExpandSidebarButton"],
     [data-testid="stSidebarCollapsedControl"] {
         z-index: 100000 !important;
         visibility: visible !important;
