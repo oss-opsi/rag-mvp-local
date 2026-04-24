@@ -371,24 +371,28 @@ st.markdown(
         margin: 10px 0 0 0;
     }
 
+    /* Hide Streamlit's native header (hamburger menu, deploy bar).
+       It overlaps our sticky tabs with z-index: 999990. */
+    header[data-testid="stHeader"] { display: none !important; }
+    div[data-testid="stToolbar"] { display: none !important; }
+
     /* Tabs — sticky at the top of the viewport.
-       Streamlit scrolls on <section data-testid="stMain">; the sticky container
-       is a wrapper DIV inside stTabs. We make BOTH stTabs and its first child
-       sticky so the tab-list stays pinned while the content below scrolls. */
+       The scroll container is <section data-testid="stMain">. We make both
+       stTabs and its first child sticky so the tab-list stays pinned. */
     div[data-testid="stTabs"] {
         position: sticky;
         top: 0;
-        z-index: 999;
+        z-index: 9999;
         background: var(--rag-bg);
     }
     div[data-testid="stTabs"] > div:first-child {
         position: sticky;
         top: 0;
-        z-index: 999;
+        z-index: 9999;
         background: var(--rag-bg);
-        padding-top: 6px;
-        padding-bottom: 6px;
-        margin-top: -6px;
+        padding-top: 8px;
+        padding-bottom: 8px;
+        margin-top: -8px;
     }
     div[data-baseweb="tab-list"] {
         gap: 6px;
