@@ -389,32 +389,27 @@ st.markdown(
         margin-left: 0 !important;
     }
 
-    /* Tabs — sticky at the top of the scroll container.
-       The scroll container is <section data-testid="stMain">. Only the tab-list
-       wrapper (first child of stTabs) must be sticky — stTabs itself contains
-       the tab content below and must stay in normal flow. */
-    div[data-testid="stTabs"] > div:first-child {
+    /* Tabs — make the tab-list bar itself sticky, with an opaque background
+       so content scrolling underneath is hidden. All ancestors must keep
+       overflow: visible so the sticky can escape the flow. */
+    div[data-baseweb="tab-list"] {
         position: sticky !important;
         top: 0 !important;
         z-index: 9999 !important;
-        background: var(--rag-bg);
-        padding-top: 8px;
-        padding-bottom: 8px;
-        margin-top: -8px;
+        gap: 6px;
+        background: #f3f4f6;
+        padding: 8px 6px !important;
+        border-radius: 12px;
+        border: 1px solid var(--rag-border);
+        box-shadow: 0 4px 12px -6px rgba(0,0,0,0.08);
+        margin-top: -2px;
     }
     /* Ensure all ancestors up to stMain don't clip the sticky element. */
     div[data-testid="stMainBlockContainer"],
     div[data-testid="stVerticalBlock"],
-    div[data-testid="stTabs"] {
+    div[data-testid="stTabs"],
+    div[data-testid="stTabs"] > div:first-child {
         overflow: visible !important;
-    }
-    div[data-baseweb="tab-list"] {
-        gap: 6px;
-        background: #f3f4f6;
-        padding: 6px;
-        border-radius: 12px;
-        border: 1px solid var(--rag-border);
-        box-shadow: 0 4px 12px -6px rgba(0,0,0,0.08);
     }
     button[data-baseweb="tab"] {
         border-radius: 8px !important;
