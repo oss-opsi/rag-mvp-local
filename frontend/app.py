@@ -123,6 +123,9 @@ def logout() -> None:
                                               "current_conversation_id",
                                               "history_selected_conv"] else []
     st.session_state["current_conversation_title"] = "Nouvelle conversation"
+    st.session_state["indexed_docs_detail"] = []
+    st.session_state["indexed_total_chunks"] = 0
+    st.session_state["_docs_loaded"] = False
     if _COOKIES_AVAILABLE:
         try:
             cm = _cookie_manager()
@@ -247,6 +250,29 @@ user_id: str = st.session_state.get("user_id", "guest") or "guest"
 user_name: str = st.session_state.get("user_name", "Utilisateur") or "Utilisateur"
 
 
+def refresh_indexed_docs() -> None:
+    """Fetch the list of indexed documents from the backend and cache in session."""
+    try:
+        resp = requests.get(
+            f"{BACKEND_URL}/collection/info",
+            headers=auth_headers(),
+            timeout=10,
+        )
+        if resp.ok:
+            data = resp.json()
+            st.session_state["indexed_docs"] = [d["source"] for d in data.get("documents", [])]
+            st.session_state["indexed_docs_detail"] = data.get("documents", [])
+            st.session_state["indexed_total_chunks"] = data.get("total_chunks", 0)
+    except Exception:
+        pass
+    st.session_state["_docs_loaded"] = True
+
+
+# Auto-load indexed docs once per session (after login or cookie-based rerun)
+if not st.session_state.get("_docs_loaded"):
+    refresh_indexed_docs()
+
+
 def _score_color(score: float) -> str:
     """Return a CSS color string based on score threshold."""
     try:
@@ -319,6 +345,8 @@ with st.sidebar:
             )
             if resp.ok:
                 st.session_state["indexed_docs"] = []
+                st.session_state["indexed_docs_detail"] = []
+                st.session_state["indexed_total_chunks"] = 0
                 st.session_state["chat_history"] = []
                 st.success("Index réinitialisé.")
                 st.rerun()
@@ -327,11 +355,22 @@ with st.sidebar:
         except Exception as exc:
             st.error(f"Erreur : {exc}")
 
-    if st.session_state.get("indexed_docs"):
-        st.divider()
-        st.markdown("**Documents indexés (session) :**")
+    st.divider()
+    _docs = st.session_state.get("indexed_docs_detail") or []
+    _total_chunks = st.session_state.get("indexed_total_chunks", 0)
+    if _docs:
+        st.markdown(f"**Documents indexés ({len(_docs)} fichier(s), {_total_chunks} chunks) :**")
+        for d in _docs:
+            st.markdown(f"- 📄 {d['source']} ({d['chunks']} chunks)")
+    elif st.session_state.get("indexed_docs"):
+        st.markdown("**Documents indexés :**")
         for doc in st.session_state["indexed_docs"]:
             st.markdown(f"- 📄 {doc}")
+    else:
+        st.caption("Aucun document indexé pour le moment.")
+    if st.button("🔄 Rafraîchir la liste"):
+        refresh_indexed_docs()
+        st.rerun()
 
 # ---------------------------------------------------------------------------
 # Main title
@@ -381,6 +420,8 @@ if uploaded_files and st.button("📥 Indexer les documents", type="primary"):
         except Exception as exc:
             st.error(f"❌ Erreur lors de l'envoi de {f.name} : {exc}")
     progress.progress(1.0, text="Indexation terminée.")
+    # Refresh the indexed docs list from the backend so chunk counts are accurate
+    refresh_indexed_docs()
 
 st.divider()
 

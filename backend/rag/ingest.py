@@ -329,6 +329,48 @@ def get_all_collections(qdrant_url: str = QDRANT_URL) -> dict[str, int]:
         return {}
 
 
+def list_user_documents(user_id: str = "default", qdrant_url: str = QDRANT_URL) -> list[dict[str, Any]]:
+    """Return a list of unique documents indexed for user_id.
+
+    Each item: {"source": str, "chunks": int}. Sourced from the BM25 corpus
+    (persisted to disk), which mirrors what's in Qdrant but is faster to read.
+    Falls back to Qdrant scroll if BM25 is empty but the collection has points.
+    """
+    corpus = load_bm25_corpus(user_id)
+    counts: dict[str, int] = {}
+    for entry in corpus:
+        src = entry.get("metadata", {}).get("source") or "unknown"
+        counts[src] = counts.get(src, 0) + 1
+
+    # Fallback: if BM25 is empty but Qdrant has data (edge case), scroll Qdrant
+    if not counts:
+        try:
+            collection_name = _collection_for_user(user_id)
+            client = get_qdrant_client(qdrant_url)
+            existing = [c.name for c in client.get_collections().collections]
+            if collection_name in existing:
+                offset = None
+                while True:
+                    points, offset = client.scroll(
+                        collection_name=collection_name,
+                        limit=256,
+                        with_payload=True,
+                        with_vectors=False,
+                        offset=offset,
+                    )
+                    for p in points:
+                        payload = p.payload or {}
+                        meta = payload.get("metadata", {}) or {}
+                        src = meta.get("source") or payload.get("source") or "unknown"
+                        counts[src] = counts.get(src, 0) + 1
+                    if offset is None:
+                        break
+        except Exception as exc:
+            logger.warning("Could not scroll Qdrant for user '%s': %s", user_id, exc)
+
+    return [{"source": s, "chunks": c} for s, c in sorted(counts.items())]
+
+
 def reset_collection(qdrant_url: str = QDRANT_URL, user_id: str = "default") -> None:
     """Delete and recreate the user's Qdrant collection, and reset their BM25 corpus."""
     collection_name = _collection_for_user(user_id)
