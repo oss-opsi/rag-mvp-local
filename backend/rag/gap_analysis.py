@@ -48,7 +48,7 @@ DEDUP_SIMILARITY_THRESHOLD = 0.88
 logger = logging.getLogger(__name__)
 
 # Bump this when prompts or pipeline change to invalidate old cache entries.
-PIPELINE_VERSION = "v3.5.4"
+PIPELINE_VERSION = "v3.6.0"
 
 # Persistent cache directory on disk.
 GAP_CACHE_DIR = os.path.join(DATA_DIR, "gap_cache")
@@ -773,6 +773,11 @@ async def analyse_requirement(
 # ---------------------------------------------------------------------------
 # On-disk cache (stabilise les résultats pour un même CDC + même corpus)
 # ---------------------------------------------------------------------------
+
+
+def corpus_fingerprint(user_id: str) -> str:
+    """Public alias — reused by the workspace module to derive freshness."""
+    return _corpus_fingerprint(user_id)
 
 
 def _corpus_fingerprint(user_id: str) -> str:

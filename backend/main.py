@@ -58,7 +58,7 @@ from fastapi import (
     status,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from rag.auth import (
@@ -72,7 +72,12 @@ from rag.auth import (
     verify_user,
 )
 from rag.chain import answer_question, get_answer_non_streaming, stream_answer
-from rag.gap_analysis import run_gap_analysis
+from rag.gap_analysis import (
+    PIPELINE_VERSION as GAP_PIPELINE_VERSION,
+    corpus_fingerprint as gap_corpus_fingerprint,
+    run_gap_analysis,
+)
+from rag import workspace
 from rag.config import (
     BM25_DIR,
     CONVERSATIONS_DB_PATH,
@@ -101,6 +106,7 @@ logger = logging.getLogger(__name__)
 
 Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
 Path(BM25_DIR).mkdir(parents=True, exist_ok=True)
+workspace.init_db()
 
 # ---------------------------------------------------------------------------
 # Singletons
@@ -932,6 +938,228 @@ async def gap_analysis(
         except OSError:
             pass
 
+    return report
+
+
+# ---------------------------------------------------------------------------
+# Workspace endpoints (v3.6.0) — Espace de travail multi-clients
+# ---------------------------------------------------------------------------
+
+
+class ClientCreate(BaseModel):
+    name: str
+
+
+def _annotate_cdc_row(row: dict, current_pipeline: str, current_corpus: str) -> dict:
+    """Attach a dynamic 'status' (brouillon/analysé/périmé) to a CDC row."""
+    row["status"] = workspace.derive_status(row, current_pipeline, current_corpus)
+    return row
+
+
+@app.get("/workspace/clients", tags=["Workspace"])
+def workspace_list_clients(authorization: str = Header(None)) -> dict:
+    user_id = get_current_user(authorization)
+    return {"clients": workspace.list_clients(user_id)}
+
+
+@app.post("/workspace/clients", tags=["Workspace"])
+def workspace_create_client(
+    payload: ClientCreate, authorization: str = Header(None)
+) -> dict:
+    user_id = get_current_user(authorization)
+    try:
+        return workspace.create_client(user_id, payload.name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.delete("/workspace/clients/{client_id}", tags=["Workspace"])
+def workspace_delete_client(
+    client_id: int, authorization: str = Header(None)
+) -> dict:
+    user_id = get_current_user(authorization)
+    if not workspace.delete_client(user_id, client_id):
+        raise HTTPException(status_code=404, detail="Client introuvable.")
+    return {"deleted": True, "client_id": client_id}
+
+
+@app.get("/workspace/clients/{client_id}/cdcs", tags=["Workspace"])
+def workspace_list_cdcs(
+    client_id: int, authorization: str = Header(None)
+) -> dict:
+    user_id = get_current_user(authorization)
+    if not workspace.get_client(user_id, client_id):
+        raise HTTPException(status_code=404, detail="Client introuvable.")
+    current_corpus = gap_corpus_fingerprint(user_id)
+    rows = workspace.list_cdcs(user_id, client_id)
+    for r in rows:
+        _annotate_cdc_row(r, GAP_PIPELINE_VERSION, current_corpus)
+    return {
+        "client_id": client_id,
+        "pipeline_version": GAP_PIPELINE_VERSION,
+        "corpus_fingerprint": current_corpus,
+        "cdcs": rows,
+    }
+
+
+@app.post("/workspace/clients/{client_id}/cdcs", tags=["Workspace"])
+async def workspace_upload_cdc(
+    client_id: int,
+    file: UploadFile = File(...),
+    authorization: str = Header(None),
+) -> dict:
+    user_id = get_current_user(authorization)
+    if not workspace.get_client(user_id, client_id):
+        raise HTTPException(status_code=404, detail="Client introuvable.")
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Nom de fichier manquant.")
+    import pathlib
+    ext = pathlib.Path(file.filename).suffix.lower()
+    if ext not in SUPPORTED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Format non supporté : '{ext}'. "
+                f"Formats acceptés : {', '.join(sorted(SUPPORTED_EXTENSIONS))}"
+            ),
+        )
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Le fichier est vide.")
+    try:
+        row = workspace.create_cdc(user_id, client_id, file.filename, ext, data)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return row
+
+
+@app.get("/workspace/cdcs/{cdc_id}", tags=["Workspace"])
+def workspace_get_cdc(cdc_id: int, authorization: str = Header(None)) -> dict:
+    user_id = get_current_user(authorization)
+    cdc = workspace.get_cdc(user_id, cdc_id)
+    if not cdc:
+        raise HTTPException(status_code=404, detail="CDC introuvable.")
+    analysis = workspace.get_latest_analysis(user_id, cdc_id)
+    current_corpus = gap_corpus_fingerprint(user_id)
+    # Build an annotation-compatible row for status derivation
+    status_row = {
+        "analysis_id": analysis["id"] if analysis else None,
+        "pipeline_version": analysis.get("pipeline_version") if analysis else None,
+        "corpus_fingerprint": analysis.get("corpus_fingerprint") if analysis else None,
+    }
+    status = workspace.derive_status(
+        status_row, GAP_PIPELINE_VERSION, current_corpus
+    )
+    # Strip server-local path from response
+    cdc_out = {k: v for k, v in cdc.items() if k != "original_path"}
+    return {
+        "cdc": cdc_out,
+        "status": status,
+        "pipeline_version": GAP_PIPELINE_VERSION,
+        "corpus_fingerprint": current_corpus,
+        "analysis": analysis,
+    }
+
+
+@app.get("/workspace/cdcs/{cdc_id}/download", tags=["Workspace"])
+def workspace_download_cdc(
+    cdc_id: int, authorization: str = Header(None)
+):
+    user_id = get_current_user(authorization)
+    cdc = workspace.get_cdc(user_id, cdc_id)
+    if not cdc:
+        raise HTTPException(status_code=404, detail="CDC introuvable.")
+    path = cdc.get("original_path") or ""
+    if not path or not os.path.exists(path):
+        raise HTTPException(status_code=410, detail="Fichier original indisponible.")
+    return FileResponse(
+        path=path,
+        filename=cdc["filename"],
+        media_type="application/octet-stream",
+    )
+
+
+@app.delete("/workspace/cdcs/{cdc_id}", tags=["Workspace"])
+def workspace_delete_cdc(
+    cdc_id: int, authorization: str = Header(None)
+) -> dict:
+    user_id = get_current_user(authorization)
+    if not workspace.delete_cdc(user_id, cdc_id):
+        raise HTTPException(status_code=404, detail="CDC introuvable.")
+    return {"deleted": True, "cdc_id": cdc_id}
+
+
+@app.post("/workspace/cdcs/{cdc_id}/analyse", tags=["Workspace"])
+async def workspace_analyse_cdc(
+    cdc_id: int,
+    openai_api_key: str = Form(""),
+    force_refresh: bool = Form(False),
+    authorization: str = Header(None),
+) -> dict:
+    """Lance l'analyse d'écarts sur un CDC persisté, et stocke le rapport."""
+    user_id = get_current_user(authorization)
+    cdc = workspace.get_cdc(user_id, cdc_id)
+    if not cdc:
+        raise HTTPException(status_code=404, detail="CDC introuvable.")
+
+    effective_key = (openai_api_key or "").strip()
+    if not effective_key and user_id != "guest":
+        effective_key = get_user_api_key(user_id)
+    if not effective_key:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "La clé API OpenAI est requise (saisissez-la ou enregistrez-la "
+                "dans vos paramètres)."
+            ),
+        )
+
+    corpus = load_bm25_corpus(user_id)
+    if not corpus:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Aucun document indexé pour cet utilisateur. Veuillez d'abord "
+                "indexer vos documents produit avant de lancer une analyse d'écarts."
+            ),
+        )
+
+    path = cdc.get("original_path") or ""
+    if not path or not os.path.exists(path):
+        raise HTTPException(status_code=410, detail="Fichier original indisponible.")
+
+    try:
+        report = await run_gap_analysis(
+            cdc_file_path=path,
+            cdc_ext=cdc["ext"],
+            cdc_filename=cdc["filename"],
+            user_id=user_id,
+            openai_api_key=effective_key,
+            qdrant_url=QDRANT_URL,
+            force_refresh=force_refresh,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.exception("Gap analysis failed for CDC %s", cdc_id)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erreur pendant l'analyse d'écarts : {exc}",
+        )
+
+    # Persist analysis in workspace DB
+    try:
+        analysis_id = workspace.save_analysis(
+            cdc_id=cdc_id,
+            report=report,
+            pipeline_version=GAP_PIPELINE_VERSION,
+            corpus_fingerprint=gap_corpus_fingerprint(user_id),
+        )
+        report["analysis_id"] = analysis_id
+    except Exception as exc:
+        logger.exception("Failed to persist analysis for CDC %s", cdc_id)
+
+    report["cdc_id"] = cdc_id
     return report
 
 

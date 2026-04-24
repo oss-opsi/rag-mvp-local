@@ -1378,349 +1378,787 @@ with tab_gap:
     st.markdown(
         """
         <div class="rag-card">
-            <h3>📋 Analyse d'écarts d'un cahier des charges</h3>
+            <h3>📋 Espace d'analyse d'écarts — multi-clients</h3>
             <p style="color:#4b5563; margin:0; font-size:0.92rem;">
-                Uploadez un cahier des charges client (PDF, DOCX, TXT, MD). Tell me
-                extrait automatiquement les exigences, puis vérifie pour chacune si
-                elle est <b>couverte</b> par les documents que vous avez indexés.
-                Le rapport est téléchargeable en Markdown et Excel.
+                Créez un dossier par client, puis uploadez un ou plusieurs
+                cahiers des charges (PDF, DOCX, TXT, MD). Chaque CDC est
+                conservé, ré-analysable, et téléchargeable à tout moment.
+                Tell me extrait automatiquement les exigences et vérifie
+                chacune dans les documents que vous avez indexés.
             </p>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    gap_file = st.file_uploader(
-        "Cahier des charges à analyser",
-        type=["pdf", "docx", "txt", "md"],
-        key="gap_cdc_upload",
-        help="Le fichier est analysé à la volée et n'est pas indexé dans votre base.",
-    )
+    # ------------------------------------------------------------------
+    # Helpers (API calls + display utilities)
+    # ------------------------------------------------------------------
 
-    run_col, opt_col = st.columns([1, 3])
-    with run_col:
-        run_gap = st.button(
-            "🚀 Lancer l'analyse",
-            type="primary",
-            use_container_width=True,
-            disabled=(gap_file is None),
-            key="btn_run_gap",
-        )
-    with opt_col:
-        force_refresh = st.checkbox(
-            "Forcer une nouvelle analyse (ignorer le cache)",
-            value=False,
-            key="gap_force_refresh",
-            help=(
-                "Par défaut, un CDC déjà analysé réutilise le résultat caché "
-                "(mêmes exigences, même taux de couverture). Cochez pour forcer "
-                "une nouvelle analyse LLM."
-            ),
-        )
-
-    if run_gap and gap_file is not None:
-        with st.spinner(
-            "Analyse en cours (extraction des exigences, puis vérification de "
-            "chacune dans vos documents). Cela peut prendre 30–90 secondes."
-        ):
-            try:
-                resp = requests.post(
-                    f"{BACKEND_URL}/gap-analysis",
-                    files={
-                        "file": (gap_file.name, gap_file.getvalue()),
-                    },
-                    data={
-                        "force_refresh": "true" if force_refresh else "false",
-                    },
-                    headers=auth_headers(),
-                    timeout=600,
-                )
-            except requests.exceptions.RequestException as exc:
-                st.error(f"❌ Impossible de joindre le backend : {exc}")
-                resp = None
-
-        if resp is not None:
-            if resp.status_code == 200:
-                st.session_state["gap_report"] = resp.json()
-                st.success("✅ Analyse terminée.")
-            else:
-                try:
-                    detail = resp.json().get("detail", resp.text)
-                except Exception:
-                    detail = resp.text
-                st.error(f"❌ Erreur ({resp.status_code}) : {detail}")
-
-    # Display report if available
-    report = st.session_state.get("gap_report")
-    if report:
-        summary = report.get("summary", {})
-        total = summary.get("total", 0)
-        covered = summary.get("covered", 0)
-        partial = summary.get("partial", 0)
-        missing = summary.get("missing", 0)
-        ambiguous = summary.get("ambiguous", 0)
-        coverage = summary.get("coverage_percent", 0.0)
-
-        st.markdown("### 📈 Synthèse")
-        m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric("Exigences", total)
-        m2.metric("✅ Couvertes", covered)
-        m3.metric("⚠️ Partielles", partial)
-        m4.metric("❌ Manquantes", missing)
-        m5.metric("Taux couverture", f"{coverage}%")
-        if ambiguous:
-            st.caption(f"❓ {ambiguous} exigence(s) classée(s) comme ambiguë(s).")
-        chunks_used = report.get("chunks_processed")
-        cdc_chars = report.get("cdc_chars")
-        if chunks_used and cdc_chars:
-            st.caption(
-                f"📄 CDC de {cdc_chars:,} caractères analysé en {chunks_used} "
-                f"extrait(s) parallèles (map-reduce).".replace(",", " ")
-            )
-        if report.get("from_cache"):
-            st.info(
-                "♻️ Résultat issu du cache (même CDC déjà analysé avec le même "
-                "corpus). Cochez « Forcer une nouvelle analyse » pour re-lancer."
-            )
-
-        st.markdown("### 📋 Exigences analysées")
-
-        status_badge = {
-            "covered": "✅ Couverte",
-            "partial": "⚠️ Partielle",
-            "missing": "❌ Manquante",
-            "ambiguous": "❓ Ambiguë",
-        }
-        priority_badge = {
-            "must": "🔴 Must",
-            "should": "🟠 Should",
-            "could": "🟡 Could",
-            "wont": "⚫ Won't",
-        }
-
-        # Filters: status + priority side by side
-        f_col1, f_col2 = st.columns(2)
-        with f_col1:
-            status_filter = st.multiselect(
-                "Filtrer par statut",
-                options=["covered", "partial", "missing", "ambiguous"],
-                default=["covered", "partial", "missing", "ambiguous"],
-                format_func=lambda s: status_badge[s],
-                key="gap_status_filter",
-            )
-        with f_col2:
-            priority_filter = st.multiselect(
-                "Filtrer par priorité (MoSCoW)",
-                options=["must", "should", "could", "wont"],
-                default=["must", "should", "could", "wont"],
-                format_func=lambda p: priority_badge[p],
-                key="gap_priority_filter",
-            )
-
-        for req in report.get("requirements", []):
-            if req.get("status") not in status_filter:
-                continue
-            if req.get("priority", "must") not in priority_filter:
-                continue
-            label = status_badge.get(req.get("status"), req.get("status", ""))
-            prio_lbl = priority_badge.get(
-                req.get("priority", "must"), req.get("priority", "")
-            )
-            with st.expander(
-                f"{label} · {prio_lbl} · {req.get('id', '')} — "
-                f"{req.get('title', '')}",
-                expanded=(req.get("status") in {"missing", "partial"}),
-            ):
-                obl = req.get("obligation_level", "")
-                src_loc = req.get("source_location", "")
-                meta_bits = [
-                    f"**Catégorie** : {req.get('category', 'Autre')}",
-                    f"**Priorité** : {prio_lbl}",
-                ]
-                if obl:
-                    meta_bits.append(f"**Obligation** : {obl}")
-                if src_loc and src_loc != "non localisé":
-                    meta_bits.append(f"**Source dans le CDC** : {src_loc}")
-                st.markdown("  \n".join(meta_bits))
-                st.markdown(
-                    f"**Description** : {req.get('description', '')}"
-                )
-                criteria = req.get("acceptance_criteria") or []
-                if criteria:
-                    st.markdown("**Critères d'acceptation :**")
-                    for c in criteria:
-                        st.markdown(f"- {c}")
-                deps = req.get("depends_on") or []
-                if deps:
-                    st.caption(f"🔗 Dépend de : {', '.join(deps)}")
-                notes = req.get("notes") or ""
-                if notes:
-                    st.caption(f"📝 Note AMOA : {notes}")
-                verdict = req.get("verdict") or ""
-                if verdict:
-                    st.markdown(f"**Verdict** : {verdict}")
-                evidence = req.get("evidence") or []
-                if evidence:
-                    st.markdown("**Extraits pertinents :**")
-                    for ev in evidence:
-                        st.markdown(f"> {ev}")
-                sources = req.get("sources") or []
-                if sources:
-                    st.markdown("**Sources :**")
-                    for s in sources:
-                        st.caption(
-                            f"📄 {s.get('source', '?')} — page {s.get('page', '?')} "
-                            f"· score {s.get('score', 0):.3f}"
-                        )
-
-        # ------------------------------------------------------------------
-        # Exports
-        # ------------------------------------------------------------------
-        st.markdown("### 📥 Export du rapport")
-
-        def _build_markdown_report(rep: dict) -> str:
-            s = rep.get("summary", {})
-            lines = [
-                f"# Analyse d'écarts — {rep.get('filename', '')}",
-                "",
-                "## Synthèse",
-                "",
-                f"- Exigences analysées : **{s.get('total', 0)}**",
-                f"- ✅ Couvertes : **{s.get('covered', 0)}**",
-                f"- ⚠️ Partiellement couvertes : **{s.get('partial', 0)}**",
-                f"- ❌ Manquantes : **{s.get('missing', 0)}**",
-                f"- ❓ Ambiguës : **{s.get('ambiguous', 0)}**",
-                f"- **Taux de couverture : {s.get('coverage_percent', 0)}%**",
-                "",
-                "## Détail des exigences",
-                "",
-            ]
-            for r in rep.get("requirements", []):
-                prio_lbl = priority_badge.get(
-                    r.get("priority", "must"), r.get("priority", "")
-                )
-                lines += [
-                    f"### {status_badge.get(r.get('status'), r.get('status', ''))}"
-                    f" · {prio_lbl} · {r.get('id', '')} — {r.get('title', '')}",
-                    "",
-                    f"- **Catégorie** : {r.get('category', 'Autre')}",
-                    f"- **Priorité** : {prio_lbl}",
-                    f"- **Obligation** : {r.get('obligation_level', '')}",
-                    f"- **Source dans le CDC** : {r.get('source_location', 'non localisé')}",
-                    f"- **Description** : {r.get('description', '')}",
-                ]
-                crit = r.get("acceptance_criteria") or []
-                if crit:
-                    lines.append("- **Critères d'acceptation** :")
-                    for c in crit:
-                        lines.append(f"  - {c}")
-                deps = r.get("depends_on") or []
-                if deps:
-                    lines.append(f"- **Dépend de** : {', '.join(deps)}")
-                notes = r.get("notes") or ""
-                if notes:
-                    lines.append(f"- **Notes** : {notes}")
-                lines.append(f"- **Verdict** : {r.get('verdict', '')}")
-                if r.get("evidence"):
-                    lines.append("- **Extraits** :")
-                    for ev in r["evidence"]:
-                        lines.append(f"  - {ev}")
-                if r.get("sources"):
-                    lines.append("- **Sources** :")
-                    for src in r["sources"]:
-                        lines.append(
-                            f"  - {src.get('source', '?')} — page "
-                            f"{src.get('page', '?')} (score "
-                            f"{src.get('score', 0):.3f})"
-                        )
-                lines.append("")
-            return "\n".join(lines)
-
-        def _build_excel_report(rep: dict) -> bytes:
-            import io
-            import pandas as pd
-
-            rows = []
-            for r in rep.get("requirements", []):
-                srcs = " ; ".join(
-                    f"{s.get('source','?')} p.{s.get('page','?')}"
-                    for s in (r.get("sources") or [])
-                )
-                rows.append({
-                    "ID": r.get("id", ""),
-                    "Titre": r.get("title", ""),
-                    "Catégorie": r.get("category", ""),
-                    "Priorité": priority_badge.get(
-                        r.get("priority", "must"), r.get("priority", "")
-                    ),
-                    "Obligation": r.get("obligation_level", ""),
-                    "Source dans CDC": r.get("source_location", ""),
-                    "Description": r.get("description", ""),
-                    "Critères d'acceptation": "\n".join(
-                        r.get("acceptance_criteria") or []
-                    ),
-                    "Dépend de": ", ".join(r.get("depends_on") or []),
-                    "Notes": r.get("notes", ""),
-                    "Statut": status_badge.get(
-                        r.get("status"), r.get("status", "")
-                    ),
-                    "Verdict": r.get("verdict", ""),
-                    "Extraits": " | ".join(r.get("evidence") or []),
-                    "Sources": srcs,
-                })
-            df_req = pd.DataFrame(rows)
-
-            s = rep.get("summary", {})
-            df_sum = pd.DataFrame([
-                {"Indicateur": "Exigences analysées", "Valeur": s.get("total", 0)},
-                {"Indicateur": "Couvertes", "Valeur": s.get("covered", 0)},
-                {"Indicateur": "Partielles", "Valeur": s.get("partial", 0)},
-                {"Indicateur": "Manquantes", "Valeur": s.get("missing", 0)},
-                {"Indicateur": "Ambiguës", "Valeur": s.get("ambiguous", 0)},
-                {
-                    "Indicateur": "Taux de couverture (%)",
-                    "Valeur": s.get("coverage_percent", 0),
-                },
-            ])
-
-            buf = io.BytesIO()
-            with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-                df_sum.to_excel(writer, index=False, sheet_name="Synthèse")
-                df_req.to_excel(writer, index=False, sheet_name="Exigences")
-            return buf.getvalue()
-
-        base_name = (report.get("filename") or "cahier-des-charges").rsplit(".", 1)[0]
-        md_bytes = _build_markdown_report(report).encode("utf-8")
+    def _ws_get_clients() -> list[dict]:
         try:
-            xlsx_bytes = _build_excel_report(report)
-            xlsx_err = None
-        except Exception as exc:
-            xlsx_bytes = None
-            xlsx_err = str(exc)
-
-        dl1, dl2 = st.columns(2)
-        with dl1:
-            st.download_button(
-                label="📝 Télécharger (Markdown)",
-                data=md_bytes,
-                file_name=f"analyse-ecarts-{base_name}.md",
-                mime="text/markdown",
-                use_container_width=True,
+            r = requests.get(
+                f"{BACKEND_URL}/workspace/clients",
+                headers=auth_headers(),
+                timeout=15,
             )
-        with dl2:
-            if xlsx_bytes:
-                st.download_button(
-                    label="📊 Télécharger (Excel)",
-                    data=xlsx_bytes,
-                    file_name=f"analyse-ecarts-{base_name}.xlsx",
-                    mime=(
-                        "application/vnd.openxmlformats-officedocument"
-                        ".spreadsheetml.sheet"
-                    ),
+            if r.status_code == 200:
+                return r.json().get("clients", [])
+        except requests.exceptions.RequestException:
+            pass
+        return []
+
+    def _ws_create_client(name: str) -> tuple[bool, str]:
+        try:
+            r = requests.post(
+                f"{BACKEND_URL}/workspace/clients",
+                headers=auth_headers(),
+                json={"name": name},
+                timeout=15,
+            )
+            if r.status_code in (200, 201):
+                return True, ""
+            try:
+                return False, r.json().get("detail", r.text)
+            except Exception:
+                return False, r.text
+        except requests.exceptions.RequestException as exc:
+            return False, str(exc)
+
+    def _ws_delete_client(client_id: int) -> bool:
+        try:
+            r = requests.delete(
+                f"{BACKEND_URL}/workspace/clients/{client_id}",
+                headers=auth_headers(),
+                timeout=15,
+            )
+            return r.status_code == 200
+        except requests.exceptions.RequestException:
+            return False
+
+    def _ws_list_cdcs(client_id: int) -> dict:
+        try:
+            r = requests.get(
+                f"{BACKEND_URL}/workspace/clients/{client_id}/cdcs",
+                headers=auth_headers(),
+                timeout=15,
+            )
+            if r.status_code == 200:
+                return r.json()
+        except requests.exceptions.RequestException:
+            pass
+        return {"cdcs": []}
+
+    def _ws_upload_cdc(client_id: int, uploaded_file) -> tuple[bool, str]:
+        try:
+            r = requests.post(
+                f"{BACKEND_URL}/workspace/clients/{client_id}/cdcs",
+                headers=auth_headers(),
+                files={"file": (uploaded_file.name, uploaded_file.getvalue())},
+                timeout=60,
+            )
+            if r.status_code in (200, 201):
+                return True, ""
+            try:
+                return False, r.json().get("detail", r.text)
+            except Exception:
+                return False, r.text
+        except requests.exceptions.RequestException as exc:
+            return False, str(exc)
+
+    def _ws_delete_cdc(cdc_id: int) -> bool:
+        try:
+            r = requests.delete(
+                f"{BACKEND_URL}/workspace/cdcs/{cdc_id}",
+                headers=auth_headers(),
+                timeout=15,
+            )
+            return r.status_code == 200
+        except requests.exceptions.RequestException:
+            return False
+
+    def _ws_get_cdc_detail(cdc_id: int) -> dict | None:
+        try:
+            r = requests.get(
+                f"{BACKEND_URL}/workspace/cdcs/{cdc_id}",
+                headers=auth_headers(),
+                timeout=15,
+            )
+            if r.status_code == 200:
+                return r.json()
+        except requests.exceptions.RequestException:
+            pass
+        return None
+
+    def _ws_download_cdc(cdc_id: int) -> tuple[bytes | None, str | None, str]:
+        try:
+            r = requests.get(
+                f"{BACKEND_URL}/workspace/cdcs/{cdc_id}/download",
+                headers=auth_headers(),
+                timeout=30,
+            )
+            if r.status_code == 200:
+                # Try to extract filename from Content-Disposition
+                cd = r.headers.get("content-disposition", "")
+                fname = None
+                if "filename=" in cd:
+                    fname = cd.split("filename=", 1)[1].strip().strip('"')
+                return r.content, fname, ""
+            try:
+                return None, None, r.json().get("detail", r.text)
+            except Exception:
+                return None, None, r.text
+        except requests.exceptions.RequestException as exc:
+            return None, None, str(exc)
+
+    def _ws_analyse_cdc(
+        cdc_id: int, api_key: str, force_refresh: bool
+    ) -> tuple[dict | None, str]:
+        try:
+            r = requests.post(
+                f"{BACKEND_URL}/workspace/cdcs/{cdc_id}/analyse",
+                headers=auth_headers(),
+                data={
+                    "openai_api_key": api_key or "",
+                    "force_refresh": "true" if force_refresh else "false",
+                },
+                timeout=900,
+            )
+            if r.status_code == 200:
+                return r.json(), ""
+            try:
+                return None, r.json().get("detail", r.text)
+            except Exception:
+                return None, r.text
+        except requests.exceptions.RequestException as exc:
+            return None, str(exc)
+
+    # Coverage → color (rouge <30%, orange 30–70%, vert >70%)
+    def _coverage_color(pct: float) -> str:
+        if pct is None:
+            return "#9ca3af"
+        try:
+            p = float(pct)
+        except (TypeError, ValueError):
+            return "#9ca3af"
+        if p < 30:
+            return "#dc2626"  # rouge
+        if p < 70:
+            return "#d97706"  # orange
+        return "#16a34a"  # vert
+
+    _STATUS_COLORS = {
+        "brouillon": ("#64748b", "#e2e8f0"),      # gris
+        "analysé":   ("#065f46", "#d1fae5"),      # vert
+        "périmé":    ("#9a3412", "#fed7aa"),      # orange
+    }
+
+    def _status_chip(status: str) -> str:
+        fg, bg = _STATUS_COLORS.get(status, ("#334155", "#e2e8f0"))
+        return (
+            f'<span style="display:inline-block;padding:2px 10px;'
+            f'border-radius:999px;background:{bg};color:{fg};'
+            f'font-size:0.75rem;font-weight:600;">{status}</span>'
+        )
+
+    def _coverage_chip(pct) -> str:
+        try:
+            p = float(pct)
+        except (TypeError, ValueError):
+            return ""
+        color = _coverage_color(p)
+        return (
+            f'<span style="display:inline-block;padding:2px 10px;'
+            f'border-radius:999px;background:{color}1a;color:{color};'
+            f'font-size:0.75rem;font-weight:700;">{p:.0f}% couvert</span>'
+        )
+
+    # ------------------------------------------------------------------
+    # Two-column layout — Left: clients + CDC list · Right: detail
+    # ------------------------------------------------------------------
+
+    left, right = st.columns([1, 2.6], gap="large")
+
+    # ----- LEFT COLUMN: client picker + CDC list -----
+    with left:
+        st.markdown("#### 👥 Clients")
+        clients = _ws_get_clients()
+        client_options = {c["id"]: c for c in clients}
+
+        # Persist selected client across re-renders
+        current_sel = st.session_state.get("ws_selected_client_id")
+        if current_sel not in client_options:
+            current_sel = clients[0]["id"] if clients else None
+            st.session_state["ws_selected_client_id"] = current_sel
+
+        if clients:
+            labels = {
+                c["id"]: f"{c['name']} ({c.get('cdc_count', 0)} CDC)"
+                for c in clients
+            }
+            selected = st.selectbox(
+                "Client sélectionné",
+                options=list(client_options.keys()),
+                format_func=lambda cid: labels.get(cid, str(cid)),
+                index=(
+                    list(client_options.keys()).index(current_sel)
+                    if current_sel in client_options else 0
+                ),
+                key="ws_client_select",
+                label_visibility="collapsed",
+            )
+            st.session_state["ws_selected_client_id"] = selected
+        else:
+            st.caption("Aucun client — créez-en un ci-dessous.")
+            selected = None
+
+        with st.expander("➕ Nouveau client", expanded=(not clients)):
+            new_name = st.text_input(
+                "Nom du client",
+                key="ws_new_client_name",
+                placeholder="Ex : Roquette, Danone, ACME…",
+            )
+            if st.button(
+                "Créer le client",
+                key="ws_btn_create_client",
+                use_container_width=True,
+                disabled=not (new_name or "").strip(),
+            ):
+                ok, err = _ws_create_client(new_name.strip())
+                if ok:
+                    st.success(f"Client « {new_name.strip()} » créé.")
+                    # Clear input + force refresh
+                    st.session_state.pop("ws_new_client_name", None)
+                    st.rerun()
+                else:
+                    st.error(err or "Échec de la création.")
+
+        if selected is not None:
+            # Delete client (guarded)
+            with st.expander("🗑️ Supprimer ce client", expanded=False):
+                st.caption(
+                    "La suppression retire le client ET tous ses cahiers "
+                    "des charges et analyses."
+                )
+                if st.button(
+                    "Confirmer la suppression",
+                    key="ws_btn_delete_client",
+                    type="secondary",
                     use_container_width=True,
+                ):
+                    if _ws_delete_client(selected):
+                        st.session_state.pop("ws_selected_client_id", None)
+                        st.session_state.pop("ws_selected_cdc_id", None)
+                        st.success("Client supprimé.")
+                        st.rerun()
+                    else:
+                        st.error("Échec de la suppression.")
+
+            st.markdown("---")
+            st.markdown("#### 📄 Cahiers des charges")
+
+            # Upload new CDC
+            new_cdc = st.file_uploader(
+                "Ajouter un CDC",
+                type=["pdf", "docx", "txt", "md"],
+                key=f"ws_upload_{selected}",
+                help="Le fichier est stocké côté serveur pour être ré-analysé.",
+            )
+            if new_cdc is not None and st.button(
+                "📤 Uploader le CDC",
+                key=f"ws_btn_upload_{selected}",
+                type="primary",
+                use_container_width=True,
+            ):
+                ok, err = _ws_upload_cdc(selected, new_cdc)
+                if ok:
+                    st.success(f"« {new_cdc.name} » ajouté.")
+                    st.rerun()
+                else:
+                    st.error(err or "Échec de l'upload.")
+
+            # List CDCs for this client
+            payload = _ws_list_cdcs(selected)
+            cdcs = payload.get("cdcs", [])
+
+            if not cdcs:
+                st.caption(
+                    "Aucun CDC pour ce client. Utilisez le sélecteur ci-dessus "
+                    "pour en ajouter un."
                 )
             else:
-                st.caption(f"Export Excel indisponible : {xlsx_err}")
+                cur_cdc = st.session_state.get("ws_selected_cdc_id")
+                if cur_cdc not in {c["id"] for c in cdcs}:
+                    cur_cdc = cdcs[0]["id"]
+                    st.session_state["ws_selected_cdc_id"] = cur_cdc
+
+                for c in cdcs:
+                    is_sel = (c["id"] == cur_cdc)
+                    status = c.get("status", "brouillon")
+                    cov = c.get("coverage_percent")
+                    total = c.get("total")
+                    up_at = (c.get("uploaded_at") or "")[:10]
+                    fname = c.get("filename", "")
+                    # Card with select button
+                    border = "2px solid #2563eb" if is_sel else "1px solid #e5e7eb"
+                    bg = "#eff6ff" if is_sel else "#ffffff"
+                    chips = _status_chip(status)
+                    if cov is not None:
+                        chips += " " + _coverage_chip(cov)
+                    meta_line = f"{up_at}"
+                    if total:
+                        meta_line += f" · {total} exigences"
+                    st.markdown(
+                        f'<div style="border:{border};background:{bg};'
+                        f'border-radius:8px;padding:10px 12px;margin-bottom:8px;">'
+                        f'<div style="font-weight:600;font-size:0.92rem;'
+                        f'word-break:break-word;">{fname}</div>'
+                        f'<div style="font-size:0.75rem;color:#6b7280;'
+                        f'margin:3px 0 6px 0;">{meta_line}</div>'
+                        f'<div>{chips}</div>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+                    if st.button(
+                        ("▶ Sélectionné" if is_sel else "Ouvrir"),
+                        key=f"ws_btn_open_{c['id']}",
+                        use_container_width=True,
+                        disabled=is_sel,
+                    ):
+                        st.session_state["ws_selected_cdc_id"] = c["id"]
+                        # Clear previous report cache when switching
+                        st.session_state.pop("ws_current_report", None)
+                        st.rerun()
+
+    # ----- RIGHT COLUMN: detail / upload / analysis -----
+    with right:
+        sel_client = st.session_state.get("ws_selected_client_id")
+        sel_cdc = st.session_state.get("ws_selected_cdc_id")
+
+        if sel_client is None:
+            st.info(
+                "Aucun client sélectionné. Créez un client dans la colonne "
+                "de gauche pour commencer."
+            )
+        elif not sel_cdc:
+            st.info(
+                "Sélectionnez un cahier des charges à gauche, ou uploadez-en "
+                "un nouveau pour ce client."
+            )
+        else:
+            detail = _ws_get_cdc_detail(sel_cdc)
+            if not detail:
+                st.warning(
+                    "CDC introuvable — il a peut-être été supprimé. "
+                    "Choisissez-en un autre dans la colonne de gauche."
+                )
+            else:
+                cdc_meta = detail.get("cdc", {}) or {}
+                status = detail.get("status", "brouillon")
+                analysis = detail.get("analysis")
+
+                # Header
+                fname = cdc_meta.get("filename", "")
+                size_kb = (cdc_meta.get("file_size") or 0) / 1024
+                up_at = (cdc_meta.get("uploaded_at") or "")[:19].replace("T", " ")
+                st.markdown(
+                    f"### 📄 {fname}  {_status_chip(status)}",
+                    unsafe_allow_html=True,
+                )
+                st.caption(
+                    f"Uploadé le {up_at} · {size_kb:.1f} Ko · "
+                    f"pipeline {detail.get('pipeline_version', '?')}"
+                )
+
+                # Action bar
+                act1, act2, act3, act4 = st.columns([1.2, 1.2, 1, 1])
+                with act1:
+                    force_refresh = st.checkbox(
+                        "Forcer une nouvelle analyse",
+                        value=False,
+                        key=f"ws_force_{sel_cdc}",
+                        help=(
+                            "Par défaut, un CDC déjà analysé réutilise le "
+                            "résultat caché."
+                        ),
+                    )
+                with act2:
+                    btn_label = (
+                        "🚀 Lancer l'analyse"
+                        if status == "brouillon"
+                        else "🔁 Relancer l'analyse"
+                    )
+                    run_clicked = st.button(
+                        btn_label,
+                        type="primary",
+                        use_container_width=True,
+                        key=f"ws_run_{sel_cdc}",
+                        disabled=not has_usable_key(),
+                    )
+                with act3:
+                    dl_clicked = st.button(
+                        "📥 Télécharger",
+                        use_container_width=True,
+                        key=f"ws_dl_{sel_cdc}",
+                        help="Télécharger le fichier original du CDC",
+                    )
+                with act4:
+                    del_clicked = st.button(
+                        "🗑️ Supprimer",
+                        use_container_width=True,
+                        key=f"ws_del_{sel_cdc}",
+                    )
+
+                if not has_usable_key():
+                    st.warning(
+                        "⚠️ Clé API OpenAI manquante — renseignez-la dans la "
+                        "barre latérale pour lancer l'analyse."
+                    )
+
+                # Handle actions
+                if del_clicked:
+                    if _ws_delete_cdc(sel_cdc):
+                        st.session_state.pop("ws_selected_cdc_id", None)
+                        st.session_state.pop("ws_current_report", None)
+                        st.success("CDC supprimé.")
+                        st.rerun()
+                    else:
+                        st.error("Échec de la suppression.")
+
+                if dl_clicked:
+                    content, dlname, err = _ws_download_cdc(sel_cdc)
+                    if content is not None:
+                        st.download_button(
+                            label=f"💾 Enregistrer {dlname or fname}",
+                            data=content,
+                            file_name=dlname or fname,
+                            mime="application/octet-stream",
+                            key=f"ws_dlbtn_{sel_cdc}",
+                            use_container_width=True,
+                        )
+                    else:
+                        st.error(f"Échec du téléchargement : {err}")
+
+                if run_clicked:
+                    with st.spinner(
+                        "Analyse en cours (extraction des exigences, puis "
+                        "vérification de chacune dans vos documents). Cela "
+                        "peut prendre 30–90 secondes."
+                    ):
+                        report, err = _ws_analyse_cdc(
+                            sel_cdc, openai_key, force_refresh
+                        )
+                    if report is not None:
+                        st.session_state["ws_current_report"] = report
+                        st.success("✅ Analyse terminée.")
+                        st.rerun()
+                    else:
+                        st.error(f"❌ Erreur : {err}")
+
+                # Resolve report to display: freshly-run > stored > none
+                report = st.session_state.get("ws_current_report")
+                if not report or report.get("cdc_id") != sel_cdc:
+                    report = (analysis or {}).get("report")
+
+                if status == "périmé" and not run_clicked:
+                    st.warning(
+                        "⚠️ Cette analyse est **périmée** : le pipeline ou le "
+                        "corpus indexé a changé depuis. Relancez l'analyse "
+                        "pour obtenir un résultat à jour."
+                    )
+
+                if not report:
+                    st.info(
+                        "Ce CDC n'a pas encore été analysé. Cliquez sur "
+                        "« Lancer l'analyse » ci-dessus."
+                    )
+                else:
+                    # -------- Synthèse --------
+                    s = report.get("summary", {}) or {}
+                    total = s.get("total", 0)
+                    covered = s.get("covered", 0)
+                    partial = s.get("partial", 0)
+                    missing = s.get("missing", 0)
+                    ambiguous = s.get("ambiguous", 0)
+                    coverage = s.get("coverage_percent", 0.0)
+
+                    st.markdown("### 📈 Synthèse")
+                    m1, m2, m3, m4, m5 = st.columns(5)
+                    m1.metric("Exigences", total)
+                    m2.metric("✅ Couvertes", covered)
+                    m3.metric("⚠️ Partielles", partial)
+                    m4.metric("❌ Manquantes", missing)
+                    m5.metric("Taux couverture", f"{coverage}%")
+                    if ambiguous:
+                        st.caption(
+                            f"❓ {ambiguous} exigence(s) classée(s) comme "
+                            "ambiguë(s)."
+                        )
+                    chunks_used = report.get("chunks_processed")
+                    cdc_chars = report.get("cdc_chars")
+                    if chunks_used and cdc_chars:
+                        st.caption(
+                            f"📄 CDC de {cdc_chars:,} caractères analysé en "
+                            f"{chunks_used} extrait(s) parallèles (map-reduce)."
+                            .replace(",", " ")
+                        )
+                    if report.get("from_cache"):
+                        st.info(
+                            "♻️ Résultat issu du cache (même CDC déjà analysé "
+                            "avec le même corpus). Cochez « Forcer une "
+                            "nouvelle analyse » pour re-lancer."
+                        )
+
+                    # -------- Requirements --------
+                    st.markdown("### 📋 Exigences analysées")
+
+                    status_badge = {
+                        "covered":   "✅ Couverte",
+                        "partial":   "⚠️ Partielle",
+                        "missing":   "❌ Manquante",
+                        "ambiguous": "❓ Ambiguë",
+                    }
+                    priority_badge = {
+                        "must":   "🔴 Must",
+                        "should": "🟠 Should",
+                        "could":  "🟡 Could",
+                        "wont":   "⚫ Won't",
+                    }
+
+                    f_col1, f_col2 = st.columns(2)
+                    with f_col1:
+                        status_filter = st.multiselect(
+                            "Filtrer par statut",
+                            options=["covered", "partial", "missing", "ambiguous"],
+                            default=["covered", "partial", "missing", "ambiguous"],
+                            format_func=lambda s: status_badge[s],
+                            key=f"ws_status_filter_{sel_cdc}",
+                        )
+                    with f_col2:
+                        priority_filter = st.multiselect(
+                            "Filtrer par priorité (MoSCoW)",
+                            options=["must", "should", "could", "wont"],
+                            default=["must", "should", "could", "wont"],
+                            format_func=lambda p: priority_badge[p],
+                            key=f"ws_priority_filter_{sel_cdc}",
+                        )
+
+                    for req in report.get("requirements", []):
+                        if req.get("status") not in status_filter:
+                            continue
+                        if req.get("priority", "must") not in priority_filter:
+                            continue
+                        label = status_badge.get(
+                            req.get("status"), req.get("status", "")
+                        )
+                        prio_lbl = priority_badge.get(
+                            req.get("priority", "must"),
+                            req.get("priority", ""),
+                        )
+                        with st.expander(
+                            f"{label} · {prio_lbl} · {req.get('id', '')} — "
+                            f"{req.get('title', '')}",
+                            expanded=(
+                                req.get("status") in {"missing", "partial"}
+                            ),
+                        ):
+                            obl = req.get("obligation_level", "")
+                            src_loc = req.get("source_location", "")
+                            meta_bits = [
+                                f"**Catégorie** : {req.get('category', 'Autre')}",
+                                f"**Priorité** : {prio_lbl}",
+                            ]
+                            if obl:
+                                meta_bits.append(f"**Obligation** : {obl}")
+                            if src_loc and src_loc != "non localisé":
+                                meta_bits.append(
+                                    f"**Source dans le CDC** : {src_loc}"
+                                )
+                            st.markdown("  \n".join(meta_bits))
+                            st.markdown(
+                                f"**Description** : {req.get('description', '')}"
+                            )
+                            criteria = req.get("acceptance_criteria") or []
+                            if criteria:
+                                st.markdown("**Critères d'acceptation :**")
+                                for c in criteria:
+                                    st.markdown(f"- {c}")
+                            deps = req.get("depends_on") or []
+                            if deps:
+                                st.caption(f"🔗 Dépend de : {', '.join(deps)}")
+                            notes = req.get("notes") or ""
+                            if notes:
+                                st.caption(f"📝 Note AMOA : {notes}")
+                            verdict = req.get("verdict") or ""
+                            if verdict:
+                                st.markdown(f"**Verdict** : {verdict}")
+                            evidence = req.get("evidence") or []
+                            if evidence:
+                                st.markdown("**Extraits pertinents :**")
+                                for ev in evidence:
+                                    st.markdown(f"> {ev}")
+                            sources = req.get("sources") or []
+                            if sources:
+                                st.markdown("**Sources :**")
+                                for s_ in sources:
+                                    st.caption(
+                                        f"📄 {s_.get('source', '?')} — page "
+                                        f"{s_.get('page', '?')} · score "
+                                        f"{s_.get('score', 0):.3f}"
+                                    )
+
+                    # -------- Exports --------
+                    st.markdown("### 📥 Export du rapport")
+
+                    def _build_markdown_report(rep: dict) -> str:
+                        s = rep.get("summary", {})
+                        lines = [
+                            f"# Analyse d'écarts — {rep.get('filename', '')}",
+                            "",
+                            "## Synthèse",
+                            "",
+                            f"- Exigences analysées : **{s.get('total', 0)}**",
+                            f"- ✅ Couvertes : **{s.get('covered', 0)}**",
+                            f"- ⚠️ Partiellement couvertes : **{s.get('partial', 0)}**",
+                            f"- ❌ Manquantes : **{s.get('missing', 0)}**",
+                            f"- ❓ Ambiguës : **{s.get('ambiguous', 0)}**",
+                            f"- **Taux de couverture : {s.get('coverage_percent', 0)}%**",
+                            "",
+                            "## Détail des exigences",
+                            "",
+                        ]
+                        for r in rep.get("requirements", []):
+                            prio_lbl = priority_badge.get(
+                                r.get("priority", "must"), r.get("priority", "")
+                            )
+                            lines += [
+                                f"### {status_badge.get(r.get('status'), r.get('status', ''))}"
+                                f" · {prio_lbl} · {r.get('id', '')} — {r.get('title', '')}",
+                                "",
+                                f"- **Catégorie** : {r.get('category', 'Autre')}",
+                                f"- **Priorité** : {prio_lbl}",
+                                f"- **Obligation** : {r.get('obligation_level', '')}",
+                                f"- **Source dans le CDC** : {r.get('source_location', 'non localisé')}",
+                                f"- **Description** : {r.get('description', '')}",
+                            ]
+                            crit = r.get("acceptance_criteria") or []
+                            if crit:
+                                lines.append("- **Critères d'acceptation** :")
+                                for c in crit:
+                                    lines.append(f"  - {c}")
+                            deps = r.get("depends_on") or []
+                            if deps:
+                                lines.append(f"- **Dépend de** : {', '.join(deps)}")
+                            notes = r.get("notes") or ""
+                            if notes:
+                                lines.append(f"- **Notes** : {notes}")
+                            lines.append(f"- **Verdict** : {r.get('verdict', '')}")
+                            if r.get("evidence"):
+                                lines.append("- **Extraits** :")
+                                for ev in r["evidence"]:
+                                    lines.append(f"  - {ev}")
+                            if r.get("sources"):
+                                lines.append("- **Sources** :")
+                                for src in r["sources"]:
+                                    lines.append(
+                                        f"  - {src.get('source', '?')} — page "
+                                        f"{src.get('page', '?')} (score "
+                                        f"{src.get('score', 0):.3f})"
+                                    )
+                            lines.append("")
+                        return "\n".join(lines)
+
+                    def _build_excel_report(rep: dict) -> bytes:
+                        import io
+                        import pandas as pd
+
+                        rows = []
+                        for r in rep.get("requirements", []):
+                            srcs = " ; ".join(
+                                f"{s.get('source','?')} p.{s.get('page','?')}"
+                                for s in (r.get("sources") or [])
+                            )
+                            rows.append({
+                                "ID": r.get("id", ""),
+                                "Titre": r.get("title", ""),
+                                "Catégorie": r.get("category", ""),
+                                "Priorité": priority_badge.get(
+                                    r.get("priority", "must"),
+                                    r.get("priority", ""),
+                                ),
+                                "Obligation": r.get("obligation_level", ""),
+                                "Source dans CDC": r.get("source_location", ""),
+                                "Description": r.get("description", ""),
+                                "Critères d'acceptation": "\n".join(
+                                    r.get("acceptance_criteria") or []
+                                ),
+                                "Dépend de": ", ".join(r.get("depends_on") or []),
+                                "Notes": r.get("notes", ""),
+                                "Statut": status_badge.get(
+                                    r.get("status"), r.get("status", "")
+                                ),
+                                "Verdict": r.get("verdict", ""),
+                                "Extraits": " | ".join(r.get("evidence") or []),
+                                "Sources": srcs,
+                            })
+                        df_req = pd.DataFrame(rows)
+
+                        s = rep.get("summary", {})
+                        df_sum = pd.DataFrame([
+                            {"Indicateur": "Exigences analysées", "Valeur": s.get("total", 0)},
+                            {"Indicateur": "Couvertes", "Valeur": s.get("covered", 0)},
+                            {"Indicateur": "Partielles", "Valeur": s.get("partial", 0)},
+                            {"Indicateur": "Manquantes", "Valeur": s.get("missing", 0)},
+                            {"Indicateur": "Ambiguës", "Valeur": s.get("ambiguous", 0)},
+                            {
+                                "Indicateur": "Taux de couverture (%)",
+                                "Valeur": s.get("coverage_percent", 0),
+                            },
+                        ])
+
+                        buf = io.BytesIO()
+                        with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+                            df_sum.to_excel(writer, index=False, sheet_name="Synthèse")
+                            df_req.to_excel(writer, index=False, sheet_name="Exigences")
+                        return buf.getvalue()
+
+                    base_name = (
+                        report.get("filename") or "cahier-des-charges"
+                    ).rsplit(".", 1)[0]
+                    md_bytes = _build_markdown_report(report).encode("utf-8")
+                    try:
+                        xlsx_bytes = _build_excel_report(report)
+                        xlsx_err = None
+                    except Exception as exc:
+                        xlsx_bytes = None
+                        xlsx_err = str(exc)
+
+                    dl1, dl2 = st.columns(2)
+                    with dl1:
+                        st.download_button(
+                            label="📝 Télécharger (Markdown)",
+                            data=md_bytes,
+                            file_name=f"analyse-ecarts-{base_name}.md",
+                            mime="text/markdown",
+                            use_container_width=True,
+                            key=f"ws_md_{sel_cdc}",
+                        )
+                    with dl2:
+                        if xlsx_bytes:
+                            st.download_button(
+                                label="📊 Télécharger (Excel)",
+                                data=xlsx_bytes,
+                                file_name=f"analyse-ecarts-{base_name}.xlsx",
+                                mime=(
+                                    "application/vnd.openxmlformats-officedocument"
+                                    ".spreadsheetml.sheet"
+                                ),
+                                use_container_width=True,
+                                key=f"ws_xlsx_{sel_cdc}",
+                            )
+                        else:
+                            st.caption(f"Export Excel indisponible : {xlsx_err}")
+
 
 
 # ===========================================================================
