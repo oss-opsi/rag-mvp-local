@@ -36,6 +36,11 @@ MAX_PARALLEL_LLM = 5
 # Max chars of CDC sent to the extractor LLM (~60k tokens worst case, safely
 # under gpt-4o-mini's 128k window).
 MAX_CDC_CHARS = 180_000
+# Map-reduce extraction: chunk size (chars) and overlap between chunks.
+# 30k chars ≈ 7.5k tokens input; leaves ample room for the system prompt and
+# a rich JSON output (up to ~40 requirements per chunk).
+EXTRACT_CHUNK_CHARS = 30_000
+EXTRACT_CHUNK_OVERLAP = 2_000
 # Retrieval params per requirement.
 RETRIEVAL_K = 5
 
@@ -102,8 +107,13 @@ MÉTHODOLOGIE (à suivre dans l'ordre) :
 4. Capte aussi les exigences IMPLICITES : tableaux, notes de bas de page,
    contraintes listées en annexe, obligations réglementaires évoquées même
    sans "doit"/"devrait".
-5. Numérote chronologiquement (R01, R02, ...) en respectant l'ordre
-   d'apparition dans le document.
+5. Numérote provisoirement (R01, R02, ...) dans l'ordre d'apparition ;
+   la numérotation finale sera réalisée après fusion de tous les extraits.
+
+EXHAUSTIVITÉ : sur un CDC détaillé, il est normal d'extraire 30 à 60 exigences
+par extrait. N'auto-censure PAS la liste — chaque besoin testable doit être
+capté, même s'il paraît évident. Mieux vaut une exigence de trop (qui sera
+dédoublonnée ensuite) qu'une exigence manquante.
 
 RÈGLES D'EXTRACTION :
 
@@ -229,82 +239,241 @@ def _parse_json_block(raw: str) -> dict[str, Any]:
     return json.loads(raw)
 
 
+def _chunk_cdc_text(
+    text: str,
+    chunk_chars: int = EXTRACT_CHUNK_CHARS,
+    overlap: int = EXTRACT_CHUNK_OVERLAP,
+) -> list[str]:
+    """Split the CDC into overlapping chunks, trying to cut on paragraph
+    boundaries."""
+    text = text.strip()
+    if len(text) <= chunk_chars:
+        return [text]
+    chunks: list[str] = []
+    start = 0
+    n = len(text)
+    while start < n:
+        end = min(start + chunk_chars, n)
+        if end < n:
+            # Prefer to cut on a double newline, else single newline, else space.
+            window = text[max(start + chunk_chars - 2000, start):end]
+            cut_rel = window.rfind("\n\n")
+            if cut_rel < 0:
+                cut_rel = window.rfind("\n")
+            if cut_rel < 0:
+                cut_rel = window.rfind(" ")
+            if cut_rel > 0:
+                end = max(start + chunk_chars - 2000, start) + cut_rel
+        chunks.append(text[start:end].strip())
+        if end >= n:
+            break
+        start = max(end - overlap, start + 1)
+    return [c for c in chunks if c]
+
+
+def _normalise_requirement(
+    r: dict[str, Any], fallback_id: str
+) -> dict[str, Any]:
+    """Validate + clean fields for a single requirement dict."""
+    prio = str(r.get("priority", "must")).lower().strip()
+    if prio not in VALID_PRIORITIES:
+        prio = "must"
+    obl = str(r.get("obligation_level", "")).lower().strip()
+    if obl not in VALID_OBLIGATIONS:
+        obl = {
+            "must": "contractuelle",
+            "should": "recommandée",
+            "could": "optionnelle",
+            "wont": "optionnelle",
+        }[prio]
+    cat = str(r.get("category", "Autre")).strip()[:80]
+    if cat not in VALID_CATEGORIES:
+        low = cat.lower()
+        cat = next(
+            (c for c in VALID_CATEGORIES if c.lower() == low),
+            "Autre",
+        )
+    ac_raw = r.get("acceptance_criteria") or []
+    if not isinstance(ac_raw, list):
+        ac_raw = [str(ac_raw)]
+    acceptance_criteria = [
+        str(c).strip()[:400] for c in ac_raw if str(c).strip()
+    ][:8]
+    deps_raw = r.get("depends_on") or []
+    if not isinstance(deps_raw, list):
+        deps_raw = [str(deps_raw)]
+    depends_on = [str(d).strip()[:16] for d in deps_raw if str(d).strip()][:10]
+    return {
+        "id": str(r.get("id") or fallback_id).strip()[:16],
+        "title": str(r.get("title", "")).strip()[:200],
+        "description": str(r.get("description", "")).strip()[:3000],
+        "category": cat,
+        "priority": prio,
+        "obligation_level": obl,
+        "acceptance_criteria": acceptance_criteria,
+        "source_location": str(r.get("source_location", "non localisé")).strip()[:120],
+        "depends_on": depends_on,
+        "notes": str(r.get("notes", "")).strip()[:500],
+    }
+
+
+async def _extract_from_chunk(
+    chunk: str,
+    chunk_idx: int,
+    total_chunks: int,
+    llm: ChatOpenAI,
+    semaphore: asyncio.Semaphore,
+) -> list[dict[str, Any]]:
+    """Extract raw requirement dicts from one chunk (no normalisation yet)."""
+    async with semaphore:
+        header = (
+            f"Tu analyses l'extrait {chunk_idx + 1}/{total_chunks} d'un cahier "
+            f"des charges plus long. Extrais UNIQUEMENT les exigences présentes "
+            f"dans cet extrait. Ignore les phrases qui semblent tronquées au "
+            f"début ou à la fin (elles seront captées par un autre extrait).\n\n"
+            f"Extrait :\n\n"
+        )
+        prompt = [
+            {"role": "system", "content": _EXTRACT_SYSTEM},
+            {"role": "user", "content": header + chunk},
+        ]
+        try:
+            resp = await llm.ainvoke(prompt)
+            raw = resp.content if isinstance(resp.content, str) else str(resp.content)
+            parsed = _parse_json_block(raw)
+        except Exception as exc:
+            logger.warning(
+                "Extraction failed on chunk %d/%d: %s",
+                chunk_idx + 1, total_chunks, exc,
+            )
+            return []
+        reqs = parsed.get("requirements", [])
+        if not isinstance(reqs, list):
+            return []
+        logger.info(
+            "Chunk %d/%d produced %d raw requirements",
+            chunk_idx + 1, total_chunks, len(reqs),
+        )
+        return reqs
+
+
+def _normalise_title(s: str) -> str:
+    """Normalise a title for duplicate detection (lowercase, strip accents,
+    collapse whitespace)."""
+    import unicodedata
+    s = unicodedata.normalize("NFKD", s or "")
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    s = re.sub(r"[^a-zA-Z0-9\s]", " ", s).lower()
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def _merge_and_renumber(
+    raw_reqs_per_chunk: list[list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    """Flatten, deduplicate by normalised title, renumber R01…Rnn, remap
+    depends_on to the new IDs when possible."""
+    # First pass: flatten, normalise, keep old_id for dep remapping.
+    flat: list[dict[str, Any]] = []
+    seen: dict[str, int] = {}  # normalised title -> index in flat
+    for chunk_idx, chunk_reqs in enumerate(raw_reqs_per_chunk):
+        for i, r in enumerate(chunk_reqs, start=1):
+            old_id = str(r.get("id") or f"C{chunk_idx}R{i:02d}").strip()[:16]
+            fallback = f"R{len(flat) + 1:03d}"
+            norm = _normalise_requirement(r, fallback)
+            key = _normalise_title(norm["title"])
+            if not key:
+                continue
+            if key in seen:
+                # Keep the one with richer content (more acceptance criteria).
+                existing = flat[seen[key]]
+                if len(norm["acceptance_criteria"]) > len(
+                    existing["acceptance_criteria"]
+                ):
+                    norm["_old_id"] = old_id
+                    norm["_chunk"] = chunk_idx
+                    flat[seen[key]] = norm
+                # In either case, merge depends_on and notes
+                old_existing_id = existing.get("_old_id")
+                if old_existing_id and old_existing_id not in flat[seen[key]].get(
+                    "_old_ids", []
+                ):
+                    flat[seen[key]].setdefault("_old_ids", []).append(
+                        old_existing_id
+                    )
+                continue
+            norm["_old_id"] = old_id
+            norm["_chunk"] = chunk_idx
+            flat.append(norm)
+            seen[key] = len(flat) - 1
+
+    # Second pass: renumber R001…Rnnn and build old_id -> new_id map.
+    old_to_new: dict[str, str] = {}
+    for idx, r in enumerate(flat, start=1):
+        new_id = f"R{idx:03d}"
+        old = r.get("_old_id")
+        if old:
+            old_to_new[old] = new_id
+        for oi in r.get("_old_ids", []):
+            old_to_new[oi] = new_id
+        r["id"] = new_id
+
+    # Third pass: remap depends_on, drop internal fields.
+    cleaned: list[dict[str, Any]] = []
+    for r in flat:
+        new_deps: list[str] = []
+        for d in r.get("depends_on", []):
+            mapped = old_to_new.get(d)
+            if mapped and mapped != r["id"] and mapped not in new_deps:
+                new_deps.append(mapped)
+        r["depends_on"] = new_deps
+        r.pop("_old_id", None)
+        r.pop("_old_ids", None)
+        r.pop("_chunk", None)
+        cleaned.append(r)
+    return cleaned
+
+
 async def extract_requirements(
     cdc_text: str, openai_api_key: str
 ) -> list[dict[str, Any]]:
-    """Call LLM to extract a list of structured requirements from the CDC."""
+    """Extract requirements from the CDC using a parallel map-reduce pipeline.
+
+    1. Split the CDC into overlapping chunks (~30k chars each).
+    2. Call the extractor LLM on each chunk in parallel (semaphore-limited).
+    3. Merge, deduplicate by title, renumber R001…Rnnn, remap depends_on.
+    """
     llm = ChatOpenAI(
         model=LLM_MODEL,
         temperature=0.0,
         api_key=openai_api_key,
         model_kwargs={"response_format": {"type": "json_object"}},
     )
-    prompt = [
-        {"role": "system", "content": _EXTRACT_SYSTEM},
-        {"role": "user", "content": _EXTRACT_HUMAN.format(cdc_text=cdc_text)},
+    chunks = _chunk_cdc_text(cdc_text)
+    logger.info(
+        "Extraction map-reduce: %d chunks, %d chars total",
+        len(chunks), len(cdc_text),
+    )
+    semaphore = asyncio.Semaphore(MAX_PARALLEL_LLM)
+    tasks = [
+        _extract_from_chunk(c, i, len(chunks), llm, semaphore)
+        for i, c in enumerate(chunks)
     ]
-    resp = await llm.ainvoke(prompt)
-    raw = resp.content if isinstance(resp.content, str) else str(resp.content)
-    try:
-        parsed = _parse_json_block(raw)
-    except json.JSONDecodeError as exc:
-        logger.error("Failed to parse requirements JSON: %s\nRaw: %s", exc, raw[:500])
-        raise ValueError(
-            "Le LLM n'a pas renvoyé un JSON valide pour les exigences."
-        ) from exc
-    reqs = parsed.get("requirements", [])
-    # Normalise IDs + trim fields + validate enums
-    out: list[dict[str, Any]] = []
-    for i, r in enumerate(reqs, start=1):
-        # Priority: default must if unknown
-        prio = str(r.get("priority", "must")).lower().strip()
-        if prio not in VALID_PRIORITIES:
-            prio = "must"
-        # Obligation: derive from priority if missing or invalid
-        obl = str(r.get("obligation_level", "")).lower().strip()
-        if obl not in VALID_OBLIGATIONS:
-            obl = {
-                "must": "contractuelle",
-                "should": "recommandée",
-                "could": "optionnelle",
-                "wont": "optionnelle",
-            }[prio]
-        # Category: trim and fall back to "Autre"
-        cat = str(r.get("category", "Autre")).strip()[:80]
-        if cat not in VALID_CATEGORIES:
-            # Try a loose match (accents / case)
-            low = cat.lower()
-            cat = next(
-                (c for c in VALID_CATEGORIES if c.lower() == low),
-                "Autre",
-            )
-        # Acceptance criteria: list of short strings, max 8
-        ac_raw = r.get("acceptance_criteria") or []
-        if not isinstance(ac_raw, list):
-            ac_raw = [str(ac_raw)]
-        acceptance_criteria = [
-            str(c).strip()[:400] for c in ac_raw if str(c).strip()
-        ][:8]
-        # Dependencies
-        deps_raw = r.get("depends_on") or []
-        if not isinstance(deps_raw, list):
-            deps_raw = [str(deps_raw)]
-        depends_on = [str(d).strip()[:16] for d in deps_raw if str(d).strip()][:10]
-        out.append(
-            {
-                "id": str(r.get("id") or f"R{i:02d}").strip()[:16],
-                "title": str(r.get("title", "")).strip()[:200],
-                "description": str(r.get("description", "")).strip()[:3000],
-                "category": cat,
-                "priority": prio,
-                "obligation_level": obl,
-                "acceptance_criteria": acceptance_criteria,
-                "source_location": str(r.get("source_location", "non localisé")).strip()[:120],
-                "depends_on": depends_on,
-                "notes": str(r.get("notes", "")).strip()[:500],
-            }
-        )
-    return out
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    raw_per_chunk: list[list[dict[str, Any]]] = []
+    for idx, res in enumerate(results):
+        if isinstance(res, Exception):
+            logger.warning("Chunk %d raised: %s", idx + 1, res)
+            raw_per_chunk.append([])
+        else:
+            raw_per_chunk.append(res)
+    merged = _merge_and_renumber(raw_per_chunk)
+    total_raw = sum(len(r) for r in raw_per_chunk)
+    logger.info(
+        "Extraction done: %d raw → %d after dedup",
+        total_raw, len(merged),
+    )
+    return merged
 
 
 # ---------------------------------------------------------------------------
@@ -503,11 +672,14 @@ async def run_gap_analysis(
     if not cdc_text.strip():
         raise ValueError("Le cahier des charges est vide ou illisible.")
 
-    # Step 2 — extract requirements
+    # Step 2 — extract requirements (map-reduce on chunks)
+    cdc_chunks_count = len(_chunk_cdc_text(cdc_text))
     requirements = await extract_requirements(cdc_text, openai_api_key)
     if not requirements:
         return {
             "filename": cdc_filename,
+            "cdc_chars": len(cdc_text),
+            "chunks_processed": cdc_chunks_count,
             "summary": {
                 "total": 0, "covered": 0, "partial": 0,
                 "missing": 0, "ambiguous": 0, "coverage_percent": 0.0,
@@ -556,6 +728,8 @@ async def run_gap_analysis(
 
     return {
         "filename": cdc_filename,
+        "cdc_chars": len(cdc_text),
+        "chunks_processed": cdc_chunks_count,
         "summary": {
             "total": total,
             **counts,

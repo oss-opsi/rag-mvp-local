@@ -1456,6 +1456,13 @@ with tab_gap:
         m5.metric("Taux couverture", f"{coverage}%")
         if ambiguous:
             st.caption(f"❓ {ambiguous} exigence(s) classée(s) comme ambiguë(s).")
+        chunks_used = report.get("chunks_processed")
+        cdc_chars = report.get("cdc_chars")
+        if chunks_used and cdc_chars:
+            st.caption(
+                f"📄 CDC de {cdc_chars:,} caractères analysé en {chunks_used} "
+                f"extrait(s) parallèles (map-reduce).".replace(",", " ")
+            )
 
         st.markdown("### 📋 Exigences analysées")
 
