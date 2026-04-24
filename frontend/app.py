@@ -376,23 +376,37 @@ st.markdown(
     header[data-testid="stHeader"] { display: none !important; }
     div[data-testid="stToolbar"] { display: none !important; }
 
-    /* Tabs — sticky at the top of the viewport.
-       The scroll container is <section data-testid="stMain">. We make both
-       stTabs and its first child sticky so the tab-list stays pinned. */
-    div[data-testid="stTabs"] {
-        position: sticky;
-        top: 0;
-        z-index: 9999;
-        background: var(--rag-bg);
+    /* Force sidebar to stay visible at all breakpoints (Streamlit collapses it
+       automatically on small viewports, which made users think it disappeared). */
+    section[data-testid="stSidebar"] {
+        transform: translateX(0) !important;
+        margin-left: 0 !important;
+        min-width: 260px !important;
+        visibility: visible !important;
     }
+    section[data-testid="stSidebar"][aria-expanded="false"] {
+        transform: translateX(0) !important;
+        margin-left: 0 !important;
+    }
+
+    /* Tabs — sticky at the top of the scroll container.
+       The scroll container is <section data-testid="stMain">. Only the tab-list
+       wrapper (first child of stTabs) must be sticky — stTabs itself contains
+       the tab content below and must stay in normal flow. */
     div[data-testid="stTabs"] > div:first-child {
-        position: sticky;
-        top: 0;
-        z-index: 9999;
+        position: sticky !important;
+        top: 0 !important;
+        z-index: 9999 !important;
         background: var(--rag-bg);
         padding-top: 8px;
         padding-bottom: 8px;
         margin-top: -8px;
+    }
+    /* Ensure all ancestors up to stMain don't clip the sticky element. */
+    div[data-testid="stMainBlockContainer"],
+    div[data-testid="stVerticalBlock"],
+    div[data-testid="stTabs"] {
+        overflow: visible !important;
     }
     div[data-baseweb="tab-list"] {
         gap: 6px;
