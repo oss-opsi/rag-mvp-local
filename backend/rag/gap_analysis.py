@@ -30,13 +30,25 @@ from langchain_openai import ChatOpenAI
 
 from .chain import _format_context
 from .config import BM25_DIR, DATA_DIR, LLM_MODEL, LLM_TEMPERATURE, QDRANT_URL
-from .ingest import _load_documents
+from .ingest import _load_documents, get_embeddings
 from .retriever import get_retriever_for_user
+
+# Deterministic seed passed to OpenAI for best-effort reproducibility
+# (same seed + same prompt + same model = same output, most of the time).
+OPENAI_SEED = 42
+
+# Semantic deduplication threshold (cosine similarity on BGE-small embeddings).
+# Calibrated empirically on French paie/RH phrasings:
+#   - "Génération DSN mensuelle" vs "Production DSN mensuelle" ≈ 0.90 (merge)
+#   - "Gestion des primes mensuelles" vs "Primes et majorations" ≈ 0.91 (merge)
+#   - "Génération DSN" vs "SLA disponibilité" ≈ 0.68 (keep separate)
+#   - "Indemnités de départ" vs "Solde de tout compte" ≈ 0.80 (keep separate)
+DEDUP_SIMILARITY_THRESHOLD = 0.88
 
 logger = logging.getLogger(__name__)
 
 # Bump this when prompts or pipeline change to invalidate old cache entries.
-PIPELINE_VERSION = "v3.5.3"
+PIPELINE_VERSION = "v3.5.4"
 
 # Persistent cache directory on disk.
 GAP_CACHE_DIR = os.path.join(DATA_DIR, "gap_cache")
@@ -380,59 +392,155 @@ def _normalise_title(s: str) -> str:
     return s
 
 
+def _cosine_sim(a: list[float], b: list[float]) -> float:
+    """Cosine similarity between two vectors (plain Python, no numpy)."""
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b))
+    na = sum(x * x for x in a) ** 0.5
+    nb = sum(y * y for y in b) ** 0.5
+    if na == 0 or nb == 0:
+        return 0.0
+    return dot / (na * nb)
+
+
+def _embed_titles(texts: list[str]) -> list[list[float]] | None:
+    """Embed a list of strings using the shared BGE model.
+
+    Returns None if embeddings cannot be computed (model not loaded,
+    empty input, runtime error). Callers should fall back to string
+    matching in that case.
+    """
+    non_empty = [(i, t) for i, t in enumerate(texts) if t and t.strip()]
+    if not non_empty:
+        return None
+    try:
+        emb = get_embeddings()
+        vectors = emb.embed_documents([t for _, t in non_empty])
+    except Exception as exc:
+        logger.warning("Semantic dedup embeddings failed: %s", exc)
+        return None
+    # Re-align back to input order (fill missing slots with empty list).
+    out: list[list[float]] = [[] for _ in texts]
+    for (i, _), v in zip(non_empty, vectors):
+        out[i] = v
+    return out
+
+
 def _merge_and_renumber(
     raw_reqs_per_chunk: list[list[dict[str, Any]]],
 ) -> list[dict[str, Any]]:
-    """Flatten, deduplicate by normalised title, renumber R01…Rnn, remap
-    depends_on to the new IDs when possible."""
-    # First pass: flatten, normalise, keep old_id for dep remapping.
+    """Flatten, deduplicate (semantic + string fallback), renumber R001…Rnnn,
+    remap depends_on to the new IDs when possible."""
+    # First pass: flatten + normalise, keep provenance info.
     flat: list[dict[str, Any]] = []
-    seen: dict[str, int] = {}  # normalised title -> index in flat
     for chunk_idx, chunk_reqs in enumerate(raw_reqs_per_chunk):
         for i, r in enumerate(chunk_reqs, start=1):
             old_id = str(r.get("id") or f"C{chunk_idx}R{i:02d}").strip()[:16]
             fallback = f"R{len(flat) + 1:03d}"
             norm = _normalise_requirement(r, fallback)
-            key = _normalise_title(norm["title"])
-            if not key:
-                continue
-            if key in seen:
-                # Keep the one with richer content (more acceptance criteria).
-                existing = flat[seen[key]]
-                if len(norm["acceptance_criteria"]) > len(
-                    existing["acceptance_criteria"]
-                ):
-                    norm["_old_id"] = old_id
-                    norm["_chunk"] = chunk_idx
-                    flat[seen[key]] = norm
-                # In either case, merge depends_on and notes
-                old_existing_id = existing.get("_old_id")
-                if old_existing_id and old_existing_id not in flat[seen[key]].get(
-                    "_old_ids", []
-                ):
-                    flat[seen[key]].setdefault("_old_ids", []).append(
-                        old_existing_id
-                    )
+            if not norm["title"].strip():
                 continue
             norm["_old_id"] = old_id
             norm["_chunk"] = chunk_idx
             flat.append(norm)
-            seen[key] = len(flat) - 1
 
-    # Second pass: renumber R001…Rnnn and build old_id -> new_id map.
+    if not flat:
+        return []
+
+    # Compute embeddings for semantic dedup. "Title + description" carries
+    # more signal than title alone for matching variants like
+    # "Génération DSN" vs "Produire la DSN mensuelle".
+    embed_inputs = [
+        f"{r['title']}. {r['description'][:400]}".strip() for r in flat
+    ]
+    vectors = _embed_titles(embed_inputs)
+
+    # Build groups: index i belongs to group g[i]. Two items are in the
+    # same group iff cosine(v_i, v_j) >= threshold OR their normalised
+    # titles are equal (belt-and-suspenders).
+    n = len(flat)
+    group: list[int] = list(range(n))
+
+    def _union(a: int, b: int) -> None:
+        ra, rb = group[a], group[b]
+        if ra == rb:
+            return
+        # Attach the larger-indexed root to the smaller-indexed one.
+        if ra < rb:
+            for k in range(n):
+                if group[k] == rb:
+                    group[k] = ra
+        else:
+            for k in range(n):
+                if group[k] == ra:
+                    group[k] = rb
+
+    # String-based fallback pass (always runs, cheap).
+    norm_titles = [_normalise_title(r["title"]) for r in flat]
+    for i in range(n):
+        for j in range(i + 1, n):
+            if norm_titles[i] and norm_titles[i] == norm_titles[j]:
+                _union(i, j)
+
+    # Semantic pass (if embeddings available).
+    if vectors is not None:
+        for i in range(n):
+            if not vectors[i]:
+                continue
+            for j in range(i + 1, n):
+                if not vectors[j]:
+                    continue
+                if group[i] == group[j]:
+                    continue
+                if _cosine_sim(vectors[i], vectors[j]) >= DEDUP_SIMILARITY_THRESHOLD:
+                    _union(i, j)
+
+    # Choose a representative per group: the one with the richest content
+    # (max number of acceptance criteria, then longest description).
+    by_group: dict[int, list[int]] = {}
+    for i in range(n):
+        by_group.setdefault(group[i], []).append(i)
+
+    # Preserve first-occurrence order across groups.
+    seen_groups: list[int] = []
+    first_of_group: dict[int, int] = {}
+    for i in range(n):
+        g = group[i]
+        if g not in first_of_group:
+            first_of_group[g] = i
+            seen_groups.append(g)
+
+    merged: list[dict[str, Any]] = []
+    old_id_groups: list[list[str]] = []
+    for g in seen_groups:
+        members_idx = by_group[g]
+        # Pick richest representative.
+        rep_i = max(
+            members_idx,
+            key=lambda k: (
+                len(flat[k]["acceptance_criteria"]),
+                len(flat[k]["description"]),
+            ),
+        )
+        rep = dict(flat[rep_i])  # shallow copy
+        # Collect old IDs from all members for dep remapping.
+        old_ids = [flat[k].get("_old_id", "") for k in members_idx]
+        old_ids = [o for o in old_ids if o]
+        old_id_groups.append(old_ids)
+        merged.append(rep)
+
+    # Renumber R001…Rnnn + build old_id -> new_id map.
     old_to_new: dict[str, str] = {}
-    for idx, r in enumerate(flat, start=1):
+    for idx, (r, old_ids) in enumerate(zip(merged, old_id_groups), start=1):
         new_id = f"R{idx:03d}"
-        old = r.get("_old_id")
-        if old:
-            old_to_new[old] = new_id
-        for oi in r.get("_old_ids", []):
-            old_to_new[oi] = new_id
         r["id"] = new_id
+        for oid in old_ids:
+            old_to_new[oid] = new_id
 
-    # Third pass: remap depends_on, drop internal fields.
+    # Remap depends_on, drop internal fields.
     cleaned: list[dict[str, Any]] = []
-    for r in flat:
+    for r in merged:
         new_deps: list[str] = []
         for d in r.get("depends_on", []):
             mapped = old_to_new.get(d)
@@ -440,9 +548,19 @@ def _merge_and_renumber(
                 new_deps.append(mapped)
         r["depends_on"] = new_deps
         r.pop("_old_id", None)
-        r.pop("_old_ids", None)
         r.pop("_chunk", None)
         cleaned.append(r)
+
+    if vectors is not None:
+        logger.info(
+            "Semantic dedup: %d raw → %d unique (threshold=%.2f)",
+            n, len(cleaned), DEDUP_SIMILARITY_THRESHOLD,
+        )
+    else:
+        logger.info(
+            "String-only dedup (no embeddings): %d raw → %d unique",
+            n, len(cleaned),
+        )
     return cleaned
 
 
@@ -459,7 +577,10 @@ async def extract_requirements(
         model=LLM_MODEL,
         temperature=0.0,
         api_key=openai_api_key,
-        model_kwargs={"response_format": {"type": "json_object"}},
+        model_kwargs={
+            "response_format": {"type": "json_object"},
+            "seed": OPENAI_SEED,
+        },
     )
     chunks = _chunk_cdc_text(cdc_text)
     logger.info(
@@ -795,7 +916,10 @@ async def run_gap_analysis(
         model=LLM_MODEL,
         temperature=LLM_TEMPERATURE,
         api_key=openai_api_key,
-        model_kwargs={"response_format": {"type": "json_object"}},
+        model_kwargs={
+            "response_format": {"type": "json_object"},
+            "seed": OPENAI_SEED,
+        },
     )
     semaphore = asyncio.Semaphore(MAX_PARALLEL_LLM)
     tasks = [
