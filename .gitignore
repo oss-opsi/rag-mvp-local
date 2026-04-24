@@ -59,3 +59,10 @@ temp/
 data/*.db
 data/*.db-shm
 data/*.db-wal
+
+# TS build cache
+tsconfig.tsbuildinfo
+frontend-next/tsconfig.tsbuildinfo
+frontend-next/node_modules/
+frontend-next/.next/
+
