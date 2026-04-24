@@ -8,7 +8,7 @@ async function loadUser(): Promise<User | null> {
     const res = await fetchBackend("/auth/me");
     if (!res.ok) return null;
     const data = (await res.json()) as User;
-    if (!data || typeof data.user_id !== "number") return null;
+    if (!data || typeof data.user_id !== "string") return null;
     return data;
   } catch {
     return null;

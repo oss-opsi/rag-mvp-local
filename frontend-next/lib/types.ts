@@ -1,4 +1,4 @@
-export type User = { user_id: number; name: string };
+export type User = { user_id: string; name: string };
 
 export type ApiKeyInfo = { has_key: boolean; masked?: string; reason?: string };
 
@@ -15,7 +15,7 @@ export type DocumentInfo = {
 };
 
 export type CollectionInfo = {
-  user_id: number;
+  user_id: string;
   documents: DocumentInfo[];
   total_documents: number;
   total_chunks: number;
