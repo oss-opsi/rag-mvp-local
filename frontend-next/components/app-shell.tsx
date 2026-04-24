@@ -2,10 +2,7 @@
 
 import * as React from "react";
 import { LeftRail } from "@/components/left-rail";
-import {
-  ContextPanelProvider,
-  ContextPanelSlot,
-} from "@/components/context-panel";
+import { ContextPanelProvider } from "@/components/context-panel";
 import { AppShellProvider } from "@/components/app-shell-context";
 import { Toaster } from "@/components/ui/toaster";
 import type { User } from "@/lib/types";
@@ -19,16 +16,15 @@ export function AppShell({
 }) {
   return (
     <AppShellProvider initialUser={user}>
-      <ContextPanelProvider>
-        <div className="flex h-dvh w-full overflow-hidden bg-background text-foreground">
-          <LeftRail />
-          <ContextPanelSlot />
+      <div className="flex h-dvh w-full overflow-hidden bg-background text-foreground">
+        <LeftRail />
+        <ContextPanelProvider>
           <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
             {children}
           </main>
-        </div>
-        <Toaster />
-      </ContextPanelProvider>
+        </ContextPanelProvider>
+      </div>
+      <Toaster />
     </AppShellProvider>
   );
 }

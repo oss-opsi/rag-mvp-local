@@ -25,7 +25,7 @@ import {
 } from "@/components/ui/dialog";
 import { MessageBubble } from "@/components/chat/message-bubble";
 import { Composer } from "@/components/chat/composer";
-import { useProvideContextPanel } from "@/components/context-panel";
+import { ContextPanel } from "@/components/context-panel";
 import { useToast } from "@/components/ui/use-toast";
 import { api } from "@/lib/api-client";
 import { cn, formatDateTime } from "@/lib/utils";
@@ -276,63 +276,61 @@ export default function ChatPage() {
     }
   };
 
-  // Context panel : conversations list
-  useProvideContextPanel(
-    <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between border-b border-border px-4 py-3">
-        <h2 className="text-sm font-semibold">Conversations</h2>
-        <Button
-          size="icon"
-          variant="ghost"
-          aria-label="Nouvelle conversation"
-          onClick={() => void handleNewConversation()}
-        >
-          <Plus className="h-4 w-4" />
-        </Button>
-      </div>
-      <ScrollArea className="flex-1">
-        {loadingList ? (
-          <div className="p-4 text-xs text-muted-foreground">Chargement...</div>
-        ) : conversations.length === 0 ? (
-          <div className="p-4 text-center text-xs text-muted-foreground">
-            Aucune conversation.
-          </div>
-        ) : (
-          <ul className="py-1">
-            {conversations.map((c) => {
-              const active = c.id === selectedId;
-              return (
-                <li key={c.id}>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedId(c.id)}
-                    className={cn(
-                      "flex w-full flex-col gap-0.5 border-l-2 px-3 py-2 text-left text-sm transition-colors",
-                      active
-                        ? "border-l-accent bg-muted"
-                        : "border-l-transparent hover:bg-muted/50"
-                    )}
-                  >
-                    <span className="truncate font-medium">
-                      {c.title || "Sans titre"}
-                    </span>
-                    <span className="text-[10px] text-muted-foreground">
-                      {formatDateTime(c.updated_at)} · {c.message_count} msg
-                    </span>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </ScrollArea>
-    </div>
-  );
-
   const messagesToRender: ChatMessage[] = detail?.messages ?? [];
 
   return (
     <div className="flex h-full flex-col">
+      <ContextPanel>
+        <div className="flex h-full flex-col">
+          <div className="flex items-center justify-between border-b border-border px-4 py-3">
+            <h2 className="text-sm font-semibold">Conversations</h2>
+            <Button
+              size="icon"
+              variant="ghost"
+              aria-label="Nouvelle conversation"
+              onClick={() => void handleNewConversation()}
+            >
+              <Plus className="h-4 w-4" />
+            </Button>
+          </div>
+          <ScrollArea className="flex-1">
+            {loadingList ? (
+              <div className="p-4 text-xs text-muted-foreground">Chargement...</div>
+            ) : conversations.length === 0 ? (
+              <div className="p-4 text-center text-xs text-muted-foreground">
+                Aucune conversation.
+              </div>
+            ) : (
+              <ul className="py-1">
+                {conversations.map((c) => {
+                  const active = c.id === selectedId;
+                  return (
+                    <li key={c.id}>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedId(c.id)}
+                        className={cn(
+                          "flex w-full flex-col gap-0.5 border-l-2 px-3 py-2 text-left text-sm transition-colors",
+                          active
+                            ? "border-l-accent bg-muted"
+                            : "border-l-transparent hover:bg-muted/50"
+                        )}
+                      >
+                        <span className="truncate font-medium">
+                          {c.title || "Sans titre"}
+                        </span>
+                        <span className="text-[10px] text-muted-foreground">
+                          {formatDateTime(c.updated_at)} · {c.message_count} msg
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </ScrollArea>
+        </div>
+      </ContextPanel>
       <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-6">
         <h1 className="min-w-0 truncate text-base font-semibold">
           {detail?.title || (selectedId ? "Conversation" : "Nouvelle conversation")}

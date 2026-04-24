@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { PipelineBadges } from "@/components/pipeline-badges";
 import { UploadDropzone } from "@/components/upload-dropzone";
-import { useProvideContextPanel } from "@/components/context-panel";
+import { ContextPanel } from "@/components/context-panel";
 import { useToast } from "@/components/ui/use-toast";
 import { api } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
@@ -82,62 +82,61 @@ export default function DocumentsPage() {
     }
   };
 
-  useProvideContextPanel(
-    <div className="flex h-full flex-col">
-      <div className="border-b border-border px-4 py-3">
-        <h2 className="text-sm font-semibold">Collection</h2>
-      </div>
-      <div className="flex flex-1 flex-col gap-4 p-4">
-        <div className="grid grid-cols-2 gap-2">
-          <div className="rounded-md border border-border p-3">
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-              Documents
-            </div>
-            <div className="mt-1 text-xl font-semibold tabular-nums">
-              {info?.total_documents ?? "—"}
-            </div>
-          </div>
-          <div className="rounded-md border border-border p-3">
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-              Chunks
-            </div>
-            <div className="mt-1 text-xl font-semibold tabular-nums">
-              {info?.total_chunks ?? "—"}
-            </div>
-          </div>
-        </div>
-        <AlertDialog>
-          <AlertDialogTrigger asChild>
-            <Button variant="destructive" className="w-full" disabled={loading}>
-              <Trash2 className="mr-2 h-4 w-4" />
-              Tout réindexer
-            </Button>
-          </AlertDialogTrigger>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Réinitialiser la collection ?</AlertDialogTitle>
-              <AlertDialogDescription>
-                Tous les documents et chunks seront supprimés définitivement.
-                Vous devrez ré-importer vos fichiers.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Annuler</AlertDialogCancel>
-              <AlertDialogAction
-                onClick={() => void handleReset()}
-                className="bg-danger text-danger-foreground hover:bg-danger/90"
-              >
-                Confirmer
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-      </div>
-    </div>
-  );
-
   return (
     <div className="flex h-full flex-col">
+      <ContextPanel>
+        <div className="flex h-full flex-col">
+          <div className="border-b border-border px-4 py-3">
+            <h2 className="text-sm font-semibold">Collection</h2>
+          </div>
+          <div className="flex flex-1 flex-col gap-4 p-4">
+            <div className="grid grid-cols-2 gap-2">
+              <div className="rounded-md border border-border p-3">
+                <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Documents
+                </div>
+                <div className="mt-1 text-xl font-semibold tabular-nums">
+                  {info?.total_documents ?? "—"}
+                </div>
+              </div>
+              <div className="rounded-md border border-border p-3">
+                <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Chunks
+                </div>
+                <div className="mt-1 text-xl font-semibold tabular-nums">
+                  {info?.total_chunks ?? "—"}
+                </div>
+              </div>
+            </div>
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button variant="destructive" className="w-full" disabled={loading}>
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Tout réindexer
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Réinitialiser la collection ?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Tous les documents et chunks seront supprimés définitivement.
+                    Vous devrez ré-importer vos fichiers.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Annuler</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={() => void handleReset()}
+                    className="bg-danger text-danger-foreground hover:bg-danger/90"
+                  >
+                    Confirmer
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          </div>
+        </div>
+      </ContextPanel>
       <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-6">
         <h1 className="text-base font-semibold">Documents indexés</h1>
         <label

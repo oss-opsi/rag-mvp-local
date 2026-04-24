@@ -19,7 +19,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { PipelineBadges } from "@/components/pipeline-badges";
-import { useProvideContextPanel } from "@/components/context-panel";
+import { ContextPanel } from "@/components/context-panel";
 import { useAppShell } from "@/components/app-shell-context";
 import { useToast } from "@/components/ui/use-toast";
 import { api } from "@/lib/api-client";
@@ -91,36 +91,35 @@ export default function SettingsPage() {
     router.refresh();
   };
 
-  useProvideContextPanel(
-    <div className="flex h-full flex-col">
-      <div className="border-b border-border px-4 py-3">
-        <h2 className="text-sm font-semibold">Paramètres</h2>
-      </div>
-      <nav className="flex flex-col py-2 text-sm">
-        <a
-          href="#compte"
-          className="px-4 py-2 text-muted-foreground hover:bg-muted/50 hover:text-foreground"
-        >
-          Compte
-        </a>
-        <a
-          href="#api-key"
-          className="px-4 py-2 text-muted-foreground hover:bg-muted/50 hover:text-foreground"
-        >
-          Clé API OpenAI
-        </a>
-        <a
-          href="#pipeline"
-          className="px-4 py-2 text-muted-foreground hover:bg-muted/50 hover:text-foreground"
-        >
-          Pipeline
-        </a>
-      </nav>
-    </div>
-  );
-
   return (
     <div className="flex h-full flex-col">
+      <ContextPanel>
+        <div className="flex h-full flex-col">
+          <div className="border-b border-border px-4 py-3">
+            <h2 className="text-sm font-semibold">Paramètres</h2>
+          </div>
+          <nav className="flex flex-col py-2 text-sm">
+            <a
+              href="#compte"
+              className="px-4 py-2 text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+            >
+              Compte
+            </a>
+            <a
+              href="#api-key"
+              className="px-4 py-2 text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+            >
+              Clé API OpenAI
+            </a>
+            <a
+              href="#pipeline"
+              className="px-4 py-2 text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+            >
+              Pipeline
+            </a>
+          </nav>
+        </div>
+      </ContextPanel>
       <header className="flex h-14 shrink-0 items-center border-b border-border px-6">
         <h1 className="text-base font-semibold">Paramètres</h1>
       </header>

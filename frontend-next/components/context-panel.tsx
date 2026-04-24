@@ -1,57 +1,48 @@
 "use client";
 
 import * as React from "react";
+import { createPortal } from "react-dom";
 
-type ContextPanelContextValue = {
-  node: React.ReactNode | null;
-  setNode: (n: React.ReactNode | null) => void;
-};
+type Ctx = { target: HTMLElement | null };
+const ContextPanelCtx = React.createContext<Ctx>({ target: null });
 
-const ContextPanelContext = React.createContext<ContextPanelContextValue | null>(
-  null
-);
-
+/**
+ * Provider posé dans AppShell. Fournit un <aside> de 280px à droite du rail,
+ * et expose son élément DOM via contexte pour que les pages puissent y
+ * téléporter leur contenu contextuel.
+ */
 export function ContextPanelProvider({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const [node, setNode] = React.useState<React.ReactNode | null>(null);
-  const value = React.useMemo(() => ({ node, setNode }), [node]);
-  return (
-    <ContextPanelContext.Provider value={value}>
-      {children}
-    </ContextPanelContext.Provider>
-  );
-}
+  const slotRef = React.useRef<HTMLElement | null>(null);
+  const [target, setTarget] = React.useState<HTMLElement | null>(null);
 
-export function ContextPanelSlot({ children }: { children?: React.ReactNode }) {
-  const ctx = React.useContext(ContextPanelContext);
   return (
-    <aside className="flex h-full w-[280px] shrink-0 flex-col border-r border-border bg-background">
-      {ctx?.node ?? children}
-    </aside>
+    <ContextPanelCtx.Provider value={{ target }}>
+      <div className="flex h-full w-full">
+        <aside
+          ref={(el) => {
+            slotRef.current = el;
+            // setState seulement si changement réel
+            if (el !== target) setTarget(el);
+          }}
+          className="flex h-full w-[280px] shrink-0 flex-col border-r border-border bg-background"
+        />
+        <div className="flex h-full min-w-0 flex-1 flex-col">{children}</div>
+      </div>
+    </ContextPanelCtx.Provider>
   );
-}
-
-export function useContextPanel(): ContextPanelContextValue {
-  const ctx = React.useContext(ContextPanelContext);
-  if (!ctx)
-    throw new Error(
-      "useContextPanel doit être utilisé dans ContextPanelProvider"
-    );
-  return ctx;
 }
 
 /**
- * Hook helper : publie un noeud React dans le panneau contexte pendant la
- * durée de vie du composant.
+ * Composant utilisé par les pages : enveloppe son enfant et le téléporte
+ * dans le panneau contexte. Pas de boucle infinie : React rend simplement le
+ * portail, les re-renders suivent la logique React normale.
  */
-export function useProvideContextPanel(node: React.ReactNode): void {
-  const ctx = useContextPanel();
-  React.useEffect(() => {
-    ctx.setNode(node);
-    return () => ctx.setNode(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [node]);
+export function ContextPanel({ children }: { children: React.ReactNode }) {
+  const { target } = React.useContext(ContextPanelCtx);
+  if (!target) return null;
+  return createPortal(children, target);
 }

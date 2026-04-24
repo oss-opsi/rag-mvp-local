@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { UploadDropzone } from "@/components/upload-dropzone";
-import { useProvideContextPanel } from "@/components/context-panel";
+import { ContextPanel } from "@/components/context-panel";
 import { useToast } from "@/components/ui/use-toast";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api-client";
@@ -246,52 +246,62 @@ export default function AnalysePage() {
   };
 
   // Context panel: clients list
-  useProvideContextPanel(
-    <ClientsSidebar
-      clients={clients}
-      selectedId={selectedClientId}
-      onSelect={setSelectedClientId}
-      onCreate={handleCreateClient}
-      onDelete={handleDeleteClient}
-      cdcCounts={cdcCounts}
-    />
+  const contextPanelContent = (
+    <ContextPanel>
+      <ClientsSidebar
+        clients={clients}
+        selectedId={selectedClientId}
+        onSelect={setSelectedClientId}
+        onCreate={handleCreateClient}
+        onDelete={handleDeleteClient}
+        cdcCounts={cdcCounts}
+      />
+    </ContextPanel>
   );
 
   // Render work area
   if (loadingClients) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-        Chargement...
-      </div>
+      <>
+        {contextPanelContent}
+        <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+          Chargement...
+        </div>
+      </>
     );
   }
 
   if (selectedClientId === null) {
     return (
-      <div className="flex h-full flex-col">
-        <header className="flex h-14 shrink-0 items-center border-b border-border px-6">
-          <h1 className="text-base font-semibold">Analyse d'écarts</h1>
-        </header>
-        <div className="flex flex-1 items-center justify-center p-10">
-          <div className="max-w-md text-center">
-            <h2 className="mb-2 text-lg font-semibold">
-              Sélectionnez un client
-            </h2>
-            <p className="text-sm text-muted-foreground">
-              Choisissez un client dans le panneau de gauche ou créez-en un
-              nouveau pour commencer à analyser des cahiers des charges.
-            </p>
+      <>
+        {contextPanelContent}
+        <div className="flex h-full flex-col">
+          <header className="flex h-14 shrink-0 items-center border-b border-border px-6">
+            <h1 className="text-base font-semibold">Analyse d'écarts</h1>
+          </header>
+          <div className="flex flex-1 items-center justify-center p-10">
+            <div className="max-w-md text-center">
+              <h2 className="mb-2 text-lg font-semibold">
+                Sélectionnez un client
+              </h2>
+              <p className="text-sm text-muted-foreground">
+                Choisissez un client dans le panneau de gauche ou créez-en un
+                nouveau pour commencer à analyser des cahiers des charges.
+              </p>
+            </div>
           </div>
         </div>
-      </div>
+      </>
     );
   }
 
   // Client selected but no CDC selected: show list of CDCs or upload zone
   if (selectedCdcId === null) {
     return (
-      <div className="flex h-full flex-col">
+      <>
+        {contextPanelContent}
+        <div className="flex h-full flex-col">
         <header className="flex h-14 shrink-0 items-center justify-between border-b border-border px-6">
           <h1 className="text-base font-semibold">
             {clients.find((c) => c.id === selectedClientId)?.name ||
@@ -383,73 +393,86 @@ export default function AnalysePage() {
             </div>
           )}
         </div>
-      </div>
+        </div>
+      </>
     );
   }
 
   // CDC selected
   if (loadingDetail) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-        Chargement du CDC...
-      </div>
+      <>
+        {contextPanelContent}
+        <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+          Chargement du CDC...
+        </div>
+      </>
     );
   }
 
   if (!cdcDetail) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        CDC introuvable.
-      </div>
+      <>
+        {contextPanelContent}
+        <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+          CDC introuvable.
+        </div>
+      </>
     );
   }
 
   if (!report) {
     // No analysis yet — show "launch" button
     return (
-      <div className="flex h-full flex-col">
-        <header className="flex h-14 shrink-0 items-center justify-between border-b border-border px-6">
-          <h1 className="truncate text-base font-semibold">
-            {cdcDetail.cdc.filename}
-          </h1>
-          <StatusPill status={cdcDetail.status} />
-        </header>
-        <div className="flex flex-1 items-center justify-center p-10">
-          <div className="max-w-md text-center">
-            <h2 className="mb-2 text-lg font-semibold">Analyse non réalisée</h2>
-            <p className="mb-6 text-sm text-muted-foreground">
-              Lancez l'analyse automatique pour extraire les exigences et
-              évaluer leur couverture face au corpus indexé.
-            </p>
-            <Button
-              size="lg"
-              onClick={() => void handleAnalyse(false)}
-              disabled={analysing}
-            >
-              {analysing ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <Play className="mr-2 h-4 w-4" />
-              )}
-              {analysing ? "Analyse en cours..." : "Lancer l'analyse"}
-            </Button>
+      <>
+        {contextPanelContent}
+        <div className="flex h-full flex-col">
+          <header className="flex h-14 shrink-0 items-center justify-between border-b border-border px-6">
+            <h1 className="truncate text-base font-semibold">
+              {cdcDetail.cdc.filename}
+            </h1>
+            <StatusPill status={cdcDetail.status} />
+          </header>
+          <div className="flex flex-1 items-center justify-center p-10">
+            <div className="max-w-md text-center">
+              <h2 className="mb-2 text-lg font-semibold">Analyse non réalisée</h2>
+              <p className="mb-6 text-sm text-muted-foreground">
+                Lancez l'analyse automatique pour extraire les exigences et
+                évaluer leur couverture face au corpus indexé.
+              </p>
+              <Button
+                size="lg"
+                onClick={() => void handleAnalyse(false)}
+                disabled={analysing}
+              >
+                {analysing ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Play className="mr-2 h-4 w-4" />
+                )}
+                {analysing ? "Analyse en cours..." : "Lancer l'analyse"}
+              </Button>
+            </div>
           </div>
         </div>
-      </div>
+      </>
     );
   }
 
   return (
-    <CdcReport
-      filename={report.filename}
-      summary={report.summary}
-      requirements={report.requirements}
-      pipelineVersion={report.pipeline_version || currentState?.pipelineVersion}
-      onReanalyse={() => handleAnalyse(true)}
-      onDelete={handleDeleteCdc}
-      reanalysing={analysing}
-    />
+    <>
+      {contextPanelContent}
+      <CdcReport
+        filename={report.filename}
+        summary={report.summary}
+        requirements={report.requirements}
+        pipelineVersion={report.pipeline_version || currentState?.pipelineVersion}
+        onReanalyse={() => handleAnalyse(true)}
+        onDelete={handleDeleteCdc}
+        reanalysing={analysing}
+      />
+    </>
   );
 }
 
