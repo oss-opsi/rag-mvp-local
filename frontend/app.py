@@ -73,49 +73,56 @@ except ImportError:
 STICKY_TABS_JS = """
 <script>
 (function() {
-    const ensureStickyTabs = () => {
+    const setup = () => {
         const root = window.parent ? window.parent.document : document;
         const tabList = root.querySelector('[data-baseweb="tab-list"]');
         const main = root.querySelector('[data-testid="stMain"]');
-        if (!tabList || !main) return;
+        if (!tabList || !main) return false;
+        if (tabList.dataset.tellmeSticky === '1') return true;
 
-        // Attach a scroll listener once.
-        if (main.dataset.tellmeStickyBound === '1') return;
-        main.dataset.tellmeStickyBound = '1';
-
-        const placeholder = root.createElement ? root.createElement('div') : document.createElement('div');
-        placeholder.style.display = 'none';
+        // Insert a placeholder just before the tab-list to measure scroll offset.
+        const placeholder = document.createElement('div');
+        placeholder.setAttribute('data-tellme-sticky-ph', '1');
+        placeholder.style.cssText = 'height:0px;margin:0;padding:0;';
         tabList.parentElement.insertBefore(placeholder, tabList);
+        tabList.dataset.tellmeSticky = '1';
+
+        const pinnedHeight = () => tabList.offsetHeight || 54;
 
         const update = () => {
-            const rect = placeholder.getBoundingClientRect();
-            if (rect.top < 0) {
+            // Measure the placeholder (unpinned) to decide if we should fix the bar.
+            const ph = placeholder.getBoundingClientRect();
+            const mainRect = main.getBoundingClientRect();
+            if (ph.top < mainRect.top) {
+                // Pin to top of stMain.
                 tabList.style.position = 'fixed';
-                tabList.style.top = '0px';
-                tabList.style.left = (main.getBoundingClientRect().left) + 'px';
+                tabList.style.top = mainRect.top + 'px';
+                tabList.style.left = mainRect.left + 'px';
                 tabList.style.width = main.clientWidth + 'px';
                 tabList.style.zIndex = '99999';
-                placeholder.style.display = 'block';
-                placeholder.style.height = tabList.offsetHeight + 'px';
+                tabList.style.boxShadow = '0 4px 16px -6px rgba(0,0,0,0.18)';
+                placeholder.style.height = pinnedHeight() + 'px';
             } else {
                 tabList.style.position = '';
                 tabList.style.top = '';
                 tabList.style.left = '';
                 tabList.style.width = '';
                 tabList.style.zIndex = '';
-                placeholder.style.display = 'none';
+                tabList.style.boxShadow = '';
+                placeholder.style.height = '0px';
             }
         };
+
         main.addEventListener('scroll', update, { passive: true });
         window.addEventListener('resize', update);
+        window.addEventListener('scroll', update, { passive: true });
         update();
+        return true;
     };
-    // Retry a few times until Streamlit has rendered.
     let tries = 0;
     const iv = setInterval(() => {
-        ensureStickyTabs();
-        if (++tries > 20) clearInterval(iv);
-    }, 500);
+        if (setup() || ++tries > 40) clearInterval(iv);
+    }, 300);
 })();
 </script>
 """
@@ -445,29 +452,20 @@ st.markdown(
         margin-left: 0 !important;
     }
 
-    /* Tabs — sticky on grandparent wrapper (desktop) + ancestors overflow: visible. */
-    div[data-testid="stTabs"] > div:first-child {
-        position: sticky !important;
-        top: 0 !important;
-        z-index: 9998 !important;
-        background: transparent !important;
-        overflow: visible !important;
-    }
-    div[data-testid="stMainBlockContainer"],
-    div[data-testid="stVerticalBlock"],
-    div[data-testid="stTabs"] {
-        overflow: visible !important;
-    }
-    /* Style the tab-list as a floating bar. */
+    /* Tabs — style as a bar; position fixed on scroll is handled by JS. */
     div[data-baseweb="tab-list"] {
         gap: 6px;
         background: var(--rag-bg);
         padding: 8px 6px !important;
         border-bottom: 1px solid var(--rag-border);
         box-shadow: 0 4px 12px -6px rgba(0,0,0,0.12);
-        margin: 0 -1rem !important;
-        padding-left: 1rem !important;
-        padding-right: 1rem !important;
+    }
+    /* Let the tab-list container not clip. */
+    div[data-testid="stMainBlockContainer"],
+    div[data-testid="stVerticalBlock"],
+    div[data-testid="stTabs"],
+    div[data-testid="stTabs"] > div:first-child {
+        overflow: visible !important;
     }
     button[data-baseweb="tab"] {
         border-radius: 8px !important;
