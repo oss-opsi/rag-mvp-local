@@ -28,8 +28,8 @@ import streamlit as st
 # ---------------------------------------------------------------------------
 
 st.set_page_config(
-    page_title="RAG MVP v3.3",
-    page_icon="📚",
+    page_title="Tell me",
+    page_icon="✨",
     layout="wide",
 )
 
@@ -152,9 +152,14 @@ def auth_headers() -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 if not get_token():
-    st.title("📚 RAG MVP v3.3")
-    st.caption(
-        "Recherche dense (Qdrant) + BM25 + fusion RRF · Historique · Évaluation RAGAS · Auth JWT"
+    st.markdown(
+        """
+        <div class="tellme-auth-brand">
+            <h1 class="tellme-wordmark">Tell<span class="tellme-dot">.</span>me</h1>
+            <p class="tellme-auth-tag">Posez une question, obtenez une réponse sourcée.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
     tab_login, tab_register, tab_guest = st.tabs(
@@ -319,34 +324,69 @@ st.markdown(
     /* Compact top padding */
     .block-container { padding-top: 2rem; padding-bottom: 4rem; max-width: 1200px; }
 
-    /* Hero header */
-    .rag-hero {
+    /* Tell me — wordmark (sidebar) */
+    .tellme-brand {
+        padding: 4px 6px 14px 6px;
+        margin-bottom: 8px;
+        border-bottom: 1px solid var(--rag-border);
+    }
+    .tellme-wordmark-sm {
+        font-size: 1.65rem;
+        font-weight: 800;
+        letter-spacing: -0.02em;
         background: linear-gradient(135deg, #4f46e5 0%, #06b6d4 100%);
-        color: white;
-        padding: 24px 28px;
-        border-radius: 16px;
-        margin-bottom: 24px;
-        box-shadow: 0 10px 30px -10px rgba(79, 70, 229, 0.35);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        line-height: 1.1;
     }
-    .rag-hero h1 {
-        margin: 0;
-        font-size: 1.75rem;
-        font-weight: 700;
-        color: white;
-    }
-    .rag-hero p {
-        margin: 6px 0 0 0;
-        opacity: 0.95;
-        font-size: 0.95rem;
+    .tellme-dot-sm { color: #06b6d4; -webkit-text-fill-color: #06b6d4; }
+    .tellme-tag-sm {
+        font-size: 0.78rem;
+        color: var(--rag-muted);
+        margin-top: 2px;
+        letter-spacing: 0.01em;
     }
 
-    /* Tabs — modernized */
+    /* Tell me — auth page brand */
+    .tellme-auth-brand {
+        text-align: center;
+        margin: 8px 0 28px 0;
+    }
+    .tellme-wordmark {
+        font-size: 3.2rem;
+        font-weight: 800;
+        letter-spacing: -0.03em;
+        background: linear-gradient(135deg, #4f46e5 0%, #06b6d4 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        margin: 0;
+        line-height: 1;
+    }
+    .tellme-dot { color: #06b6d4; -webkit-text-fill-color: #06b6d4; }
+    .tellme-auth-tag {
+        font-size: 1rem;
+        color: var(--rag-muted);
+        margin: 10px 0 0 0;
+    }
+
+    /* Tabs — sticky at the top of the viewport */
+    div[data-testid="stTabs"] > div:first-child {
+        position: sticky;
+        top: 0;
+        z-index: 999;
+        background: var(--rag-bg);
+        padding-top: 8px;
+        padding-bottom: 8px;
+    }
     div[data-baseweb="tab-list"] {
         gap: 6px;
         background: #f3f4f6;
         padding: 6px;
         border-radius: 12px;
         border: 1px solid var(--rag-border);
+        backdrop-filter: saturate(180%) blur(8px);
     }
     button[data-baseweb="tab"] {
         border-radius: 8px !important;
@@ -558,6 +598,17 @@ def has_usable_key() -> bool:
 # ---------------------------------------------------------------------------
 
 with st.sidebar:
+    # Tell me wordmark (brand)
+    st.markdown(
+        """
+        <div class="tellme-brand">
+            <div class="tellme-wordmark-sm">Tell<span class="tellme-dot-sm">.</span>me</div>
+            <div class="tellme-tag-sm">Votre RAG local</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
     # Account card
     initials = (user_name[:1] if user_name else "U").upper()
     role_label = "Mode invité" if user_id == "guest" else "Compte personnel"
@@ -709,6 +760,26 @@ with st.sidebar:
         except Exception as exc:
             st.error(f"❌ {exc}")
 
+    st.markdown("---")
+
+    # À propos (technical stack, hidden by default)
+    with st.expander("ℹ️ À propos", expanded=False):
+        st.markdown(
+            """
+**Tell me** — votre agent RAG local privé.
+
+**Stack technique**
+- Recherche dense : Qdrant + BAAI/bge-small-en-v1.5
+- Recherche lexicale : BM25
+- Fusion : Reciprocal Rank Fusion (RRF)
+- Génération : OpenAI GPT-4o-mini
+- Auth : JWT + cookies persistants
+- Stockage clé API : chiffrement Fernet (AES)
+
+**Version** v3.4
+            """
+        )
+
 
 # ---------------------------------------------------------------------------
 # Derived values used by all views
@@ -719,18 +790,8 @@ use_reranker = st.session_state.get("use_reranker", False)
 
 
 # ---------------------------------------------------------------------------
-# Hero header + tabs (moved to the top of the page)
+# Tabs at the top (sticky — stay visible while scrolling)
 # ---------------------------------------------------------------------------
-
-st.markdown(
-    """
-    <div class="rag-hero">
-        <h1>📚 RAG MVP v3.3</h1>
-        <p>Recherche dense (Qdrant) + BM25 + RRF · GPT-4o-mini · BAAI/bge-small-en-v1.5</p>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
 
 tab_docs, tab_chat, tab_ragas = st.tabs(
     ["📁  Documents", "💬  Chat", "📊  Évaluation RAGAS"]
