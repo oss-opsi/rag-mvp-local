@@ -371,14 +371,24 @@ st.markdown(
         margin: 10px 0 0 0;
     }
 
-    /* Tabs — sticky at the top of the viewport */
+    /* Tabs — sticky at the top of the viewport.
+       Streamlit scrolls on <section data-testid="stMain">; the sticky container
+       is a wrapper DIV inside stTabs. We make BOTH stTabs and its first child
+       sticky so the tab-list stays pinned while the content below scrolls. */
+    div[data-testid="stTabs"] {
+        position: sticky;
+        top: 0;
+        z-index: 999;
+        background: var(--rag-bg);
+    }
     div[data-testid="stTabs"] > div:first-child {
         position: sticky;
         top: 0;
         z-index: 999;
         background: var(--rag-bg);
-        padding-top: 8px;
-        padding-bottom: 8px;
+        padding-top: 6px;
+        padding-bottom: 6px;
+        margin-top: -6px;
     }
     div[data-baseweb="tab-list"] {
         gap: 6px;
@@ -386,7 +396,7 @@ st.markdown(
         padding: 6px;
         border-radius: 12px;
         border: 1px solid var(--rag-border);
-        backdrop-filter: saturate(180%) blur(8px);
+        box-shadow: 0 4px 12px -6px rgba(0,0,0,0.08);
     }
     button[data-baseweb="tab"] {
         border-radius: 8px !important;
