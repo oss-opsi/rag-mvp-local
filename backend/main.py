@@ -77,7 +77,7 @@ from rag.gap_analysis import (
     corpus_fingerprint as gap_corpus_fingerprint,
     run_gap_analysis,
 )
-from rag import workspace
+from rag import workspace, ingestion_jobs
 from rag.config import (
     BM25_DIR,
     CONVERSATIONS_DB_PATH,
@@ -107,6 +107,7 @@ logger = logging.getLogger(__name__)
 Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
 Path(BM25_DIR).mkdir(parents=True, exist_ok=True)
 workspace.init_db()
+ingestion_jobs.init_db()
 
 
 def _cleanup_mismatched_embedding_collections() -> None:
@@ -279,6 +280,16 @@ app.add_middleware(
 )
 
 # ---------------------------------------------------------------------------
+# Async ingestion worker
+# ---------------------------------------------------------------------------
+ingestion_jobs.configure(ingest_callable=ingest_file, qdrant_url=QDRANT_URL)
+
+
+@app.on_event("startup")
+def _start_ingestion_worker() -> None:
+    ingestion_jobs.start_worker_on_boot()
+
+# ---------------------------------------------------------------------------
 # Auth dependency
 # ---------------------------------------------------------------------------
 
@@ -347,10 +358,22 @@ class QueryResponse(BaseModel):
 
 
 class UploadResponse(BaseModel):
-    doc_id: str
+    job_id: int
     filename: str
-    chunk_count: int
+    status: str
     message: str
+
+
+class IngestionJob(BaseModel):
+    id: int
+    user_id: str
+    filename: str
+    status: str
+    chunk_count: int | None = None
+    error: str | None = None
+    created_at: str
+    started_at: str | None = None
+    finished_at: str | None = None
 
 
 class CreateConversationRequest(BaseModel):
@@ -499,14 +522,21 @@ async def health() -> dict:
 # ---------------------------------------------------------------------------
 
 
-@app.post("/upload", response_model=UploadResponse, tags=["Documents"])
+@app.post(
+    "/upload",
+    response_model=UploadResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    tags=["Documents"],
+)
 async def upload_document(
     file: UploadFile = File(..., description="Fichier à indexer (PDF, DOCX, TXT, MD)"),
     user_id: str = Depends(get_current_user),
 ) -> UploadResponse:
     """
-    Reçoit un fichier, l'ingère dans la collection Qdrant de l'utilisateur
-    (dense) et dans son corpus BM25 (sparse).
+    Reçoit un fichier et enfile un job d'indexation asynchrone. Retourne
+    immédiatement (HTTP 202) avec un job_id — l'indexation tourne dans un
+    worker en arrière-plan pour ne pas bloquer l'API. Suivre l'avancement
+    via GET /ingestion-jobs/{job_id}.
     """
     if not file.filename:
         raise HTTPException(status_code=400, detail="Nom de fichier manquant.")
@@ -522,6 +552,7 @@ async def upload_document(
             ),
         )
 
+    # Persist the upload to a temp file owned by the worker.
     with tempfile.NamedTemporaryFile(
         delete=False, suffix=ext, prefix="rag_upload_"
     ) as tmp:
@@ -530,30 +561,60 @@ async def upload_document(
         tmp_path = tmp.name
 
     try:
-        chunk_count = ingest_file(
-            file_path=tmp_path,
-            source_name=file.filename,
-            user_id=user_id,
-            qdrant_url=QDRANT_URL,
+        job = ingestion_jobs.enqueue_job(
+            user_id=user_id, filename=file.filename, tmp_path=tmp_path
         )
     except Exception as exc:
-        logger.exception("Erreur lors de l'ingestion du fichier %s", file.filename)
+        # Clean up temp file if we couldn't even enqueue
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        logger.exception("Failed to enqueue ingestion job for %s", file.filename)
         raise HTTPException(
-            status_code=500,
-            detail=f"Erreur lors de l'ingestion : {exc}",
+            status_code=500, detail=f"Impossible d'enfiler l'ingestion : {exc}"
         )
-    finally:
-        os.unlink(tmp_path)
-
-    import hashlib
-    doc_id = hashlib.md5(file.filename.encode()).hexdigest()[:12]
 
     return UploadResponse(
-        doc_id=doc_id,
+        job_id=int(job["id"]),
         filename=file.filename,
-        chunk_count=chunk_count,
-        message=f"'{file.filename}' indexé avec succès ({chunk_count} fragments).",
+        status=job["status"],
+        message=(
+            f"'{file.filename}' a été mis en file d'indexation. "
+            "Vous pouvez continuer à utiliser l'application pendant ce temps."
+        ),
     )
+
+
+@app.get("/ingestion-jobs", tags=["Documents"])
+def list_ingestion_jobs(
+    status_filter: Optional[str] = Query(
+        None,
+        alias="status",
+        description="Filtre (CSV) sur statuts : queued,running,done,error",
+    ),
+    limit: int = Query(50, ge=1, le=200),
+    user_id: str = Depends(get_current_user),
+) -> dict:
+    """Liste les jobs d'indexation de l'utilisateur, du plus récent au plus ancien."""
+    jobs = ingestion_jobs.list_jobs(user_id, status=status_filter, limit=limit)
+    # Do not leak the server-local tmp_path to clients.
+    for j in jobs:
+        j.pop("tmp_path", None)
+    return {"jobs": jobs}
+
+
+@app.get("/ingestion-jobs/{job_id}", tags=["Documents"])
+def get_ingestion_job(
+    job_id: int,
+    user_id: str = Depends(get_current_user),
+) -> dict:
+    """Récupère l'état d'un job d'indexation (pour polling)."""
+    job = ingestion_jobs.get_job(user_id, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job d'indexation introuvable.")
+    job.pop("tmp_path", None)
+    return job
 
 
 # ---------------------------------------------------------------------------

@@ -21,6 +21,27 @@ export type CollectionInfo = {
   total_chunks: number;
 };
 
+export type IngestionJobStatus = "queued" | "running" | "done" | "error";
+
+export type IngestionJob = {
+  id: number;
+  user_id: string;
+  filename: string;
+  status: IngestionJobStatus;
+  chunk_count: number | null;
+  error: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+};
+
+export type UploadResponse = {
+  job_id: number;
+  filename: string;
+  status: IngestionJobStatus;
+  message: string;
+};
+
 export type QuerySource = {
   text: string;
   source: string;

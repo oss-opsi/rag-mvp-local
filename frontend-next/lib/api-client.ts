@@ -6,8 +6,10 @@ import type {
   CollectionInfo,
   Conversation,
   ConversationDetail,
+  IngestionJob,
   QueryResponse,
   Report,
+  UploadResponse,
   User,
 } from "./types";
 
@@ -69,16 +71,25 @@ export const api = {
     return handle<ApiKeyInfo>(res);
   },
 
-  async uploadDocument(file: File): Promise<{
-    doc_id: string;
-    filename: string;
-    chunk_count: number;
-    message: string;
-  }> {
+  async uploadDocument(file: File): Promise<UploadResponse> {
     const fd = new FormData();
     fd.append("file", file);
     const res = await fetch("/api/upload", { method: "POST", body: fd });
-    return handle(res);
+    return handle<UploadResponse>(res);
+  },
+
+  async ingestionJobs(statusFilter?: string): Promise<IngestionJob[]> {
+    const qs = statusFilter
+      ? `?status=${encodeURIComponent(statusFilter)}`
+      : "";
+    const res = await fetch(`/api/ingestion-jobs${qs}`);
+    const data = await handle<{ jobs: IngestionJob[] }>(res);
+    return data.jobs || [];
+  },
+
+  async ingestionJob(id: number): Promise<IngestionJob> {
+    const res = await fetch(`/api/ingestion-jobs/${id}`);
+    return handle<IngestionJob>(res);
   },
 
   async collectionInfo(): Promise<CollectionInfo> {
