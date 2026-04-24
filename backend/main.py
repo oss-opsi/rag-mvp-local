@@ -108,6 +108,67 @@ Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
 Path(BM25_DIR).mkdir(parents=True, exist_ok=True)
 workspace.init_db()
 
+
+def _cleanup_mismatched_embedding_collections() -> None:
+    """v3.7.0 upgrade: drop Qdrant collections whose vector size no longer
+    matches the current EMBEDDING_DIM. Their BM25 corpora and gap-analysis
+    caches are also wiped so users are prompted to re-index cleanly.
+    """
+    try:
+        from rag.config import EMBEDDING_DIM
+        from rag.ingest import get_qdrant_client, reset_bm25_corpus
+        import shutil
+
+        client = get_qdrant_client(QDRANT_URL)
+        try:
+            collections = client.get_collections().collections
+        except Exception as exc:
+            logger.warning("Qdrant unreachable on startup: %s", exc)
+            return
+        dropped: list[str] = []
+        for c in collections:
+            try:
+                info = client.get_collection(c.name)
+                cfg = info.config.params.vectors
+                # vectors may be a VectorParams or a dict of named vectors
+                size = getattr(cfg, "size", None)
+                if size is None and isinstance(cfg, dict):
+                    size = next(iter(cfg.values())).size
+                if size is not None and int(size) != int(EMBEDDING_DIM):
+                    logger.warning(
+                        "Dropping collection '%s' (dim=%s ≠ EMBEDDING_DIM=%s)",
+                        c.name, size, EMBEDDING_DIM,
+                    )
+                    client.delete_collection(c.name)
+                    dropped.append(c.name)
+                    # Best-effort: purge matching BM25 + gap-analysis cache
+                    try:
+                        reset_bm25_corpus(c.name.removeprefix("rag_"))
+                    except Exception:
+                        pass
+            except Exception as exc:
+                logger.warning(
+                    "Could not inspect collection '%s': %s", c.name, exc
+                )
+        # Purge the gap-analysis cache (stale embeddings = stale verdicts)
+        gap_cache_dir = os.path.join(DATA_DIR, "gap_cache")
+        if dropped and os.path.isdir(gap_cache_dir):
+            try:
+                shutil.rmtree(gap_cache_dir, ignore_errors=True)
+                logger.info("Purged gap_cache after embedding upgrade.")
+            except Exception:
+                pass
+        if dropped:
+            logger.info(
+                "Embedding-dim upgrade complete: %d collection(s) reset. "
+                "Users must re-index their documents.", len(dropped),
+            )
+    except Exception as exc:
+        logger.warning("Embedding-dim cleanup skipped: %s", exc)
+
+
+_cleanup_mismatched_embedding_collections()
+
 # ---------------------------------------------------------------------------
 # Singletons
 # ---------------------------------------------------------------------------

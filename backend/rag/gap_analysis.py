@@ -48,7 +48,7 @@ DEDUP_SIMILARITY_THRESHOLD = 0.88
 logger = logging.getLogger(__name__)
 
 # Bump this when prompts or pipeline change to invalidate old cache entries.
-PIPELINE_VERSION = "v3.6.0"
+PIPELINE_VERSION = "v3.7.0"
 
 # Persistent cache directory on disk.
 GAP_CACHE_DIR = os.path.join(DATA_DIR, "gap_cache")
@@ -750,7 +750,7 @@ async def analyse_requirement(
     retriever = get_retriever_for_user(user_id, qdrant_url=qdrant_url)
     # retrieve() is sync/blocking; run in threadpool to avoid blocking loop.
     chunks = await asyncio.to_thread(
-        retriever.retrieve, query, RETRIEVAL_K, False
+        retriever.retrieve, query, RETRIEVAL_K, 20, 20, True
     )
     sources = [
         {

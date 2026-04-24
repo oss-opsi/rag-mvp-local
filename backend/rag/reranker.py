@@ -1,5 +1,8 @@
 """
-Cross-encoder reranker using BAAI/bge-reranker-base.
+Cross-encoder reranker.
+
+Uses the model configured in :data:`rag.config.RERANKER_MODEL`
+(default: BAAI/bge-reranker-v2-m3, multilingual).
 
 Singleton pattern: the model is loaded lazily on first use to avoid
 blocking the application at import time.
@@ -9,9 +12,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-logger = logging.getLogger(__name__)
+from .config import RERANKER_MODEL as _RERANKER_MODEL
 
-_RERANKER_MODEL = "BAAI/bge-reranker-base"
+logger = logging.getLogger(__name__)
 
 # Singleton instance
 _cross_encoder = None

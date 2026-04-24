@@ -932,6 +932,19 @@ components.html(STICKY_TABS_JS, height=0)
 # ===========================================================================
 
 with tab_docs:
+    # v3.7.0 : bannière si l'utilisateur a 0 document indexé (migration
+    # embeddings bge-small-en → bge-m3 a purgé son ancien index).
+    if not st.session_state.get("indexed_docs"):
+        st.info(
+            "ℹ️ **Migration v3.7.0 — Amélioration sémantique multilingue**\n\n"
+            "Le modèle d'embeddings est passé de `bge-small-en` (anglais, 384 dim) "
+            "à `BAAI/bge-m3` (multilingue natif, 1024 dim). Un reranker "
+            "cross-encodeur `bge-reranker-v2-m3` est aussi activé sur l'analyse "
+            "d'écarts. Vos anciennes collections Qdrant incompatibles ont été "
+            "réinitialisées : **ré-uploadez vos documents** ci-dessous pour "
+            "profiter de la nouvelle qualité de recherche en français."
+        )
+
     st.markdown(
         """
         <div class="rag-card">

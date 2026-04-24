@@ -13,11 +13,18 @@ QDRANT_URL: str = os.getenv("QDRANT_URL", "http://localhost:6333")
 QDRANT_API_KEY: str | None = os.getenv("QDRANT_API_KEY", None)
 QDRANT_COLLECTION: str = os.getenv("QDRANT_COLLECTION", "rag_documents")
 
-# Embedding model
-EMBEDDING_MODEL: str = os.getenv(
-    "EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5"
-)
-EMBEDDING_DIM: int = 384  # bge-small-en-v1.5 output dimension
+# Embedding model (v3.7.0 — multilingual upgrade)
+# bge-m3: 1024-dim multilingual dense embeddings, excellent on French.
+# Override EMBEDDING_MODEL at runtime only if you also set EMBEDDING_DIM to
+# match the new model's output dimension.
+EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")
+EMBEDDING_DIM: int = int(os.getenv("EMBEDDING_DIM", "1024"))
+
+# Cross-encoder reranker (v3.7.0) — BAAI/bge-reranker-v2-m3 is multilingual.
+RERANKER_MODEL: str = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-v2-m3")
+# Enable the reranker by default in the gap-analysis pipeline. Set to "0" to
+# disable (falls back to plain RRF top-K).
+RERANK_ENABLED: bool = os.getenv("RERANK_ENABLED", "1") == "1"
 
 # Chunking
 CHUNK_SIZE: int = int(os.getenv("CHUNK_SIZE", "800"))
