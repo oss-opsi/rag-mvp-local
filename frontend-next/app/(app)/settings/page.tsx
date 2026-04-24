@@ -121,7 +121,17 @@ export default function SettingsPage() {
         </div>
       </ContextPanel>
       <header className="flex h-14 shrink-0 items-center border-b border-border px-6">
-        <h1 className="text-base font-semibold">Paramètres</h1>
+        <div className="text-sm font-semibold">
+          Paramètres
+          {user?.name ? (
+            <>
+              <span className="mx-1.5 text-muted-foreground">—</span>
+              <span className="font-normal text-muted-foreground">
+                {user.name}
+              </span>
+            </>
+          ) : null}
+        </div>
       </header>
 
       <div className="flex-1 overflow-auto">

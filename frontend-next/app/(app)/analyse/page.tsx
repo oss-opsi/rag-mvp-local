@@ -267,7 +267,13 @@ export default function AnalysePage() {
         {contextPanelContent}
         <div className="flex h-full flex-col">
           <header className="flex h-14 shrink-0 items-center border-b border-border px-6">
-            <h1 className="text-base font-semibold">Analyse d'écarts</h1>
+            <div className="text-sm font-semibold">
+              Analyse
+              <span className="mx-1.5 text-muted-foreground">—</span>
+              <span className="font-normal text-muted-foreground">
+                Aucun client sélectionné
+              </span>
+            </div>
           </header>
           <div className="flex flex-1 items-center justify-center p-10">
             <div className="max-w-md text-center">
@@ -291,12 +297,15 @@ export default function AnalysePage() {
       <>
         {contextPanelContent}
         <div className="flex h-full flex-col">
-        <header className="flex h-14 shrink-0 items-center justify-between border-b border-border px-6">
-          <h1 className="text-base font-semibold">
-            {clients.find((c) => c.id === selectedClientId)?.name ||
-              "Client"}{" "}
-            — CDCs
-          </h1>
+        <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-6">
+          <div className="min-w-0 flex-1 truncate text-sm font-semibold">
+            Analyse
+            <span className="mx-1.5 text-muted-foreground">—</span>
+            <span className="font-normal text-muted-foreground">
+              {clients.find((c) => c.id === selectedClientId)?.name ||
+                "Client"}
+            </span>
+          </div>
           <PipelineBadges
             version={currentState?.pipelineVersion}
             compact
@@ -417,10 +426,14 @@ export default function AnalysePage() {
       <>
         {contextPanelContent}
         <div className="flex h-full flex-col">
-          <header className="flex h-14 shrink-0 items-center justify-between border-b border-border px-6">
-            <h1 className="truncate text-base font-semibold">
-              {cdcDetail.cdc.filename}
-            </h1>
+          <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-6">
+            <div className="min-w-0 flex-1 truncate text-sm font-semibold">
+              Analyse
+              <span className="mx-1.5 text-muted-foreground">—</span>
+              <span className="font-normal text-muted-foreground">
+                {cdcDetail.cdc.filename}
+              </span>
+            </div>
             <StatusPill status={cdcDetail.status} />
           </header>
           <div className="flex flex-1 items-center justify-center p-10">

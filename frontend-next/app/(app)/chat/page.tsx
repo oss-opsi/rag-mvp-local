@@ -332,9 +332,14 @@ export default function ChatPage() {
         </div>
       </ContextPanel>
       <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-6">
-        <h1 className="min-w-0 truncate text-base font-semibold">
-          {detail?.title || (selectedId ? "Conversation" : "Nouvelle conversation")}
-        </h1>
+        <div className="min-w-0 flex-1 truncate text-sm font-semibold">
+          Chat
+          <span className="mx-1.5 text-muted-foreground">—</span>
+          <span className="font-normal text-muted-foreground">
+            {detail?.title ||
+              (selectedId ? "Conversation" : "Nouvelle conversation")}
+          </span>
+        </div>
         {selectedId !== null ? (
           <div className="flex items-center gap-2">
             <Button
