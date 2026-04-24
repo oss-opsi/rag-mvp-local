@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   # -----------------------------------------------------------------------
   # Qdrant vector database
@@ -14,7 +12,8 @@ services:
       - qdrant_storage:/qdrant/storage
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:6333/healthz || exit 1"]
+      # Qdrant image has no curl/wget; use bash's /dev/tcp to probe the port
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/6333' || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
