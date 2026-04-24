@@ -434,22 +434,28 @@ st.markdown(
         margin: 10px 0 0 0;
     }
 
-    /* Hide Streamlit's native header (hamburger menu, deploy bar).
-       It overlaps our sticky tabs with z-index: 999990. */
-    header[data-testid="stHeader"] { display: none !important; }
-    div[data-testid="stToolbar"] { display: none !important; }
-
-    /* Force sidebar to stay visible at all breakpoints (Streamlit collapses it
-       automatically on small viewports, which made users think it disappeared). */
-    section[data-testid="stSidebar"] {
-        transform: translateX(0) !important;
-        margin-left: 0 !important;
-        min-width: 260px !important;
-        visibility: visible !important;
+    /* Header natif Streamlit : on le garde transparent et sans hauteur pour
+       ne pas couvrir nos onglets sticky, tout en conservant le bouton de
+       rétraction de la sidebar (stSidebarCollapseButton). */
+    header[data-testid="stHeader"] {
+        background: transparent !important;
+        height: 0 !important;
+        min-height: 0 !important;
+        z-index: 10 !important;
     }
-    section[data-testid="stSidebar"][aria-expanded="false"] {
-        transform: translateX(0) !important;
-        margin-left: 0 !important;
+    div[data-testid="stToolbar"] { display: none !important; }
+    /* Bouton replier/déplier sidebar : visible et cliquable au-dessus de tout. */
+    [data-testid="stSidebarCollapseButton"],
+    [data-testid="stSidebarCollapsedControl"] {
+        z-index: 100000 !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+
+    /* Sidebar: comportement natif Streamlit (rétractable via le bouton).
+       On garde juste une largeur confortable quand elle est ouverte. */
+    section[data-testid="stSidebar"] {
+        min-width: 260px;
     }
 
     /* Tabs — style as a bar; position fixed on scroll is handled by JS. */
