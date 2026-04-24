@@ -11,6 +11,10 @@ Optional cross-encoder reranking:
     Pass rerank=True to retrieve() to run a CrossEncoderReranker on top of
     the RRF results.  In that case RRF retrieves top-15 candidates which are
     then narrowed to top-k by the reranker.
+
+Per-user factory:
+    Use get_retriever_for_user(user_id) to get a HybridRetriever scoped to
+    a specific user's Qdrant collection and BM25 corpus.
 """
 from __future__ import annotations
 
@@ -19,7 +23,6 @@ from typing import Any
 
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_qdrant import QdrantVectorStore
-from rank_bm25 import BM25Okapi
 
 from .config import (
     EMBEDDING_MODEL,
@@ -30,7 +33,12 @@ from .config import (
     RETRIEVAL_K_SPARSE,
     RRF_K,
 )
-from .ingest import get_embeddings, get_qdrant_client, load_bm25_corpus
+from .ingest import (
+    get_embeddings,
+    get_qdrant_client,
+    load_bm25_corpus,
+    sanitize_collection_name,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,11 +58,18 @@ class HybridRetriever:
         self,
         qdrant_url: str = QDRANT_URL,
         collection_name: str = QDRANT_COLLECTION,
+        user_id: str | None = None,
         rrf_k: int = RRF_K,
     ) -> None:
         self.qdrant_url = qdrant_url
-        self.collection_name = collection_name
         self.rrf_k = rrf_k
+        # If user_id is provided, derive the collection name from it
+        if user_id is not None:
+            self.collection_name = sanitize_collection_name(user_id)
+            self.user_id = user_id
+        else:
+            self.collection_name = collection_name
+            self.user_id = None
 
     # ------------------------------------------------------------------
     # Dense retrieval
@@ -73,7 +88,13 @@ class HybridRetriever:
             collection_name=self.collection_name,
             embedding=embeddings,
         )
-        results = vector_store.similarity_search_with_score(query, k=k_dense)
+        try:
+            results = vector_store.similarity_search_with_score(query, k=k_dense)
+        except Exception as exc:
+            logger.warning(
+                "Dense search failed for collection '%s': %s", self.collection_name, exc
+            )
+            return []
         return [
             (doc.page_content, doc.metadata, float(score))
             for doc, score in results
@@ -89,7 +110,9 @@ class HybridRetriever:
         """
         Returns list of (text, metadata, bm25_score) sorted by descending score.
         """
-        corpus = load_bm25_corpus()
+        from rank_bm25 import BM25Okapi
+
+        corpus = load_bm25_corpus(self.user_id or "default")
         if not corpus:
             return []
 
@@ -214,3 +237,11 @@ class HybridRetriever:
             fused = reranker.rerank(query, fused, top_n=k)
 
         return fused
+
+
+def get_retriever_for_user(user_id: str, qdrant_url: str = QDRANT_URL) -> HybridRetriever:
+    """
+    Factory: return a HybridRetriever scoped to the given user's collection
+    and BM25 corpus.
+    """
+    return HybridRetriever(qdrant_url=qdrant_url, user_id=user_id)

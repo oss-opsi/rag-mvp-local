@@ -23,7 +23,7 @@ from langchain_core.runnables import RunnablePassthrough
 from langchain_openai import ChatOpenAI
 
 from .config import LLM_MODEL, LLM_TEMPERATURE, QDRANT_URL
-from .retriever import HybridRetriever
+from .retriever import HybridRetriever, get_retriever_for_user
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +82,20 @@ def _build_llm_chain(openai_api_key: str):
     return chain
 
 
+def _chunks_to_sources(chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Convert retrieved chunks to a list of source dicts for API responses."""
+    return [
+        {
+            "text": chunk["text"],
+            "source": chunk["metadata"].get("source", "inconnu"),
+            "page": chunk["metadata"].get("page", "?"),
+            "score": chunk["rrf_score"],
+            "rerank_score": chunk["metadata"].get("rerank_score"),
+        }
+        for chunk in chunks
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Main entry points
 # ---------------------------------------------------------------------------
@@ -93,9 +107,12 @@ def answer_question(
     qdrant_url: str = QDRANT_URL,
     k: int = 5,
     rerank: bool = False,
+    user_id: str | None = None,
 ) -> dict[str, Any]:
     """
     Run the full RAG pipeline for a single question (non-streaming).
+
+    If user_id is provided, retrieval is scoped to that user's collection.
 
     Returns:
         {
@@ -109,8 +126,12 @@ def answer_question(
     if not openai_api_key:
         raise ValueError("La clé API OpenAI est manquante.")
 
-    # 1. Retrieve chunks (use larger k_rrf when reranking)
-    retriever = HybridRetriever(qdrant_url=qdrant_url)
+    # 1. Retrieve chunks
+    if user_id is not None:
+        retriever = get_retriever_for_user(user_id, qdrant_url=qdrant_url)
+    else:
+        retriever = HybridRetriever(qdrant_url=qdrant_url)
+
     chunks = retriever.retrieve(question, k=k, rerank=rerank)
 
     if not chunks:
@@ -126,19 +147,7 @@ def answer_question(
     chain = _build_llm_chain(openai_api_key)
     answer = chain.invoke({"context": context, "question": question})
 
-    # 4. Format sources for API response
-    sources = []
-    for chunk in chunks:
-        src = {
-            "text": chunk["text"],
-            "source": chunk["metadata"].get("source", "inconnu"),
-            "page": chunk["metadata"].get("page", "?"),
-            "score": chunk["rrf_score"],
-            "rerank_score": chunk["metadata"].get("rerank_score"),
-        }
-        sources.append(src)
-
-    return {"answer": answer, "sources": sources}
+    return {"answer": answer, "sources": _chunks_to_sources(chunks)}
 
 
 def stream_answer(
@@ -147,9 +156,12 @@ def stream_answer(
     qdrant_url: str = QDRANT_URL,
     k: int = 5,
     rerank: bool = False,
+    user_id: str | None = None,
 ) -> tuple[Generator[str, None, None], list[dict[str, Any]]]:
     """
     Run the RAG pipeline with streaming LLM output.
+
+    If user_id is provided, retrieval is scoped to that user's collection.
 
     Strategy:
       1. Retrieve docs synchronously (RRF + optional reranker).
@@ -164,7 +176,11 @@ def stream_answer(
         raise ValueError("La clé API OpenAI est manquante.")
 
     # 1. Retrieve chunks (sync)
-    retriever = HybridRetriever(qdrant_url=qdrant_url)
+    if user_id is not None:
+        retriever = get_retriever_for_user(user_id, qdrant_url=qdrant_url)
+    else:
+        retriever = HybridRetriever(qdrant_url=qdrant_url)
+
     chunks = retriever.retrieve(question, k=k, rerank=rerank)
 
     if not chunks:
@@ -175,16 +191,7 @@ def stream_answer(
         return _empty_gen(), []
 
     # 2. Format sources
-    sources = []
-    for chunk in chunks:
-        src = {
-            "text": chunk["text"],
-            "source": chunk["metadata"].get("source", "inconnu"),
-            "page": chunk["metadata"].get("page", "?"),
-            "score": chunk["rrf_score"],
-            "rerank_score": chunk["metadata"].get("rerank_score"),
-        }
-        sources.append(src)
+    sources = _chunks_to_sources(chunks)
 
     # 3. Build context
     context = _format_context(chunks)
@@ -208,3 +215,20 @@ def stream_answer(
             yield token
 
     return _token_gen(), sources
+
+
+def get_answer_non_streaming(question: str, context: str, openai_api_key: str) -> str:
+    """Non-streaming answer — used by RAGAS evaluation."""
+    llm = ChatOpenAI(
+        model=LLM_MODEL,
+        temperature=LLM_TEMPERATURE,
+        api_key=openai_api_key,
+        streaming=False,
+    )
+    chain = (
+        {"context": RunnablePassthrough(), "question": RunnablePassthrough()}
+        | _PROMPT
+        | llm
+        | StrOutputParser()
+    )
+    return chain.invoke({"context": context, "question": question})

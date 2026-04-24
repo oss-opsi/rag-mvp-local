@@ -2,7 +2,10 @@
 Configuration settings for the RAG backend.
 All values can be overridden via environment variables.
 """
+import logging
 import os
+
+logger = logging.getLogger(__name__)
 
 # Qdrant
 QDRANT_URL: str = os.getenv("QDRANT_URL", "http://localhost:6333")
@@ -29,3 +32,31 @@ RRF_K: int = int(os.getenv("RRF_K", "60"))
 # LLM
 LLM_MODEL: str = os.getenv("LLM_MODEL", "gpt-4o-mini")
 LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.1"))
+
+# ---------------------------------------------------------------------------
+# JWT / Auth
+# ---------------------------------------------------------------------------
+_JWT_SECRET_DEFAULT = "dev-only-change-in-production-f8a3b2c1"
+JWT_SECRET: str = os.getenv("JWT_SECRET", _JWT_SECRET_DEFAULT)
+if JWT_SECRET == _JWT_SECRET_DEFAULT:
+    logger.warning(
+        "JWT_SECRET is using the insecure default value. "
+        "Set the JWT_SECRET environment variable in production!"
+    )
+JWT_ALGORITHM: str = "HS256"
+JWT_EXPIRE_DAYS: int = 7
+
+# ---------------------------------------------------------------------------
+# Data directory (SQLite DBs, BM25 corpora)
+# ---------------------------------------------------------------------------
+DATA_DIR: str = os.getenv("DATA_DIR", "/data")
+USERS_DB_PATH: str = os.path.join(DATA_DIR, "users.db")
+CONVERSATIONS_DB_PATH: str = os.path.join(DATA_DIR, "conversations.db")
+
+# Per-user BM25 corpus directory
+BM25_DIR: str = os.path.join(DATA_DIR, "bm25")
+
+
+def bm25_file(user_id: str) -> str:
+    """Return the path to the per-user BM25 corpus pickle file."""
+    return os.path.join(BM25_DIR, f"{user_id}.pkl")

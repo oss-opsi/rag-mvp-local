@@ -1,16 +1,17 @@
 """
-auth.py — Minimal SQLite user store for the standalone RAG app.
+auth.py — SQLite user store for the RAG app (standalone + Docker modes).
 
 Schema
 ------
 users(username TEXT PK, email TEXT, name TEXT,
       hashed_password TEXT, created_at TIMESTAMP)
 
-Password hashing uses bcrypt (already required by streamlit-authenticator).
+Password hashing uses bcrypt.
 
 Usage
 -----
-    from backend.rag.auth import register_user, verify_user, list_users_for_authenticator
+    from rag.auth import register_user, verify_user, get_user
+    from rag.auth import create_token, decode_token  # JWT helpers (re-exported)
 """
 from __future__ import annotations
 
@@ -21,10 +22,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .config import USERS_DB_PATH
+from .jwt_utils import create_token, decode_token  # re-export for convenience
+
 logger = logging.getLogger(__name__)
 
-_DB_DIR = Path("./data")
-_DB_PATH = _DB_DIR / "users.db"
+# Use the configured path from config (can be overridden via DATA_DIR env var)
+_DB_PATH = Path(USERS_DB_PATH)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS users (
@@ -183,3 +187,14 @@ def list_users_for_authenticator() -> dict[str, Any]:
             "password": u["hashed_password"],
         }
     return {"usernames": usernames}
+
+
+# Re-export JWT helpers so callers can do: from rag.auth import create_token
+__all__ = [
+    "register_user",
+    "verify_user",
+    "get_user",
+    "list_users_for_authenticator",
+    "create_token",
+    "decode_token",
+]

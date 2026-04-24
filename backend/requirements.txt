@@ -13,3 +13,9 @@ pypdf>=4.3
 rank-bm25>=0.2.2
 tiktoken>=0.7
 docx2txt>=0.8
+# v3.1 additions
+ragas>=0.1.19
+datasets>=2.20.0
+pandas>=2.2.0
+bcrypt>=4.1.0
+PyJWT>=2.8.0

@@ -33,7 +33,8 @@ services:
       - QDRANT_URL=http://qdrant:6333
       - QDRANT_COLLECTION=${QDRANT_COLLECTION:-rag_documents}
       - LLM_MODEL=${LLM_MODEL:-gpt-4o-mini}
-      - BM25_CORPUS_FILE=/data/bm25_corpus.pkl
+      - DATA_DIR=/data
+      - JWT_SECRET=${JWT_SECRET:-dev-only-change-in-production-xxxx}
     volumes:
       - backend_data:/data
     depends_on:
