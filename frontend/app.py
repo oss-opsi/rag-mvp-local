@@ -389,26 +389,32 @@ st.markdown(
         margin-left: 0 !important;
     }
 
-    /* Tabs — make the tab-list bar itself sticky, with an opaque background
-       so content scrolling underneath is hidden. All ancestors must keep
-       overflow: visible so the sticky can escape the flow. */
-    div[data-baseweb="tab-list"] {
+    /* Tabs — keep visible at all times via a JS-maintained sticky.
+       We use position: sticky on the grandparent wrapper (.st-ae), which
+       naturally contains the full tab content and gives sticky a place to go.
+       This is the ONLY wrapper whose height spans the whole tab area. */
+    div[data-testid="stTabs"] > div:first-child {
         position: sticky !important;
         top: 0 !important;
-        z-index: 9999 !important;
-        gap: 6px;
-        background: #f3f4f6;
-        padding: 8px 6px !important;
-        border-radius: 12px;
-        border: 1px solid var(--rag-border);
-        box-shadow: 0 4px 12px -6px rgba(0,0,0,0.08);
-        margin-top: -2px;
+        z-index: 9998 !important;
+        background: transparent !important;
+        overflow: visible !important;
     }
-    /* Ensure all ancestors up to stMain don't clip the sticky element. */
+    /* Style the tab-list inside so it reads as a floating bar. */
+    div[data-baseweb="tab-list"] {
+        gap: 6px;
+        background: var(--rag-bg);
+        padding: 8px 6px !important;
+        border-bottom: 1px solid var(--rag-border);
+        box-shadow: 0 4px 12px -6px rgba(0,0,0,0.12);
+        margin: 0 -1rem !important;
+        padding-left: 1rem !important;
+        padding-right: 1rem !important;
+    }
+    /* Ancestors up to stMain must not clip the sticky. */
     div[data-testid="stMainBlockContainer"],
     div[data-testid="stVerticalBlock"],
-    div[data-testid="stTabs"],
-    div[data-testid="stTabs"] > div:first-child {
+    div[data-testid="stTabs"] {
         overflow: visible !important;
     }
     button[data-baseweb="tab"] {
