@@ -8,9 +8,10 @@ Auth endpoints:
   GET  /auth/me          — return current user info
 
 Document endpoints (require auth):
-  POST   /upload          — ingest a document into the user's index
-  GET    /collection/info — list documents indexed for the current user
-  DELETE /collection      — reset the user's index
+  POST   /upload                   — ingest a document into the user's index
+  GET    /collection/info          — list documents indexed for the current user
+  DELETE /collection/document?source=... — delete a single document
+  DELETE /collection               — reset the user's index
 
 Query endpoints (require auth):
   POST /query            — ask a question (non-streaming)
@@ -69,6 +70,7 @@ from rag.ingest import (
     SUPPORTED_EXTENSIONS,
     get_all_collections,
     list_user_documents,
+    delete_document_by_source,
     ingest_file,
     load_bm25_corpus,
     reset_collection,
@@ -357,6 +359,25 @@ async def collection_info(user_id: str = Depends(get_current_user)) -> dict:
         "total_documents": len(docs),
         "total_chunks": sum(d["chunks"] for d in docs),
     }
+
+
+@app.delete("/collection/document", tags=["Système"])
+async def delete_document(
+    source: str,
+    user_id: str = Depends(get_current_user),
+) -> dict:
+    """Supprime tous les chunks d'un document (par nom de source)."""
+    if not source.strip():
+        raise HTTPException(status_code=400, detail="Le paramètre 'source' est requis.")
+    try:
+        result = delete_document_by_source(
+            source=source,
+            user_id=user_id,
+            qdrant_url=QDRANT_URL,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Erreur : {exc}")
+    return result
 
 
 @app.delete("/collection", tags=["Système"])

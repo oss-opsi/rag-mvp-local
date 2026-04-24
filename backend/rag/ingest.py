@@ -371,6 +371,78 @@ def list_user_documents(user_id: str = "default", qdrant_url: str = QDRANT_URL) 
     return [{"source": s, "chunks": c} for s, c in sorted(counts.items())]
 
 
+def delete_document_by_source(
+    source: str,
+    user_id: str = "default",
+    qdrant_url: str = QDRANT_URL,
+) -> dict:
+    """Delete all chunks of a given source file for a user.
+
+    Removes matching points from Qdrant (filter on metadata.source) and
+    filters the BM25 corpus. Returns counts of removed items.
+    """
+    from qdrant_client.models import Filter, FieldCondition, MatchValue, FilterSelector
+
+    collection_name = _collection_for_user(user_id)
+    client = get_qdrant_client(qdrant_url)
+    existing = [c.name for c in client.get_collections().collections]
+
+    qdrant_deleted = 0
+    if collection_name in existing:
+        # Count first (for reporting), then delete by filter on metadata.source
+        qdrant_filter = Filter(
+            must=[
+                FieldCondition(
+                    key="metadata.source",
+                    match=MatchValue(value=source),
+                )
+            ]
+        )
+        try:
+            count_resp = client.count(
+                collection_name=collection_name,
+                count_filter=qdrant_filter,
+                exact=True,
+            )
+            qdrant_deleted = int(count_resp.count)
+        except Exception as exc:
+            logger.warning("Could not count points for source '%s': %s", source, exc)
+
+        try:
+            client.delete(
+                collection_name=collection_name,
+                points_selector=FilterSelector(filter=qdrant_filter),
+            )
+        except Exception as exc:
+            logger.error("Qdrant delete failed for source '%s': %s", source, exc)
+            raise
+
+    # Update BM25 corpus in-memory + on-disk
+    corpus = load_bm25_corpus(user_id)
+    before = len(corpus)
+    filtered = [
+        entry
+        for entry in corpus
+        if (entry.get("metadata", {}) or {}).get("source") != source
+    ]
+    bm25_deleted = before - len(filtered)
+    _bm25_corpora[user_id] = filtered
+    save_bm25_corpus(user_id)
+
+    logger.info(
+        "Deleted source '%s' for user '%s' (qdrant=%d, bm25=%d).",
+        source,
+        user_id,
+        qdrant_deleted,
+        bm25_deleted,
+    )
+    return {
+        "source": source,
+        "qdrant_deleted": qdrant_deleted,
+        "bm25_deleted": bm25_deleted,
+    }
+
+
 def reset_collection(qdrant_url: str = QDRANT_URL, user_id: str = "default") -> None:
     """Delete and recreate the user's Qdrant collection, and reset their BM25 corpus."""
     collection_name = _collection_for_user(user_id)

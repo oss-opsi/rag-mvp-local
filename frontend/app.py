@@ -288,155 +288,361 @@ def _score_color(score: float) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Sidebar
+# Navigation state
+# ---------------------------------------------------------------------------
+
+if "current_view" not in st.session_state:
+    st.session_state["current_view"] = "documents"
+
+VIEWS = {
+    "documents": "📁 Documents",
+    "chat": "💬 Chat",
+    "ragas": "📊 Évaluation RAGAS",
+}
+
+
+def _set_view(view_key: str) -> None:
+    st.session_state["current_view"] = view_key
+
+
+# ---------------------------------------------------------------------------
+# Sidebar (dynamic — depends on current view)
 # ---------------------------------------------------------------------------
 
 with st.sidebar:
-    st.title("⚙️ Configuration")
-
-    # User info + logout
+    # ----- User account block (always visible) -----
     if user_id == "guest":
-        st.caption("Mode invité — index partagé")
+        st.caption("🕶️ Mode invité — index partagé")
     else:
-        st.caption(f"Connecté en tant que : **{user_name}**")
+        st.caption(f"👤 Connecté : **{user_name}**")
 
-    if st.button("🚪 Se déconnecter"):
+    if st.button("🚪 Se déconnecter", use_container_width=True):
         logout()
         st.rerun()
 
     st.divider()
 
-    openai_key = st.text_input(
-        "Clé API OpenAI",
-        type="password",
-        placeholder="sk-...",
-        help="Votre clé OpenAI. Elle n'est jamais stockée sur disque.",
-    )
+    # ----- View navigation -----
+    st.markdown("### 🧭 Navigation")
+    for key, label in VIEWS.items():
+        is_active = st.session_state["current_view"] == key
+        if st.button(
+            label,
+            key=f"nav_{key}",
+            use_container_width=True,
+            type="primary" if is_active else "secondary",
+        ):
+            _set_view(key)
+            st.rerun()
 
     st.divider()
 
-    use_reranker = st.checkbox(
-        "Activer le cross-encoder reranker (plus précis, + lent)",
-        value=False,
-        help="Utilise BAAI/bge-reranker-base pour reranker les résultats après RRF.",
-    )
+    # ----- View-specific sidebar content -----
+    current_view = st.session_state["current_view"]
 
-    st.divider()
+    if current_view == "documents":
+        # Configuration block (API key, reranker, health, full reset)
+        st.markdown("### ⚙️ Configuration")
 
-    # Health check
-    if st.button("🔄 Vérifier le statut"):
-        try:
-            resp = requests.get(f"{BACKEND_URL}/health", timeout=5)
-            data = resp.json()
-            total_vectors = sum(data.get("indexed_vectors", {}).values())
-            st.success(f"✅ Backend opérationnel — {total_vectors} vecteurs indexés (toutes collections)")
-        except Exception as exc:
-            st.error(f"❌ Impossible de joindre le backend : {exc}")
+        openai_key = st.text_input(
+            "Clé API OpenAI",
+            type="password",
+            placeholder="sk-...",
+            help="Votre clé OpenAI. Elle n'est jamais stockée sur disque.",
+            key="sidebar_openai_key",
+        )
 
-    st.divider()
+        use_reranker = st.checkbox(
+            "Activer le cross-encoder reranker (plus précis, + lent)",
+            value=st.session_state.get("use_reranker", False),
+            help="Utilise BAAI/bge-reranker-base pour reranker les résultats après RRF.",
+            key="sidebar_use_reranker",
+        )
+        st.session_state["use_reranker"] = use_reranker
 
-    # Reset index
-    if st.button("🗑️ Réinitialiser mon index", type="secondary"):
-        try:
-            resp = requests.delete(
-                f"{BACKEND_URL}/collection",
-                headers=auth_headers(),
-                timeout=15,
+        st.divider()
+
+        if st.button("🔄 Vérifier le statut backend", use_container_width=True):
+            try:
+                resp = requests.get(f"{BACKEND_URL}/health", timeout=5)
+                data = resp.json()
+                total_vectors = sum(data.get("indexed_vectors", {}).values())
+                st.success(
+                    f"✅ Backend opérationnel — {total_vectors} vecteurs indexés (toutes collections)"
+                )
+            except Exception as exc:
+                st.error(f"❌ Impossible de joindre le backend : {exc}")
+
+        st.divider()
+
+        if st.button(
+            "🗑️ Réinitialiser tout mon index",
+            type="secondary",
+            use_container_width=True,
+        ):
+            try:
+                resp = requests.delete(
+                    f"{BACKEND_URL}/collection",
+                    headers=auth_headers(),
+                    timeout=15,
+                )
+                if resp.ok:
+                    st.session_state["indexed_docs"] = []
+                    st.session_state["indexed_docs_detail"] = []
+                    st.session_state["indexed_total_chunks"] = 0
+                    st.session_state["chat_history"] = []
+                    st.success("Index réinitialisé.")
+                    st.rerun()
+                else:
+                    st.error(f"Erreur : {resp.text}")
+            except Exception as exc:
+                st.error(f"Erreur : {exc}")
+
+    elif current_view == "chat":
+        # Chat needs API key too — keep a compact field
+        openai_key = st.text_input(
+            "🔑 Clé API OpenAI",
+            type="password",
+            placeholder="sk-...",
+            help="Clé requise pour interroger le LLM.",
+            key="sidebar_openai_key",
+        )
+        use_reranker = st.session_state.get("use_reranker", False)
+
+        st.divider()
+        st.markdown("### 🗂️ Historique")
+
+        if user_id == "guest":
+            st.info(
+                "L'historique des conversations n'est pas disponible en mode invité. "
+                "Créez un compte pour l'activer."
             )
-            if resp.ok:
-                st.session_state["indexed_docs"] = []
-                st.session_state["indexed_docs_detail"] = []
-                st.session_state["indexed_total_chunks"] = 0
+        else:
+            if st.button("🆕 Nouvelle conversation", use_container_width=True):
+                st.session_state["current_conversation_id"] = None
+                st.session_state["current_conversation_title"] = "Nouvelle conversation"
                 st.session_state["chat_history"] = []
-                st.success("Index réinitialisé.")
+                st.session_state["history_selected_conv"] = None
                 st.rerun()
-            else:
-                st.error(f"Erreur : {resp.text}")
-        except Exception as exc:
-            st.error(f"Erreur : {exc}")
 
-    st.divider()
-    _docs = st.session_state.get("indexed_docs_detail") or []
-    _total_chunks = st.session_state.get("indexed_total_chunks", 0)
-    if _docs:
-        st.markdown(f"**Documents indexés ({len(_docs)} fichier(s), {_total_chunks} chunks) :**")
-        for d in _docs:
-            st.markdown(f"- 📄 {d['source']} ({d['chunks']} chunks)")
-    elif st.session_state.get("indexed_docs"):
-        st.markdown("**Documents indexés :**")
-        for doc in st.session_state["indexed_docs"]:
-            st.markdown(f"- 📄 {doc}")
-    else:
-        st.caption("Aucun document indexé pour le moment.")
-    if st.button("🔄 Rafraîchir la liste"):
-        refresh_indexed_docs()
-        st.rerun()
+            # Fetch conversations list
+            try:
+                resp = requests.get(
+                    f"{BACKEND_URL}/conversations",
+                    headers=auth_headers(),
+                    timeout=10,
+                )
+                conversations = resp.json() if resp.ok else []
+            except Exception:
+                conversations = []
+
+            if not conversations:
+                st.caption("Aucune conversation enregistrée.")
+            else:
+                current_conv_id = st.session_state.get("current_conversation_id")
+                for conv in conversations:
+                    conv_id = conv["id"]
+                    title = conv["title"]
+                    msg_count = conv.get("message_count", 0)
+                    is_active = conv_id == current_conv_id
+                    label = f"{'▶ ' if is_active else ''}{title} ({msg_count})"
+
+                    c_load, c_del = st.columns([4, 1])
+                    with c_load:
+                        if st.button(
+                            label,
+                            key=f"load_conv_{conv_id}",
+                            use_container_width=True,
+                            type="primary" if is_active else "secondary",
+                        ):
+                            # Load the conversation into chat_history
+                            try:
+                                r = requests.get(
+                                    f"{BACKEND_URL}/conversations/{conv_id}",
+                                    headers=auth_headers(),
+                                    timeout=10,
+                                )
+                                detail = r.json() if r.ok else {}
+                                st.session_state["chat_history"] = detail.get(
+                                    "messages", []
+                                )
+                                st.session_state["current_conversation_id"] = conv_id
+                                st.session_state["current_conversation_title"] = title
+                                st.rerun()
+                            except Exception as exc:
+                                st.error(f"Erreur : {exc}")
+                    with c_del:
+                        if st.button("🗑️", key=f"side_del_{conv_id}"):
+                            try:
+                                r = requests.delete(
+                                    f"{BACKEND_URL}/conversations/{conv_id}",
+                                    headers=auth_headers(),
+                                    timeout=10,
+                                )
+                                if r.ok:
+                                    if (
+                                        st.session_state.get("current_conversation_id")
+                                        == conv_id
+                                    ):
+                                        st.session_state["current_conversation_id"] = None
+                                        st.session_state["chat_history"] = []
+                                    st.rerun()
+                            except Exception:
+                                pass
+
+    elif current_view == "ragas":
+        # RAGAS also needs the API key
+        openai_key = st.text_input(
+            "🔑 Clé API OpenAI",
+            type="password",
+            placeholder="sk-...",
+            help="Clé requise pour l'évaluation RAGAS.",
+            key="sidebar_openai_key",
+        )
+        use_reranker = st.session_state.get("use_reranker", False)
+
+        st.divider()
+        st.caption(
+            "📊 L'évaluation RAGAS mesure la qualité de votre chaîne RAG "
+            "(fidélité, pertinence, précision et rappel du contexte)."
+        )
+
+# Make sure openai_key & use_reranker are defined even if the current view
+# didn't run an input (shouldn't happen — safeguard).
+openai_key = st.session_state.get("sidebar_openai_key", "")
+use_reranker = st.session_state.get("use_reranker", False)
+
 
 # ---------------------------------------------------------------------------
 # Main title
 # ---------------------------------------------------------------------------
 
-st.title("📚 RAG MVP v3.1")
+st.title("📚 RAG MVP v3.2")
 st.caption(
     "Recherche dense (Qdrant) + BM25 + fusion RRF · LLM : GPT-4o-mini · "
     "Embeddings : BAAI/bge-small-en-v1.5"
 )
 
-# ---------------------------------------------------------------------------
-# Document Upload (always visible above tabs)
-# ---------------------------------------------------------------------------
+current_view = st.session_state["current_view"]
 
-st.subheader("1. Indexer vos documents")
+# ===========================================================================
+# VIEW 1 — Documents
+# ===========================================================================
 
-uploaded_files = st.file_uploader(
-    "Glissez-déposez vos fichiers ici (PDF, DOCX, TXT, MD — max 200 Mo)",
-    type=["pdf", "docx", "txt", "md"],
-    accept_multiple_files=True,
-    label_visibility="collapsed",
-)
+if current_view == "documents":
+    st.subheader("📁 Gestion des documents")
+    st.markdown(
+        "Ajoutez ou supprimez les documents qui alimentent votre index RAG. "
+        "La configuration (clé API, reranker, reset) est dans la barre latérale."
+    )
 
-if uploaded_files and st.button("📥 Indexer les documents", type="primary"):
-    progress = st.progress(0, text="Démarrage de l'indexation…")
-    total = len(uploaded_files)
-    for i, f in enumerate(uploaded_files):
-        progress.progress(i / total, text=f"Indexation de {f.name} ({i + 1}/{total})…")
-        try:
-            resp = requests.post(
-                f"{BACKEND_URL}/upload",
-                headers=auth_headers(),
-                files={"file": (f.name, f.read(), "application/octet-stream")},
-                timeout=180,
+    st.markdown("### ⬆️ Ajouter des documents")
+    uploaded_files = st.file_uploader(
+        "Glissez-déposez vos fichiers ici (PDF, DOCX, TXT, MD — max 200 Mo)",
+        type=["pdf", "docx", "txt", "md"],
+        accept_multiple_files=True,
+        label_visibility="collapsed",
+        key="docs_uploader",
+    )
+
+    if uploaded_files and st.button("📥 Indexer les documents", type="primary"):
+        progress = st.progress(0, text="Démarrage de l'indexation…")
+        total = len(uploaded_files)
+        for i, f in enumerate(uploaded_files):
+            progress.progress(
+                i / total, text=f"Indexation de {f.name} ({i + 1}/{total})…"
             )
-            if resp.ok:
-                data = resp.json()
-                if f.name not in st.session_state["indexed_docs"]:
-                    st.session_state["indexed_docs"].append(f.name)
-                st.success(
-                    f"✅ **{f.name}** — {data.get('chunk_count', '?')} fragments indexés"
+            try:
+                resp = requests.post(
+                    f"{BACKEND_URL}/upload",
+                    headers=auth_headers(),
+                    files={"file": (f.name, f.read(), "application/octet-stream")},
+                    timeout=180,
                 )
-            else:
-                detail = resp.json().get("detail", resp.text) if resp.headers.get("content-type", "").startswith("application/json") else resp.text
-                st.error(f"❌ {f.name} : {detail}")
-        except Exception as exc:
-            st.error(f"❌ Erreur lors de l'envoi de {f.name} : {exc}")
-    progress.progress(1.0, text="Indexation terminée.")
-    # Refresh the indexed docs list from the backend so chunk counts are accurate
-    refresh_indexed_docs()
+                if resp.ok:
+                    data = resp.json()
+                    if f.name not in st.session_state["indexed_docs"]:
+                        st.session_state["indexed_docs"].append(f.name)
+                    st.success(
+                        f"✅ **{f.name}** — {data.get('chunk_count', '?')} fragments indexés"
+                    )
+                else:
+                    detail = (
+                        resp.json().get("detail", resp.text)
+                        if resp.headers.get("content-type", "").startswith(
+                            "application/json"
+                        )
+                        else resp.text
+                    )
+                    st.error(f"❌ {f.name} : {detail}")
+            except Exception as exc:
+                st.error(f"❌ Erreur lors de l'envoi de {f.name} : {exc}")
+        progress.progress(1.0, text="Indexation terminée.")
+        refresh_indexed_docs()
+        st.rerun()
 
-st.divider()
+    st.divider()
 
-# ---------------------------------------------------------------------------
-# Tabs: Chat | Évaluation RAGAS | Historique
-# ---------------------------------------------------------------------------
+    # ----- Indexed documents list with per-file delete -----
+    st.markdown("### 📚 Documents indexés")
 
-tab_chat, tab_eval, tab_history = st.tabs(["💬 Chat", "📊 Évaluation RAGAS", "🗂️ Historique"])
+    col_refresh, _ = st.columns([1, 4])
+    with col_refresh:
+        if st.button("🔄 Rafraîchir la liste"):
+            refresh_indexed_docs()
+            st.rerun()
+
+    docs_detail = st.session_state.get("indexed_docs_detail") or []
+    total_chunks = st.session_state.get("indexed_total_chunks", 0)
+
+    if not docs_detail:
+        st.info(
+            "Aucun document indexé pour le moment. "
+            "Utilisez le formulaire ci-dessus pour en ajouter."
+        )
+    else:
+        st.caption(
+            f"**{len(docs_detail)} document(s)** · **{total_chunks} chunks** au total"
+        )
+        for d in docs_detail:
+            source = d["source"]
+            chunks = d["chunks"]
+            col_info, col_del = st.columns([5, 1])
+            with col_info:
+                st.markdown(f"📄 **{source}** — _{chunks} chunks_")
+            with col_del:
+                if st.button("🗑️ Supprimer", key=f"del_doc_{source}"):
+                    try:
+                        r = requests.delete(
+                            f"{BACKEND_URL}/collection/document",
+                            headers=auth_headers(),
+                            params={"source": source},
+                            timeout=30,
+                        )
+                        if r.ok:
+                            result = r.json()
+                            st.success(
+                                f"✅ **{source}** supprimé "
+                                f"({result.get('qdrant_deleted', 0)} chunks Qdrant, "
+                                f"{result.get('bm25_deleted', 0)} chunks BM25)"
+                            )
+                            refresh_indexed_docs()
+                            st.rerun()
+                        else:
+                            st.error(f"Erreur : {r.text}")
+                    except Exception as exc:
+                        st.error(f"Erreur : {exc}")
+
 
 # ===========================================================================
-# TAB 1 — Chat
+# VIEW 2 — Chat
 # ===========================================================================
 
-with tab_chat:
-    st.subheader("2. Poser une question")
+elif current_view == "chat":
+    conv_title = st.session_state.get(
+        "current_conversation_title", "Nouvelle conversation"
+    )
+    st.subheader(f"💬 {conv_title}")
 
     # Display chat history
     for msg in st.session_state.get("chat_history", []):
@@ -459,14 +665,15 @@ with tab_chat:
 
     if question := st.chat_input("Posez votre question sur les documents indexés…"):
         if not openai_key:
-            st.warning("⚠️ Veuillez renseigner votre clé API OpenAI dans la barre latérale.")
+            st.warning(
+                "⚠️ Veuillez renseigner votre clé API OpenAI dans la barre latérale."
+            )
             st.stop()
 
         # Ensure a conversation exists in DB (skip for guest)
         if user_id != "guest":
             if not st.session_state.get("current_conversation_id"):
                 try:
-                    # Auto-title from first message
                     title = question[:60] + ("…" if len(question) > 60 else "")
                     r = requests.post(
                         f"{BACKEND_URL}/conversations",
@@ -477,11 +684,12 @@ with tab_chat:
                     if r.ok:
                         conv_data = r.json()
                         st.session_state["current_conversation_id"] = conv_data["id"]
-                        st.session_state["current_conversation_title"] = conv_data["title"]
-                except Exception as exc:
-                    pass  # history persistence is optional
+                        st.session_state["current_conversation_title"] = conv_data[
+                            "title"
+                        ]
+                except Exception:
+                    pass
 
-            # Persist user message
             conv_id = st.session_state.get("current_conversation_id")
             if conv_id:
                 try:
@@ -502,7 +710,6 @@ with tab_chat:
             _state: dict[str, Any] = {"sources": [], "error": False}
 
             def _sse_token_generator():
-                """Parse SSE stream from /query/stream and yield tokens."""
                 try:
                     with requests.post(
                         f"{BACKEND_URL}/query/stream",
@@ -571,9 +778,12 @@ with tab_chat:
 
             if not error_occurred:
                 st.session_state["chat_history"].append(
-                    {"role": "assistant", "content": answer or "", "sources": sources}
+                    {
+                        "role": "assistant",
+                        "content": answer or "",
+                        "sources": sources,
+                    }
                 )
-                # Persist assistant message
                 if user_id != "guest":
                     conv_id = st.session_state.get("current_conversation_id")
                     if conv_id:
@@ -591,11 +801,12 @@ with tab_chat:
                         except Exception:
                             pass
 
+
 # ===========================================================================
-# TAB 2 — RAGAS Evaluation
+# VIEW 3 — RAGAS Evaluation
 # ===========================================================================
 
-with tab_eval:
+elif current_view == "ragas":
     st.subheader("📊 Évaluation RAGAS")
     st.markdown(
         "Uploadez un CSV avec 2 colonnes : **`question`**, **`ground_truth`** "
@@ -604,7 +815,6 @@ with tab_eval:
         "précision et rappel du contexte. Maximum 20 questions."
     )
 
-    # Template download
     _template_csv = (
         "question,ground_truth\n"
         '"Qu\'est-ce que RAG ?","RAG signifie Retrieval-Augmented Generation."\n'
@@ -627,7 +837,9 @@ with tab_eval:
     if not openai_key:
         st.warning("⚠️ Clé API OpenAI manquante (barre latérale).")
 
-    if eval_file and st.button("🚀 Lancer l'évaluation", type="primary", disabled=eval_disabled):
+    if eval_file and st.button(
+        "🚀 Lancer l'évaluation", type="primary", disabled=eval_disabled
+    ):
         st.info("Évaluation en cours — cela peut prendre plusieurs minutes…")
         progress_bar = st.progress(0.1, text="Envoi au backend…")
 
@@ -638,11 +850,14 @@ with tab_eval:
                 headers=auth_headers(),
                 files={"file": (eval_file.name, eval_file.read(), "text/csv")},
                 data={"openai_api_key": openai_key},
-                timeout=600,  # RAGAS can be slow
+                timeout=600,
             )
             progress_bar.progress(1.0, text="Évaluation terminée !")
         except requests.exceptions.Timeout:
-            st.error("❌ L'évaluation a dépassé le délai imparti (10 min). Réduisez le nombre de questions.")
+            st.error(
+                "❌ L'évaluation a dépassé le délai imparti (10 min). "
+                "Réduisez le nombre de questions."
+            )
             st.stop()
         except Exception as exc:
             st.error(f"❌ Erreur réseau : {exc}")
@@ -721,156 +936,3 @@ with tab_eval:
             file_name=f"ragas_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
             mime="text/csv",
         )
-
-# ===========================================================================
-# TAB 3 — Historique
-# ===========================================================================
-
-with tab_history:
-    st.subheader("🗂️ Historique des conversations")
-
-    if user_id == "guest":
-        st.info(
-            "L'historique des conversations n'est pas disponible en mode invité. "
-            "Créez un compte pour bénéficier de cette fonctionnalité."
-        )
-    else:
-        # New conversation button
-        col_new, col_spacer = st.columns([1, 3])
-        with col_new:
-            if st.button("🆕 Nouvelle conversation"):
-                st.session_state["current_conversation_id"] = None
-                st.session_state["current_conversation_title"] = "Nouvelle conversation"
-                st.session_state["chat_history"] = []
-                st.session_state["history_selected_conv"] = None
-                st.success("Nouvelle conversation démarrée. Posez une question dans l'onglet Chat.")
-
-        st.divider()
-
-        # Fetch conversations
-        try:
-            resp = requests.get(
-                f"{BACKEND_URL}/conversations",
-                headers=auth_headers(),
-                timeout=10,
-            )
-            conversations = resp.json() if resp.ok else []
-        except Exception:
-            conversations = []
-            st.error("❌ Impossible de charger les conversations.")
-
-        if not conversations:
-            st.info("Aucune conversation enregistrée. Commencez à discuter dans l'onglet Chat !")
-        else:
-            for conv in conversations:
-                conv_id = conv["id"]
-                title = conv["title"]
-                msg_count = conv.get("message_count", 0)
-                updated = (
-                    conv["updated_at"][:16].replace("T", " ")
-                    if conv.get("updated_at")
-                    else "—"
-                )
-
-                with st.expander(f"**{title}** · {msg_count} msg · {updated}"):
-                    col_view, col_rename, col_export, col_delete = st.columns([2, 2, 1, 1])
-
-                    with col_view:
-                        if st.button("👁️ Voir", key=f"view_{conv_id}"):
-                            st.session_state["history_selected_conv"] = conv_id
-
-                    with col_rename:
-                        new_title = st.text_input(
-                            "Renommer",
-                            value=title,
-                            key=f"rename_input_{conv_id}",
-                            label_visibility="collapsed",
-                        )
-                        if st.button("✏️ Renommer", key=f"rename_btn_{conv_id}"):
-                            try:
-                                r = requests.patch(
-                                    f"{BACKEND_URL}/conversations/{conv_id}",
-                                    headers=auth_headers(),
-                                    json={"title": new_title},
-                                    timeout=10,
-                                )
-                                if r.ok:
-                                    st.rerun()
-                                else:
-                                    st.error("Erreur lors du renommage.")
-                            except Exception as exc:
-                                st.error(f"Erreur : {exc}")
-
-                    with col_export:
-                        try:
-                            r = requests.get(
-                                f"{BACKEND_URL}/conversations/{conv_id}/export",
-                                headers=auth_headers(),
-                                timeout=10,
-                            )
-                            export_data = r.json() if r.ok else {}
-                        except Exception:
-                            export_data = {}
-
-                        st.download_button(
-                            label="📥 JSON",
-                            data=json.dumps(export_data, ensure_ascii=False, indent=2),
-                            file_name=f"conv_{conv_id[:8]}.json",
-                            mime="application/json",
-                            key=f"export_{conv_id}",
-                        )
-
-                    with col_delete:
-                        if st.button("🗑️ Suppr.", key=f"delete_{conv_id}", type="secondary"):
-                            try:
-                                r = requests.delete(
-                                    f"{BACKEND_URL}/conversations/{conv_id}",
-                                    headers=auth_headers(),
-                                    timeout=10,
-                                )
-                                if r.ok:
-                                    if st.session_state.get("current_conversation_id") == conv_id:
-                                        st.session_state["current_conversation_id"] = None
-                                        st.session_state["current_conversation_title"] = (
-                                            "Nouvelle conversation"
-                                        )
-                                        st.session_state["chat_history"] = []
-                                    if st.session_state.get("history_selected_conv") == conv_id:
-                                        st.session_state["history_selected_conv"] = None
-                                    st.rerun()
-                                else:
-                                    st.error("Erreur lors de la suppression.")
-                            except Exception as exc:
-                                st.error(f"Erreur : {exc}")
-
-            # Display selected conversation
-            if st.session_state.get("history_selected_conv"):
-                sel_id = st.session_state["history_selected_conv"]
-                sel_conv = next((c for c in conversations if c["id"] == sel_id), None)
-                if sel_conv:
-                    st.divider()
-                    st.markdown(f"### 💬 {sel_conv['title']}")
-                    try:
-                        r = requests.get(
-                            f"{BACKEND_URL}/conversations/{sel_id}",
-                            headers=auth_headers(),
-                            timeout=10,
-                        )
-                        conv_detail = r.json() if r.ok else {}
-                    except Exception:
-                        conv_detail = {}
-
-                    messages = conv_detail.get("messages", [])
-                    if not messages:
-                        st.info("Aucun message dans cette conversation.")
-                    for msg in messages:
-                        with st.chat_message(msg["role"]):
-                            st.markdown(msg["content"])
-                            if msg["role"] == "assistant" and msg.get("sources"):
-                                with st.expander("📚 Sources"):
-                                    for src in msg["sources"]:
-                                        st.markdown(
-                                            f"**{src.get('source', '?')} — page {src.get('page', '?')}**"
-                                        )
-                                        st.caption(src.get("text", ""))
-                                        st.divider()
