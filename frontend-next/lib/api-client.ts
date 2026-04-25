@@ -203,11 +203,31 @@ export const api = {
     role: "user" | "assistant",
     content: string,
     sources?: unknown
-  ): Promise<unknown> {
+  ): Promise<{ status: string; message_id?: number }> {
     const res = await fetch(`/api/conversations/${id}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ role, content, sources }),
+    });
+    return handle<{ status: string; message_id?: number }>(res);
+  },
+
+  async setMessageFeedback(
+    messageId: number,
+    rating: 1 | -1,
+    comment?: string | null,
+  ): Promise<unknown> {
+    const res = await fetch(`/api/messages/${messageId}/feedback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rating, comment: comment ?? null }),
+    });
+    return handle(res);
+  },
+
+  async clearMessageFeedback(messageId: number): Promise<unknown> {
+    const res = await fetch(`/api/messages/${messageId}/feedback`, {
+      method: "DELETE",
     });
     return handle(res);
   },

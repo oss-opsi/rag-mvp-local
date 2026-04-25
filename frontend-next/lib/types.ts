@@ -94,11 +94,18 @@ export type Conversation = {
   message_count: number;
 };
 
+export type MessageFeedback = {
+  rating: 1 | -1;
+  comment?: string | null;
+};
+
 export type ChatMessage = {
+  id?: number;
   role: "user" | "assistant";
   content: string;
   sources?: QuerySource[];
   created_at?: string;
+  feedback?: MessageFeedback | null;
 };
 
 export type ConversationDetail = {

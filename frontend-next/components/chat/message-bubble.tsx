@@ -1,10 +1,13 @@
 "use client";
 
 import * as React from "react";
+import { ThumbsUp, ThumbsDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SourceCard } from "@/components/chat/source-card";
 import { MarkdownContent } from "@/components/chat/markdown-content";
-import type { ChatMessage } from "@/lib/types";
+import { api } from "@/lib/api-client";
+import { useToast } from "@/components/ui/use-toast";
+import type { ChatMessage, MessageFeedback } from "@/lib/types";
 
 function TypingDots() {
   return (
@@ -22,6 +25,78 @@ function TypingDots() {
         className="inline-block h-2 w-2 rounded-full bg-muted-foreground/70 [animation:typing-bounce_1.2s_ease-in-out_infinite]"
         style={{ animationDelay: "0.3s" }}
       />
+    </div>
+  );
+}
+
+function FeedbackButtons({
+  messageId,
+  initial,
+}: {
+  messageId: number;
+  initial?: MessageFeedback | null;
+}) {
+  const [feedback, setFeedback] = React.useState<MessageFeedback | null>(
+    initial ?? null,
+  );
+  const [busy, setBusy] = React.useState(false);
+  const { toast } = useToast();
+
+  const apply = async (rating: 1 | -1) => {
+    if (busy) return;
+    setBusy(true);
+    const previous = feedback;
+    try {
+      // Toggle off si on reclique sur le même pouce.
+      if (feedback?.rating === rating) {
+        setFeedback(null);
+        await api.clearMessageFeedback(messageId);
+      } else {
+        setFeedback({ rating, comment: previous?.comment ?? null });
+        await api.setMessageFeedback(messageId, rating, previous?.comment ?? null);
+      }
+    } catch (err) {
+      // rollback
+      setFeedback(previous);
+      const msg =
+        err instanceof Error ? err.message : "Impossible d'enregistrer le feedback";
+      toast({ title: "Erreur", description: msg, variant: "destructive" });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const isUp = feedback?.rating === 1;
+  const isDown = feedback?.rating === -1;
+
+  return (
+    <div className="mt-2 flex items-center gap-1 opacity-70 transition-opacity hover:opacity-100">
+      <button
+        type="button"
+        onClick={() => void apply(1)}
+        disabled={busy}
+        aria-label="Réponse utile"
+        title="Réponse utile"
+        className={cn(
+          "flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-background hover:text-foreground",
+          isUp && "bg-background text-success",
+        )}
+      >
+        <ThumbsUp className="h-3.5 w-3.5" />
+      </button>
+      <button
+        type="button"
+        onClick={() => void apply(-1)}
+        disabled={busy}
+        aria-label="Réponse à améliorer"
+        title="Réponse à améliorer"
+        className={cn(
+          "flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-background hover:text-foreground",
+          isDown && "bg-background text-danger",
+        )}
+      >
+        <ThumbsDown className="h-3.5 w-3.5" />
+      </button>
     </div>
   );
 }
@@ -73,6 +148,11 @@ export function MessageBubble({
               <SourceCard key={i} source={s} index={i} />
             ))}
           </div>
+        ) : null}
+        {/* Boutons de feedback : visibles seulement sur les réponses
+            assistant terminées (avec id retourné par le backend). */}
+        {!isUser && !streaming && message.id && message.content ? (
+          <FeedbackButtons messageId={message.id} initial={message.feedback} />
         ) : null}
       </div>
     </div>

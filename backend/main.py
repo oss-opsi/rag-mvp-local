@@ -1157,7 +1157,7 @@ async def get_conversation(
             status_code=404,
             detail="Conversation introuvable ou accès refusé.",
         )
-    messages = db.get_messages(conv_id)
+    messages = db.get_messages(conv_id, user_id=user_id)
     conv_info = next(c for c in convs if c["id"] == conv_id)
     return {
         "id": conv_id,
@@ -1166,6 +1166,42 @@ async def get_conversation(
         "updated_at": conv_info["updated_at"],
         "messages": messages,
     }
+
+
+class FeedbackRequest(BaseModel):
+    rating: int  # +1 (pouce haut) ou -1 (pouce bas)
+    comment: str | None = None
+
+
+@app.post("/messages/{message_id}/feedback", tags=["Historique"])
+async def post_message_feedback(
+    message_id: int,
+    req: FeedbackRequest,
+    user_id: str = Depends(get_current_user),
+) -> dict:
+    """Enregistre (ou met à jour) le feedback d'un utilisateur sur un message.
+
+    rating doit être +1 (pouce haut) ou -1 (pouce bas).
+    Le commentaire est facultatif.
+    """
+    if req.rating not in (1, -1):
+        raise HTTPException(status_code=400, detail="rating doit être 1 ou -1")
+    db = get_conv_db()
+    try:
+        return db.set_feedback(message_id, user_id, req.rating, req.comment)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.delete("/messages/{message_id}/feedback", tags=["Historique"])
+async def delete_message_feedback(
+    message_id: int,
+    user_id: str = Depends(get_current_user),
+) -> dict:
+    """Supprime le feedback de l'utilisateur sur un message."""
+    db = get_conv_db()
+    removed = db.clear_feedback(message_id, user_id)
+    return {"removed": removed}
 
 
 @app.post("/conversations/{conv_id}/messages", tags=["Historique"])
@@ -1183,13 +1219,13 @@ async def add_message(
             status_code=404,
             detail="Conversation introuvable ou accès refusé.",
         )
-    db.add_message(
+    new_id = db.add_message(
         conversation_id=conv_id,
         role=req.role,
         content=req.content,
         sources=req.sources,
     )
-    return {"status": "ok"}
+    return {"status": "ok", "message_id": new_id}
 
 
 @app.delete("/conversations/{conv_id}", tags=["Historique"])

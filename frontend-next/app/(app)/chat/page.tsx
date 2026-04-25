@@ -253,7 +253,21 @@ export default function ChatPage() {
       );
 
       if (convId !== null) {
-        await api.postMessage(convId, "assistant", accumulated, sources);
+        const result = await api.postMessage(convId, "assistant", accumulated, sources);
+        if (result?.message_id !== undefined) {
+          const newId = result.message_id;
+          setDetail((d) => {
+            if (!d) return d;
+            const msgs = [...d.messages];
+            for (let i = msgs.length - 1; i >= 0; i--) {
+              if (msgs[i].role === "assistant" && msgs[i].id === undefined) {
+                msgs[i] = { ...msgs[i], id: newId };
+                break;
+              }
+            }
+            return { ...d, messages: msgs };
+          });
+        }
       }
       if (isNew) {
         await reloadList();
