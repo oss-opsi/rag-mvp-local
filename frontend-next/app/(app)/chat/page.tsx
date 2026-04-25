@@ -383,8 +383,8 @@ export default function ChatPage() {
         ) : null}
       </header>
 
-      <div ref={scrollRef} className="flex-1 overflow-auto">
-        <div className="mx-auto flex max-w-3xl flex-col gap-4 px-4 py-4 md:p-6">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto overflow-x-hidden">
+        <div className="mx-auto flex min-w-0 max-w-3xl flex-col gap-4 px-4 py-4 md:p-6">
           {loadingDetail ? (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
