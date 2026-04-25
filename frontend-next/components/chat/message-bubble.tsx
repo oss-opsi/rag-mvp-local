@@ -6,6 +6,26 @@ import { SourceCard } from "@/components/chat/source-card";
 import { MarkdownContent } from "@/components/chat/markdown-content";
 import type { ChatMessage } from "@/lib/types";
 
+function TypingDots() {
+  return (
+    <div
+      className="flex items-center gap-1.5 py-1"
+      role="status"
+      aria-label="Rédaction de la réponse en cours"
+    >
+      <span className="inline-block h-2 w-2 rounded-full bg-muted-foreground/70 [animation:typing-bounce_1.2s_ease-in-out_infinite]" />
+      <span
+        className="inline-block h-2 w-2 rounded-full bg-muted-foreground/70 [animation:typing-bounce_1.2s_ease-in-out_infinite]"
+        style={{ animationDelay: "0.15s" }}
+      />
+      <span
+        className="inline-block h-2 w-2 rounded-full bg-muted-foreground/70 [animation:typing-bounce_1.2s_ease-in-out_infinite]"
+        style={{ animationDelay: "0.3s" }}
+      />
+    </div>
+  );
+}
+
 export function MessageBubble({
   message,
   streaming = false,
@@ -35,10 +55,16 @@ export function MessageBubble({
           </div>
         ) : (
           <div className="min-w-0">
-            <MarkdownContent>{message.content || ""}</MarkdownContent>
-            {streaming ? (
-              <span className="ml-0.5 inline-block h-3 w-1.5 animate-pulse bg-foreground align-baseline" />
-            ) : null}
+            {streaming && !message.content ? (
+              <TypingDots />
+            ) : (
+              <>
+                <MarkdownContent>{message.content || ""}</MarkdownContent>
+                {streaming ? (
+                  <span className="ml-0.5 inline-block h-3 w-1.5 animate-pulse bg-foreground align-baseline" />
+                ) : null}
+              </>
+            )}
           </div>
         )}
         {!isUser && message.sources && message.sources.length > 0 ? (
