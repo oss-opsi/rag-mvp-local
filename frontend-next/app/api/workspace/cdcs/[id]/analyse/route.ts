@@ -1,7 +1,9 @@
 import { fetchBackend } from "@/lib/api-server";
 
 export const runtime = "nodejs";
-export const maxDuration = 900;
+// L'endpoint backend est désormais asynchrone : il met le job en file et
+// répond immédiatement (202). On garde un timeout court pour la requête.
+export const maxDuration = 60;
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -13,7 +15,7 @@ export async function POST(request: Request, ctx: Ctx): Promise<Response> {
     {
       method: "POST",
       body: formData as unknown as BodyInit,
-      timeoutMs: 900_000,
+      timeoutMs: 60_000,
     }
   );
   const text = await res.text();

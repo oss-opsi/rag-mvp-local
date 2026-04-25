@@ -77,7 +77,7 @@ from rag.gap_analysis import (
     corpus_fingerprint as gap_corpus_fingerprint,
     run_gap_analysis,
 )
-from rag import workspace, ingestion_jobs
+from rag import workspace, ingestion_jobs, gap_analysis_jobs
 from rag.config import (
     BM25_DIR,
     CONVERSATIONS_DB_PATH,
@@ -108,6 +108,7 @@ Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
 Path(BM25_DIR).mkdir(parents=True, exist_ok=True)
 workspace.init_db()
 ingestion_jobs.init_db()
+gap_analysis_jobs.init_db()
 
 
 def _cleanup_mismatched_embedding_collections() -> None:
@@ -285,9 +286,66 @@ app.add_middleware(
 ingestion_jobs.configure(ingest_callable=ingest_file, qdrant_url=QDRANT_URL)
 
 
+async def _run_gap_analysis_for_job(
+    *,
+    cdc_id: int,
+    user_id: str,
+    openai_api_key: str,
+    force_refresh: bool,
+) -> dict:
+    """Callable injectée dans gap_analysis_jobs : exécute run_gap_analysis
+    et persiste l'analyse en base. Retourne {analysis_id, report}.
+    """
+    cdc = workspace.get_cdc(user_id, cdc_id)
+    if not cdc:
+        raise ValueError("CDC introuvable.")
+    path = cdc.get("original_path") or ""
+    if not path or not os.path.exists(path):
+        raise ValueError("Fichier original indisponible.")
+    corpus = load_bm25_corpus(user_id)
+    if not corpus:
+        raise ValueError(
+            "Aucun document indexé pour cet utilisateur. Veuillez d'abord "
+            "indexer vos documents produit avant de lancer une analyse d'écarts."
+        )
+    if not openai_api_key:
+        raise ValueError("Clé API OpenAI manquante.")
+
+    report = await run_gap_analysis(
+        cdc_file_path=path,
+        cdc_ext=cdc["ext"],
+        cdc_filename=cdc["filename"],
+        user_id=user_id,
+        openai_api_key=openai_api_key,
+        qdrant_url=QDRANT_URL,
+        force_refresh=force_refresh,
+    )
+    analysis_id: Optional[int] = None
+    try:
+        analysis_id = workspace.save_analysis(
+            cdc_id=cdc_id,
+            report=report,
+            pipeline_version=GAP_PIPELINE_VERSION,
+            corpus_fingerprint=gap_corpus_fingerprint(user_id),
+        )
+        report["analysis_id"] = analysis_id
+    except Exception:
+        logger.exception("Failed to persist analysis for CDC %s", cdc_id)
+    report["cdc_id"] = cdc_id
+    return {"analysis_id": analysis_id, "report": report}
+
+
+gap_analysis_jobs.configure(run_callable=_run_gap_analysis_for_job)
+
+
 @app.on_event("startup")
 def _start_ingestion_worker() -> None:
     ingestion_jobs.start_worker_on_boot()
+
+
+@app.on_event("startup")
+def _start_gap_analysis_worker() -> None:
+    gap_analysis_jobs.start_worker_on_boot()
 
 # ---------------------------------------------------------------------------
 # Auth dependency
@@ -1282,14 +1340,20 @@ def workspace_delete_cdc(
     return {"deleted": True, "cdc_id": cdc_id}
 
 
-@app.post("/workspace/cdcs/{cdc_id}/analyse", tags=["Workspace"])
-async def workspace_analyse_cdc(
+@app.post("/workspace/cdcs/{cdc_id}/analyse", tags=["Workspace"], status_code=202)
+def workspace_analyse_cdc(
     cdc_id: int,
     openai_api_key: str = Form(""),
     force_refresh: bool = Form(False),
     authorization: str = Header(None),
 ) -> dict:
-    """Lance l'analyse d'écarts sur un CDC persisté, et stocke le rapport."""
+    """Met en file une analyse d'écarts pour un CDC persisté.
+
+    Le traitement est asynchrone (worker en arrière-plan) car les embeddings
+    bge-m3 sur CPU peuvent dépasser le timeout HTTP. Le client doit poller
+    `/analysis-jobs/{job_id}` jusqu'à status `done` ou `error`, puis lire
+    `report` dans la réponse pour afficher le rapport.
+    """
     user_id = get_current_user(authorization)
     cdc = workspace.get_cdc(user_id, cdc_id)
     if not cdc:
@@ -1321,39 +1385,57 @@ async def workspace_analyse_cdc(
     if not path or not os.path.exists(path):
         raise HTTPException(status_code=410, detail="Fichier original indisponible.")
 
+    # Évite les doublons : si un job est déjà en file ou en cours pour ce CDC,
+    # on le renvoie tel quel.
+    existing = gap_analysis_jobs.find_active_job_for_cdc(user_id, cdc_id)
+    if existing:
+        existing["reused"] = True
+        return existing
+
     try:
-        report = await run_gap_analysis(
-            cdc_file_path=path,
-            cdc_ext=cdc["ext"],
-            cdc_filename=cdc["filename"],
+        job = gap_analysis_jobs.enqueue_job(
             user_id=user_id,
+            cdc_id=cdc_id,
             openai_api_key=effective_key,
-            qdrant_url=QDRANT_URL,
-            force_refresh=force_refresh,
+            force_refresh=bool(force_refresh),
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
-        logger.exception("Gap analysis failed for CDC %s", cdc_id)
+        logger.exception("Failed to enqueue gap analysis job for CDC %s", cdc_id)
         raise HTTPException(
             status_code=500,
-            detail=f"Erreur pendant l'analyse d'écarts : {exc}",
+            detail=f"Impossible d'enfiler l'analyse : {exc}",
         )
+    return job
 
-    # Persist analysis in workspace DB
-    try:
-        analysis_id = workspace.save_analysis(
-            cdc_id=cdc_id,
-            report=report,
-            pipeline_version=GAP_PIPELINE_VERSION,
-            corpus_fingerprint=gap_corpus_fingerprint(user_id),
-        )
-        report["analysis_id"] = analysis_id
-    except Exception as exc:
-        logger.exception("Failed to persist analysis for CDC %s", cdc_id)
 
-    report["cdc_id"] = cdc_id
-    return report
+@app.get("/analysis-jobs", tags=["Workspace"])
+def list_analysis_jobs(
+    status_filter: Optional[str] = Query(
+        None,
+        alias="status",
+        description="Filtre (CSV) sur statuts : queued,running,done,error",
+    ),
+    cdc_id: Optional[int] = Query(None, description="Filtre par CDC."),
+    limit: int = Query(50, ge=1, le=200),
+    user_id: str = Depends(get_current_user),
+) -> dict:
+    """Liste les jobs d'analyse de l'utilisateur, du plus récent au plus ancien."""
+    jobs = gap_analysis_jobs.list_jobs(
+        user_id, status=status_filter, cdc_id=cdc_id, limit=limit
+    )
+    return {"jobs": jobs}
+
+
+@app.get("/analysis-jobs/{job_id}", tags=["Workspace"])
+def get_analysis_job(
+    job_id: int,
+    user_id: str = Depends(get_current_user),
+) -> dict:
+    """Récupère l'état d'un job d'analyse (pour polling)."""
+    job = gap_analysis_jobs.get_job(user_id, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job d'analyse introuvable.")
+    return job
 
 
 # ---------------------------------------------------------------------------

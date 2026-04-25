@@ -1,4 +1,5 @@
 import type {
+  AnalysisJob,
   ApiKeyInfo,
   Client,
   ClientCdcsResponse,
@@ -8,7 +9,6 @@ import type {
   ConversationDetail,
   IngestionJob,
   QueryResponse,
-  Report,
   UploadResponse,
   User,
 } from "./types";
@@ -239,7 +239,7 @@ export const api = {
     return handle(res);
   },
 
-  async analyseCdc(id: number, forceRefresh = false): Promise<Report> {
+  async analyseCdc(id: number, forceRefresh = false): Promise<AnalysisJob> {
     const fd = new FormData();
     fd.append("openai_api_key", "");
     fd.append("force_refresh", forceRefresh ? "true" : "false");
@@ -247,6 +247,24 @@ export const api = {
       method: "POST",
       body: fd,
     });
-    return handle<Report>(res);
+    return handle<AnalysisJob>(res);
+  },
+
+  async analysisJob(id: number): Promise<AnalysisJob> {
+    const res = await fetch(`/api/analysis-jobs/${id}`);
+    return handle<AnalysisJob>(res);
+  },
+
+  async analysisJobs(opts?: {
+    statusFilter?: string;
+    cdcId?: number;
+  }): Promise<AnalysisJob[]> {
+    const params = new URLSearchParams();
+    if (opts?.statusFilter) params.set("status", opts.statusFilter);
+    if (opts?.cdcId !== undefined) params.set("cdc_id", String(opts.cdcId));
+    const qs = params.toString() ? `?${params.toString()}` : "";
+    const res = await fetch(`/api/analysis-jobs${qs}`);
+    const data = await handle<{ jobs: AnalysisJob[] }>(res);
+    return data.jobs || [];
   },
 };

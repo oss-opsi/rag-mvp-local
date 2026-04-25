@@ -14,6 +14,7 @@ import { PipelineBadges } from "@/components/pipeline-badges";
 import { ClientsSidebar } from "./components/clients-sidebar";
 import { CdcReport } from "./components/cdc-report";
 import type {
+  AnalysisJob,
   Cdc,
   CdcDetail,
   Client,
@@ -199,32 +200,92 @@ export default function AnalysePage() {
     }
   };
 
+  // Réf. du job en cours pour permettre l'annulation logique du polling
+  // (changement de CDC, démontage du composant).
+  const pollingRef = React.useRef<{
+    jobId: number;
+    cdcId: number;
+    cancelled: boolean;
+  } | null>(null);
+
+  const finishAnalyseFromJob = React.useCallback(
+    async (job: AnalysisJob) => {
+      if (job.status === "done" && job.report) {
+        const rpt = job.report;
+        const requirements: Requirement[] = rpt.requirements || [];
+        const summary: AnalysisSummary = normalizeSummary(
+          rpt.summary,
+          requirements
+        );
+        setReport({
+          filename: rpt.filename,
+          summary,
+          requirements,
+          pipeline_version: rpt.pipeline_version,
+          analysis_id: rpt.analysis_id ?? job.analysis_id ?? undefined,
+          cdc_id: rpt.cdc_id ?? job.cdc_id,
+        });
+        if (selectedClientId !== null) await reloadCdcs(selectedClientId);
+        await reloadCdcDetail(job.cdc_id);
+        toast({ title: "Analyse terminée" });
+      } else if (job.status === "error") {
+        toast({
+          title: "Erreur d'analyse",
+          description: job.error || "Échec de l'analyse.",
+          variant: "destructive",
+        });
+      }
+    },
+    [reloadCdcs, reloadCdcDetail, selectedClientId, toast]
+  );
+
+  const pollAnalysisJob = React.useCallback(
+    async (jobId: number, cdcId: number) => {
+      const ref = { jobId, cdcId, cancelled: false };
+      pollingRef.current = ref;
+      const POLL_INTERVAL_MS = 3000;
+      while (!ref.cancelled) {
+        try {
+          const job = await api.analysisJob(jobId);
+          if (ref.cancelled) return;
+          if (job.status === "done" || job.status === "error") {
+            await finishAnalyseFromJob(job);
+            return;
+          }
+        } catch (err) {
+          const msg =
+            err instanceof Error ? err.message : "Erreur de polling";
+          toast({
+            title: "Erreur",
+            description: msg,
+            variant: "destructive",
+          });
+          return;
+        }
+        await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+      }
+    },
+    [finishAnalyseFromJob, toast]
+  );
+
   const handleAnalyse = async (force = false) => {
     if (selectedCdcId === null) return;
     setAnalysing(true);
     const t = toast({
       title: "Analyse en cours",
       description:
-        "Cela peut prendre plusieurs minutes, ne fermez pas l'onglet.",
+        "Le traitement tourne en arrière-plan. Vous pouvez fermer ou "
+        + "naviguer ailleurs, le rapport s'affichera à votre retour.",
     });
     try {
-      const rpt = await api.analyseCdc(selectedCdcId, force);
-      const requirements: Requirement[] = rpt.requirements || [];
-      const summary: AnalysisSummary = normalizeSummary(
-        rpt.summary,
-        requirements
-      );
-      setReport({
-        filename: rpt.filename,
-        summary,
-        requirements,
-        pipeline_version: rpt.pipeline_version,
-        analysis_id: rpt.analysis_id,
-        cdc_id: rpt.cdc_id,
-      });
-      if (selectedClientId !== null) await reloadCdcs(selectedClientId);
-      await reloadCdcDetail(selectedCdcId);
-      toast({ title: "Analyse terminée" });
+      const job = await api.analyseCdc(selectedCdcId, force);
+      if (job.status === "done" && job.report) {
+        await finishAnalyseFromJob(job);
+      } else if (job.status === "error") {
+        await finishAnalyseFromJob(job);
+      } else {
+        await pollAnalysisJob(job.id, selectedCdcId);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Erreur d'analyse";
       toast({ title: "Erreur", description: msg, variant: "destructive" });
@@ -233,6 +294,39 @@ export default function AnalysePage() {
       setAnalysing(false);
     }
   };
+
+  // À la sélection d'un CDC, reprendre un éventuel job actif (queued/running)
+  // pour ce CDC. Permet de retrouver l'analyse en cours après un refresh ou
+  // une navigation.
+  React.useEffect(() => {
+    if (selectedCdcId === null) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const jobs = await api.analysisJobs({
+          statusFilter: "queued,running",
+          cdcId: selectedCdcId,
+        });
+        if (cancelled) return;
+        if (jobs.length > 0) {
+          const job = jobs[0]!;
+          setAnalysing(true);
+          toast({
+            title: "Analyse en cours",
+            description: "Reprise du suivi de l'analyse en arrière-plan.",
+          });
+          await pollAnalysisJob(job.id, selectedCdcId);
+          if (!cancelled) setAnalysing(false);
+        }
+      } catch {
+        // silencieux : pas bloquant
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (pollingRef.current) pollingRef.current.cancelled = true;
+    };
+  }, [selectedCdcId, pollAnalysisJob, toast]);
 
   // Context panel: clients list
   const contextPanelContent = (

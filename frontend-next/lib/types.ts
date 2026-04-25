@@ -42,6 +42,23 @@ export type UploadResponse = {
   message: string;
 };
 
+export type AnalysisJobStatus = "queued" | "running" | "done" | "error";
+
+export type AnalysisJob = {
+  id: number;
+  user_id: string;
+  cdc_id: number;
+  status: AnalysisJobStatus;
+  force_refresh: boolean;
+  analysis_id: number | null;
+  report: Report | null;
+  error: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  reused?: boolean;
+};
+
 export type QuerySource = {
   text: string;
   source: string;
