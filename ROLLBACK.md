@@ -2,10 +2,10 @@
 
 ## Tag de référence
 
-**`v0.9.0-mvp`** — commit `b1bd582`
+**`v3.9.0-stable`** — commit `b1bd582`
 État stable du MVP au 26 avril 2026, avant migration Next.js + intégration sources publiques.
 
-URL GitHub : https://github.com/oss-opsi/rag-mvp-local/releases/tag/v0.9.0-mvp
+URL GitHub : https://github.com/oss-opsi/rag-mvp-local/releases/tag/v3.9.0-stable
 
 ## Que contient ce tag
 
@@ -31,7 +31,7 @@ git branch backup-avant-rollback-$(date +%Y%m%d-%H%M%S)
 
 # Revenir au tag stable
 git fetch --tags
-git checkout v0.9.0-mvp
+git checkout v3.9.0-stable
 
 # Réinstaller les dépendances figées à ce tag
 pip install -r requirements.txt
