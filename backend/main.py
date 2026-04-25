@@ -364,6 +364,51 @@ def _bootstrap_first_admin() -> None:
     except Exception as exc:  # pragma: no cover - best effort
         logging.getLogger(__name__).warning("first-admin bootstrap failed: %s", exc)
 
+
+@app.on_event("startup")
+def _warmup_models() -> None:
+    """Pre-load the embedding and reranker models in a background thread so
+    the first user request doesn't pay the cold-start latency (~25-30s for
+    bge-reranker-v2-m3, several seconds for bge-m3).
+
+    Runs as a daemon thread so it does not block uvicorn startup or the
+    container healthcheck — the API is reachable immediately, and the first
+    request that arrives during warm-up will simply wait on the singleton
+    lock as it would have anyway.
+    """
+    import threading
+    import time
+
+    log = logging.getLogger(__name__)
+
+    def _do_warmup() -> None:
+        t0 = time.time()
+        # Embedding model: HuggingFaceEmbeddings (bge-m3, ~2 GB)
+        try:
+            from rag.ingest import get_embeddings
+
+            emb = get_embeddings()
+            # Force a real encode so the model weights are actually paged in
+            emb.embed_query("warmup")
+            log.info("warmup: embedding model ready in %.1fs", time.time() - t0)
+        except Exception as exc:  # pragma: no cover - best effort
+            log.warning("warmup: embedding model failed: %s", exc)
+
+        # Cross-encoder reranker (bge-reranker-v2-m3, ~600 MB)
+        try:
+            from rag.reranker import _get_cross_encoder
+
+            t1 = time.time()
+            ce = _get_cross_encoder()
+            ce.predict([("warmup", "warmup")])
+            log.info("warmup: reranker ready in %.1fs", time.time() - t1)
+        except Exception as exc:  # pragma: no cover - best effort
+            log.warning("warmup: reranker failed: %s", exc)
+
+        log.info("warmup: complete in %.1fs", time.time() - t0)
+
+    threading.Thread(target=_do_warmup, name="model-warmup", daemon=True).start()
+
 # ---------------------------------------------------------------------------
 # Auth dependency
 # ---------------------------------------------------------------------------
