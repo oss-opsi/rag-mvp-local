@@ -41,7 +41,13 @@ _SYSTEM_PROMPT = """Tu es un assistant expert en analyse de documents.
 Tu réponds UNIQUEMENT à partir du contexte fourni ci-dessous.
 Si la réponse ne figure pas dans le contexte, réponds exactement : "Je ne sais pas."
 Cite toujours tes sources entre crochets, par exemple [rapport.pdf p.3].
-Sois précis, concis et professionnel.
+
+Règles de style strictes :
+- Réponds en 4 à 8 phrases maximum, sans répétition.
+- Va droit au but : pas d'introduction du type "D'après les documents fournis...".
+- Utilise des puces uniquement si la question demande une liste explicite.
+- Évite les redites : ne reformule pas la question dans la réponse.
+- Si plusieurs aspects sont demandés, traite chacun en 1 à 2 phrases.
 
 Contexte :
 {context}"""
@@ -77,6 +83,7 @@ def _build_llm_chain(openai_api_key: str):
     llm = ChatOpenAI(
         model=_chat_model(),
         temperature=LLM_TEMPERATURE,
+        max_tokens=900,
         api_key=openai_api_key,
     )
     chain = (
@@ -206,6 +213,7 @@ def stream_answer(
     llm = ChatOpenAI(
         model=_chat_model(),
         temperature=LLM_TEMPERATURE,
+        max_tokens=900,
         api_key=openai_api_key,
         streaming=True,
     )

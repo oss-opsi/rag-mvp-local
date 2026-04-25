@@ -162,7 +162,7 @@ export const api = {
    */
   async queryStream(
     question: string,
-    k = 10,
+    k = 6,
     rerank = true,
     signal?: AbortSignal
   ): Promise<Response> {
