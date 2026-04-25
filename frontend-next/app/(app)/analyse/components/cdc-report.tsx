@@ -125,7 +125,7 @@ export function CdcReport({
 
   return (
     <div className="flex h-full flex-col">
-      <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border bg-background px-6">
+      <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border bg-background px-4 md:px-6">
         <div className="flex min-w-0 items-center gap-3">
           <h1 className="truncate text-base font-semibold">{filename}</h1>
           <Badge variant={statusBadgeVariant}>
@@ -145,8 +145,8 @@ export function CdcReport({
         </div>
       </header>
 
-      <div className="flex min-h-0 flex-1">
-        <aside className="sticky top-14 flex w-80 shrink-0 flex-col gap-4 self-start border-r border-border p-6">
+      <div className="flex min-h-0 flex-1 flex-col md:flex-row">
+        <aside className="flex w-full shrink-0 flex-col gap-4 self-start border-b border-border p-4 md:sticky md:top-14 md:w-80 md:border-b-0 md:border-r md:p-6">
           <div className="flex justify-center">
             <CoverageDonut percent={coveragePercent} />
           </div>
@@ -228,7 +228,7 @@ export function CdcReport({
         </aside>
 
         <section className="flex min-w-0 flex-1 flex-col">
-          <div className="sticky top-14 z-10 flex flex-wrap items-center gap-2 border-b border-border bg-background px-6 py-3">
+          <div className="sticky top-14 z-10 flex flex-wrap items-center gap-2 border-b border-border bg-background px-4 py-3 md:px-6">
             {STATUS_CHIPS.map((chip) => (
               <button
                 key={chip.key}
@@ -284,7 +284,7 @@ export function CdcReport({
 
           <div className="flex-1 overflow-auto">
             {filtered.length === 0 ? (
-              <div className="flex h-full items-center justify-center p-10 text-sm text-muted-foreground">
+              <div className="flex h-full items-center justify-center p-6 text-sm text-muted-foreground md:p-10">
                 Aucune exigence ne correspond aux filtres.
               </div>
             ) : (

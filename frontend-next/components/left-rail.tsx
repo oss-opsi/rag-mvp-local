@@ -39,7 +39,24 @@ const NAV: NavItem[] = [
   { href: "/documents", label: "Documents indexés", icon: FileText },
 ];
 
+/**
+ * Rail latéral (72px) — masqué sur mobile (<md). Sur mobile il est ouvert via
+ * le bouton hamburger de la barre mobile (cf. `MobileNavBar`), qui réutilise
+ * <LeftRailContent /> pour afficher la nav dans un Sheet.
+ */
 export function LeftRail() {
+  return (
+    <aside className="hidden h-full w-[72px] shrink-0 flex-col items-center border-r border-border bg-background md:flex">
+      <LeftRailContent />
+    </aside>
+  );
+}
+
+export function LeftRailContent({
+  onNavigate,
+}: {
+  onNavigate?: () => void;
+}) {
   const pathname = usePathname();
   const router = useRouter();
   const { user } = useAppShell();
@@ -50,13 +67,14 @@ export function LeftRail() {
     } catch {
       // ignore
     }
+    onNavigate?.();
     router.push("/login");
     router.refresh();
   };
 
   return (
     <TooltipProvider delayDuration={200}>
-      <aside className="flex h-full w-[72px] shrink-0 flex-col items-center border-r border-border bg-background">
+      <div className="flex h-full w-full flex-col items-center">
         <div className="flex h-14 w-full items-center justify-center border-b border-border">
           <span className="text-sm font-semibold tracking-tight">Opsidium</span>
         </div>
@@ -71,6 +89,7 @@ export function LeftRail() {
                   <Link
                     href={item.href}
                     aria-label={item.label}
+                    onClick={onNavigate}
                     className={cn(
                       "relative flex h-11 w-11 items-center justify-center rounded-md text-muted-foreground transition-colors",
                       active
@@ -110,7 +129,11 @@ export function LeftRail() {
                 </>
               ) : null}
               <DropdownMenuItem asChild>
-                <Link href="/settings" className="flex items-center gap-2">
+                <Link
+                  href="/settings"
+                  onClick={onNavigate}
+                  className="flex items-center gap-2"
+                >
                   <Settings className="h-4 w-4" />
                   Paramètres
                 </Link>
@@ -128,7 +151,7 @@ export function LeftRail() {
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
-      </aside>
+      </div>
     </TooltipProvider>
   );
 }

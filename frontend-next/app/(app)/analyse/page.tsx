@@ -266,7 +266,7 @@ export default function AnalysePage() {
       <>
         {contextPanelContent}
         <div className="flex h-full flex-col">
-          <header className="flex h-14 shrink-0 items-center border-b border-border px-6">
+          <header className="flex h-14 shrink-0 items-center border-b border-border px-4 md:px-6">
             <div className="text-sm font-semibold">
               Analyse
               <span className="mx-1.5 text-muted-foreground">—</span>
@@ -275,7 +275,7 @@ export default function AnalysePage() {
               </span>
             </div>
           </header>
-          <div className="flex flex-1 items-center justify-center p-10">
+          <div className="flex flex-1 items-center justify-center p-6 md:p-10">
             <div className="max-w-md text-center">
               <h2 className="mb-2 text-lg font-semibold">
                 Sélectionnez un client
@@ -297,7 +297,7 @@ export default function AnalysePage() {
       <>
         {contextPanelContent}
         <div className="flex h-full flex-col">
-        <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-6">
+        <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-4 md:px-6">
           <div className="min-w-0 flex-1 truncate text-sm font-semibold">
             Analyse
             <span className="mx-1.5 text-muted-foreground">—</span>
@@ -313,7 +313,7 @@ export default function AnalysePage() {
           />
         </header>
 
-        <div className="flex-1 overflow-auto p-6">
+        <div className="flex-1 overflow-auto p-4 md:p-6">
           {loadingCdcs ? (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -426,7 +426,7 @@ export default function AnalysePage() {
       <>
         {contextPanelContent}
         <div className="flex h-full flex-col">
-          <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-6">
+          <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-4 md:px-6">
             <div className="min-w-0 flex-1 truncate text-sm font-semibold">
               Analyse
               <span className="mx-1.5 text-muted-foreground">—</span>
@@ -436,7 +436,7 @@ export default function AnalysePage() {
             </div>
             <StatusPill status={cdcDetail.status} />
           </header>
-          <div className="flex flex-1 items-center justify-center p-10">
+          <div className="flex flex-1 items-center justify-center p-6 md:p-10">
             <div className="max-w-md text-center">
               <h2 className="mb-2 text-lg font-semibold">Analyse non réalisée</h2>
               <p className="mb-6 text-sm text-muted-foreground">

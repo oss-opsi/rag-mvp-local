@@ -331,7 +331,7 @@ export default function ChatPage() {
           </ScrollArea>
         </div>
       </ContextPanel>
-      <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-6">
+      <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-4 md:px-6">
         <div className="min-w-0 flex-1 truncate text-sm font-semibold">
           Chat
           <span className="mx-1.5 text-muted-foreground">—</span>
@@ -384,7 +384,7 @@ export default function ChatPage() {
       </header>
 
       <div ref={scrollRef} className="flex-1 overflow-auto">
-        <div className="mx-auto flex max-w-3xl flex-col gap-4 p-6">
+        <div className="mx-auto flex max-w-3xl flex-col gap-4 px-4 py-4 md:p-6">
           {loadingDetail ? (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />

@@ -120,7 +120,7 @@ export default function SettingsPage() {
           </nav>
         </div>
       </ContextPanel>
-      <header className="flex h-14 shrink-0 items-center border-b border-border px-6">
+      <header className="flex h-14 shrink-0 items-center border-b border-border px-4 md:px-6">
         <div className="text-sm font-semibold">
           Paramètres
           {user?.name ? (
@@ -135,7 +135,7 @@ export default function SettingsPage() {
       </header>
 
       <div className="flex-1 overflow-auto">
-        <div className="mx-auto flex max-w-2xl flex-col gap-6 p-6">
+        <div className="mx-auto flex max-w-2xl flex-col gap-6 px-4 py-5 md:p-6">
           <section
             id="compte"
             className="rounded-lg border border-border bg-background p-5"

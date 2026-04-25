@@ -299,19 +299,26 @@ export default function DocumentsPage() {
           }}
           disabled={loading}
           title="Actualiser la liste des documents et des indexations"
+          aria-label="Actualiser"
         >
           <RefreshCw
-            className={cn("mr-1.5 h-3.5 w-3.5", loading && "animate-spin")}
+            className={cn(
+              "h-3.5 w-3.5 sm:mr-1.5",
+              loading && "animate-spin",
+            )}
           />
-          Actualiser
+          <span className="hidden sm:inline">Actualiser</span>
         </Button>
         <Button
           size="sm"
           onClick={openPicker}
           disabled={uploading}
+          aria-label="Importer"
         >
-          <Upload className="mr-1.5 h-3.5 w-3.5" />
-          {uploading ? "Envoi..." : "Importer"}
+          <Upload className="h-3.5 w-3.5 sm:mr-1.5" />
+          <span className="hidden sm:inline">
+            {uploading ? "Envoi..." : "Importer"}
+          </span>
         </Button>
         <input
           ref={fileInputRef}
@@ -328,7 +335,7 @@ export default function DocumentsPage() {
 
       {/* ──────────── Zone de travail ──────────── */}
       <div className="flex-1 overflow-auto">
-        <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 p-6">
+        <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-4 py-5 md:p-6">
           <div>
             <h2 className="text-xl font-semibold tracking-tight">
               Ajouter des documents
