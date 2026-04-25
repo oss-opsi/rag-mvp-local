@@ -215,7 +215,12 @@ export default function ChatPage() {
           const frame = buffer.slice(0, idx);
           buffer = buffer.slice(idx + 2);
           if (!frame.startsWith("data:")) continue;
-          const payload = frame.slice(5).trimStart();
+          // SSE: la spec autorise un seul espace optionnel après 'data:'.
+          // On NE doit PAS faire trimStart() sur le payload entier, sinon
+          // les tokens du LLM qui commencent par un espace (ex. ' world')
+          // perdent leur espace et tous les mots se collent.
+          let payload = frame.slice(5);
+          if (payload.startsWith(" ")) payload = payload.slice(1);
           if (payload === "[DONE]") {
             done = true;
             break;
