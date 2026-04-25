@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { createPortal } from "react-dom";
+import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type Ctx = {
@@ -10,6 +11,8 @@ type Ctx = {
   setHasContent: (b: boolean) => void;
   mobileOpen: boolean;
   setMobileOpen: (b: boolean) => void;
+  desktopCollapsed: boolean;
+  setDesktopCollapsed: (b: boolean) => void;
 };
 
 const ContextPanelCtx = React.createContext<Ctx>({
@@ -18,7 +21,11 @@ const ContextPanelCtx = React.createContext<Ctx>({
   setHasContent: () => {},
   mobileOpen: false,
   setMobileOpen: () => {},
+  desktopCollapsed: false,
+  setDesktopCollapsed: () => {},
 });
+
+const COLLAPSE_STORAGE_KEY = "tellme.contextPanel.collapsed";
 
 /**
  * Provider posé dans AppShell.
@@ -42,10 +49,38 @@ export function ContextPanelProvider({
   const [target, setTarget] = React.useState<HTMLElement | null>(null);
   const [hasContent, setHasContent] = React.useState(false);
   const [mobileOpen, setMobileOpen] = React.useState(false);
+  const [desktopCollapsed, setDesktopCollapsedState] = React.useState(false);
+
+  // Restaure la préférence « replié / déplié » depuis localStorage.
+  React.useEffect(() => {
+    try {
+      const v = window.localStorage.getItem(COLLAPSE_STORAGE_KEY);
+      if (v === "1") setDesktopCollapsedState(true);
+    } catch {
+      /* localStorage indisponible */
+    }
+  }, []);
+
+  const setDesktopCollapsed = React.useCallback((b: boolean) => {
+    setDesktopCollapsedState(b);
+    try {
+      window.localStorage.setItem(COLLAPSE_STORAGE_KEY, b ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   const value = React.useMemo<Ctx>(
-    () => ({ target, hasContent, setHasContent, mobileOpen, setMobileOpen }),
-    [target, hasContent, mobileOpen],
+    () => ({
+      target,
+      hasContent,
+      setHasContent,
+      mobileOpen,
+      setMobileOpen,
+      desktopCollapsed,
+      setDesktopCollapsed,
+    }),
+    [target, hasContent, mobileOpen, desktopCollapsed, setDesktopCollapsed],
   );
 
   // Ferme automatiquement le drawer si on repasse en desktop ou si on navigue.
@@ -76,15 +111,41 @@ export function ContextPanelProvider({
           ref={(el) => {
             if (el && el !== target) setTarget(el);
           }}
+          aria-hidden={desktopCollapsed ? true : undefined}
           className={cn(
             // Mobile : drawer à gauche, par-dessus le contenu (mais sous la barre mobile)
             "absolute inset-y-0 left-0 z-40 flex w-[280px] max-w-[85vw] shrink-0 flex-col overflow-y-auto border-r border-border bg-background transition-transform duration-200",
             mobileOpen ? "translate-x-0" : "-translate-x-full",
             // Desktop : panneau dans le flux, position relative
-            "md:static md:z-auto md:translate-x-0 md:overflow-hidden md:transition-none",
+            "md:static md:z-auto md:translate-x-0 md:transition-[width,border] md:duration-200 md:overflow-hidden",
+            // Repli desktop : largeur 0, contenu masqué, bordure off
+            desktopCollapsed && "md:w-0 md:border-r-0 md:opacity-0 md:pointer-events-none",
           )}
         />
-        <div className="flex h-full min-w-0 flex-1 flex-col">{children}</div>
+        <div className="relative flex h-full min-w-0 flex-1 flex-col">
+          {/* Bouton bascule visible uniquement sur desktop. Placé sur le bord
+              gauche du contenu, vertical centré sur la zone d'entête (h-14). */}
+          {hasContent ? (
+            <button
+              type="button"
+              onClick={() => setDesktopCollapsed(!desktopCollapsed)}
+              aria-label={
+                desktopCollapsed
+                  ? "Déplier le panneau latéral"
+                  : "Rétracter le panneau latéral"
+              }
+              title={desktopCollapsed ? "Déplier" : "Rétracter"}
+              className="absolute left-0 top-3 z-20 hidden h-8 w-6 items-center justify-center rounded-r-md border border-l-0 border-border bg-background text-muted-foreground shadow-sm hover:bg-muted hover:text-foreground md:inline-flex"
+            >
+              {desktopCollapsed ? (
+                <PanelLeftOpen className="h-3.5 w-3.5" />
+              ) : (
+                <PanelLeftClose className="h-3.5 w-3.5" />
+              )}
+            </button>
+          ) : null}
+          {children}
+        </div>
       </div>
     </ContextPanelCtx.Provider>
   );
