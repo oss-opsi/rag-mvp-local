@@ -20,6 +20,16 @@ QDRANT_COLLECTION: str = os.getenv("QDRANT_COLLECTION", "rag_documents")
 EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")
 EMBEDDING_DIM: int = int(os.getenv("EMBEDDING_DIM", "1024"))
 
+# ---------------------------------------------------------------------------
+# Knowledge Base (collection partagée — sources publiques métier)
+# ---------------------------------------------------------------------------
+# Collection Qdrant partagée entre tous les utilisateurs, alimentée par les
+# connecteurs sources publiques (Légifrance, BOSS, DSN-info, etc.).
+# Interrogée en parallèle de la collection privée rag_<user_id>.
+KNOWLEDGE_BASE_COLLECTION: str = os.getenv("KNOWLEDGE_BASE_COLLECTION", "knowledge_base")
+# Active la recherche hybride sur la KB en plus de la collection privée.
+KB_RETRIEVAL_ENABLED: bool = os.getenv("KB_RETRIEVAL_ENABLED", "1") == "1"
+
 # Cross-encoder reranker (v3.7.0) — BAAI/bge-reranker-v2-m3 is multilingual.
 RERANKER_MODEL: str = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-v2-m3")
 # Enable the reranker by default in the gap-analysis pipeline. Set to "0" to

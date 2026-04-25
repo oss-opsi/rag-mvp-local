@@ -26,6 +26,8 @@ from langchain_qdrant import QdrantVectorStore
 
 from .config import (
     EMBEDDING_MODEL,
+    KB_RETRIEVAL_ENABLED,
+    KNOWLEDGE_BASE_COLLECTION,
     QDRANT_COLLECTION,
     QDRANT_URL,
     RETRIEVAL_K,
@@ -60,6 +62,8 @@ class HybridRetriever:
         collection_name: str = QDRANT_COLLECTION,
         user_id: str | None = None,
         rrf_k: int = RRF_K,
+        include_kb: bool = KB_RETRIEVAL_ENABLED,
+        kb_collection: str = KNOWLEDGE_BASE_COLLECTION,
     ) -> None:
         self.qdrant_url = qdrant_url
         self.rrf_k = rrf_k
@@ -70,35 +74,65 @@ class HybridRetriever:
         else:
             self.collection_name = collection_name
             self.user_id = None
+        # Collection partagée « knowledge_base » interrogée en parallèle.
+        self.include_kb = include_kb
+        self.kb_collection = kb_collection
 
     # ------------------------------------------------------------------
     # Dense retrieval
     # ------------------------------------------------------------------
 
-    def _dense_search(
-        self, query: str, k_dense: int
+    def _dense_search_collection(
+        self, query: str, k_dense: int, collection_name: str, scope: str
     ) -> list[tuple[str, dict[str, Any], float]]:
         """
-        Returns list of (text, metadata, score) sorted by descending score.
+        Recherche dense dans une collection donnée.
+        Tague chaque résultat avec scope = 'private' ou 'kb' dans la métadonnée.
         """
         embeddings = get_embeddings()
         client = get_qdrant_client(self.qdrant_url)
         vector_store = QdrantVectorStore(
             client=client,
-            collection_name=self.collection_name,
+            collection_name=collection_name,
             embedding=embeddings,
         )
         try:
             results = vector_store.similarity_search_with_score(query, k=k_dense)
         except Exception as exc:
             logger.warning(
-                "Dense search failed for collection '%s': %s", self.collection_name, exc
+                "Dense search failed for collection '%s': %s", collection_name, exc
             )
             return []
-        return [
-            (doc.page_content, doc.metadata, float(score))
-            for doc, score in results
-        ]
+        out: list[tuple[str, dict[str, Any], float]] = []
+        for doc, score in results:
+            meta = dict(doc.metadata or {})
+            # Tague la provenance pour pouvoir distinguer dans les citations.
+            meta.setdefault("scope", scope)
+            meta.setdefault("collection", collection_name)
+            out.append((doc.page_content, meta, float(score)))
+        return out
+
+    def _dense_search(
+        self, query: str, k_dense: int
+    ) -> list[tuple[str, dict[str, Any], float]]:
+        """
+        Recherche dense sur la collection privée + (optionnel) la KB partagée.
+        Les résultats sont concaténés puis triés par score descendant ;
+        la fusion RRF en aval ré-classe l’ensemble.
+        """
+        private_results = self._dense_search_collection(
+            query, k_dense, self.collection_name, scope="private"
+        )
+        if not self.include_kb:
+            return private_results
+        kb_results = self._dense_search_collection(
+            query, k_dense, self.kb_collection, scope="kb"
+        )
+        # Tri par score descendant pour stabilité du rang
+        merged = sorted(
+            private_results + kb_results, key=lambda r: r[2], reverse=True
+        )
+        return merged
 
     # ------------------------------------------------------------------
     # Sparse retrieval (BM25)
