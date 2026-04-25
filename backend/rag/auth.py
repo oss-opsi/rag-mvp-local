@@ -355,32 +355,6 @@ def delete_user_api_key(username: str) -> None:
     _get_db().delete_api_key(username)
 
 
-def list_users_for_authenticator() -> dict[str, Any]:
-    """
-    Return credentials in the format expected by streamlit-authenticator:
-
-    {
-        "usernames": {
-            "alice": {
-                "email": "alice@example.com",
-                "name": "Alice Dupont",
-                "password": "<bcrypt-hash>",
-            },
-            ...
-        }
-    }
-    """
-    users = _get_db().all_users()
-    usernames: dict[str, Any] = {}
-    for u in users:
-        usernames[u["username"]] = {
-            "email": u["email"],
-            "name": u["name"],
-            "password": u["hashed_password"],
-        }
-    return {"usernames": usernames}
-
-
 # Re-export JWT helpers so callers can do: from rag.auth import create_token
 __all__ = [
     "register_user",
@@ -389,7 +363,6 @@ __all__ = [
     "set_user_api_key",
     "get_user_api_key",
     "delete_user_api_key",
-    "list_users_for_authenticator",
     "change_password",
     "admin_set_password",
     "set_user_role",

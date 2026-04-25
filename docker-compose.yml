@@ -50,7 +50,7 @@ services:
       start_period: 30s
 
   # -----------------------------------------------------------------------
-  # Next.js 15 frontend (v4.0.0 — remplace Streamlit)
+  # Next.js 15 frontend (Tell me)
   # -----------------------------------------------------------------------
   frontend:
     build:

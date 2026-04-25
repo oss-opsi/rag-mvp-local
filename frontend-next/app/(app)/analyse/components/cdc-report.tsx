@@ -244,7 +244,7 @@ export function CdcReport({
 
           <div className="space-y-1 text-xs">
             <div className="font-medium">
-              Pipeline {pipelineVersion || "v3.9.1"}
+              Pipeline {pipelineVersion || "v3.9.0"}
             </div>
             <div className="text-muted-foreground">HyDE · re-pass</div>
             <div className="text-muted-foreground">bge-m3 · reranker v2-m3</div>

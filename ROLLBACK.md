@@ -3,28 +3,28 @@
 ## Tag de référence
 
 **`v3.9.0-stable`** — commit `b1bd582`
-État stable du MVP au 26 avril 2026, avant migration Next.js + intégration sources publiques.
+État stable de Tell me au 26 avril 2026, avant les chantiers v4 (sources publiques + bibliothèque + référentiel).
 
 URL GitHub : https://github.com/oss-opsi/rag-mvp-local/releases/tag/v3.9.0-stable
 
 ## Que contient ce tag
 
-- Backend FastAPI (`:8000`)
-- Frontend Streamlit (`:8501`)
-- Qdrant (`:6333`) avec collections `cdc_client` + `knowledge_base`
-- Pipeline v3.9.1 : HyDE + re-pass + bge-m3 + reranker v2-m3
-- LLM OpenAI GPT-4o-mini (clé fournie au runtime)
-- Authentification simple : daniel / opsidium2026
-- Mono-utilisateur
+- Backend FastAPI v3.1.0 (`:8000`)
+- Frontend Next.js 15 (`:3000`, mappé sur `:8501` host)
+- Qdrant 1.11 (`:6333`) avec collections per-user `rag_<user_id>`
+- Pipeline v3.9.0 : HyDE + re-pass + bge-m3 + reranker v2-m3 + chunker sémantique v2
+- LLM OpenAI GPT-4o-mini (clé saisie par l'utilisateur, chiffrée Fernet)
+- Auth JWT, multi-utilisateurs avec rôles admin/user
+- 7 pages : Login, Indexation, Chat, Analyse, RAGAS, Settings, Users
 
-## Rollback côté code (sur le VPS)
+## Rollback côté code (sur le VPS, déploiement Docker)
 
 ```bash
 # SSH vers le VPS
 ssh -i /home/user/.ssh_rag/id_ed25519 -o StrictHostKeyChecking=no root@178.238.230.178
 
 # Aller dans le repo déployé
-cd /opt/rag-mvp-local   # ou le chemin réel sur le VPS
+cd /opt/rag-mvp-local
 
 # Sauvegarder l'état courant au cas où
 git branch backup-avant-rollback-$(date +%Y%m%d-%H%M%S)
@@ -33,59 +33,60 @@ git branch backup-avant-rollback-$(date +%Y%m%d-%H%M%S)
 git fetch --tags
 git checkout v3.9.0-stable
 
-# Réinstaller les dépendances figées à ce tag
-pip install -r requirements.txt
+# Reconstruire et redémarrer les conteneurs
+docker compose down
+docker compose up -d --build
 
-# Redémarrer les services
-systemctl restart tellme-backend
-systemctl restart tellme-streamlit
-# (ou les noms réels des unités systemd)
+# Vérifier la santé
+curl -s http://localhost:8000/health
 ```
 
-## Rollback côté données (Qdrant + SQLite)
+## Backup avant chantier
 
-Avant de démarrer le développement v1.0, **faire un snapshot** :
+À faire **avant** d'entamer un chantier risqué (refactor, migration, nouvelle source) :
 
 ```bash
 # Sur le VPS
-cd /opt/backups
-mkdir mvp-v0.9.0-$(date +%Y%m%d)
-cd mvp-v0.9.0-$(date +%Y%m%d)
+mkdir -p /opt/backups/$(date +%Y%m%d)
+cd /opt/backups/$(date +%Y%m%d)
 
-# Snapshot Qdrant
-curl -X POST http://localhost:6333/collections/cdc_client/snapshots
-curl -X POST http://localhost:6333/collections/knowledge_base/snapshots
-# Récupérer les fichiers .snapshot dans /qdrant/storage/snapshots/
+# Snapshot des collections Qdrant per-user (lister puis snapshoter chacune)
+curl -s http://localhost:6333/collections | jq -r '.result.collections[].name' | \
+  while read col; do
+    curl -X POST "http://localhost:6333/collections/$col/snapshots"
+  done
+# Les fichiers .snapshot sont produits dans le volume Docker qdrant_storage
+docker cp rag_qdrant:/qdrant/storage/snapshots ./qdrant_snapshots
 
-# Backup SQLite
-cp /opt/rag-mvp-local/data/app.db ./app.db.backup
+# Backup des bases SQLite (volume backend_data)
+docker cp rag_backend:/data ./backend_data_backup
 
-# Backup config / .env
+# Backup .env
 cp /opt/rag-mvp-local/.env ./env.backup
 ```
 
-Pour restaurer en cas de problème :
+## Restauration des données
 
 ```bash
-# Restaurer Qdrant via API
-curl -X PUT 'http://localhost:6333/collections/cdc_client/snapshots/upload' \
-  -H 'Content-Type:multipart/form-data' \
-  -F 'snapshot=@cdc_client-XXX.snapshot'
+# Restaurer une collection Qdrant
+curl -X PUT "http://localhost:6333/collections/<nom>/snapshots/upload" \
+  -H "Content-Type: multipart/form-data" \
+  -F "snapshot=@./qdrant_snapshots/<fichier>.snapshot"
 
-# Restaurer SQLite
-systemctl stop tellme-backend
-cp ./app.db.backup /opt/rag-mvp-local/data/app.db
-systemctl start tellme-backend
+# Restaurer les SQLite
+docker compose stop backend
+docker cp ./backend_data_backup/. rag_backend:/data
+docker compose start backend
 ```
 
-## Stratégie de développement v1.0
+## Stratégie de développement pour les chantiers à venir
 
-Pour limiter le risque pendant le développement :
+Pour limiter le risque :
 
-1. **Branche dédiée** : `git checkout -b v1.0-nextjs` à partir de `main` — la migration ne touche pas la branche `main` tant que la v1.0 n'est pas validée
-2. **Déploiement parallèle** : la v1.0 tourne sur un nouveau port (`:3000` Next.js) en parallèle du MVP existant (`:8501` Streamlit). Les deux cohabitent jusqu'à validation.
-3. **Bascule progressive** : l'utilisateur teste la v1.0 sur `:3000` ; si ça casse, le MVP reste accessible sur `:8501`.
-4. **Tag à chaque étape clé** : `v1.0-alpha`, `v1.0-beta`, `v1.0` pour pouvoir revenir à un état intermédiaire.
+1. **Branche dédiée** par chantier : `git checkout -b chore/cleanup-streamlit`, `feat/connector-legifrance`, etc. — `main` reste sur le tag stable jusqu'à validation
+2. **Tag intermédiaire** à chaque étape clé : `v3.9.1-cleanup`, `v3.10.0-legifrance`, `v3.11.0-boss`, etc.
+3. **Tests manuels** avant merge sur `main` (au minimum : login, upload, chat, analyse CDC sur un CDC connu)
+4. **Rollback en 1 commande** : `git checkout v3.9.0-stable && docker compose up -d --build`
 
 ## Contact / responsable
 

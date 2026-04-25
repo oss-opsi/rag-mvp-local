@@ -1,5 +1,5 @@
 """
-history.py — SQLite-backed conversation history for the standalone RAG app.
+history.py — SQLite-backed conversation history for the Tell me backend.
 
 Schema
 ------
@@ -10,14 +10,13 @@ messages(id INTEGER PK AUTOINCREMENT, conversation_id TEXT FK,
          role TEXT, content TEXT, sources_json TEXT,
          created_at TIMESTAMP)
 
+message_feedback(message_id INTEGER FK, user_id TEXT, rating INTEGER ,
+                 comment TEXT, created_at TIMESTAMP, updated_at TIMESTAMP)
+
 Thread safety
 -------------
-Uses a threading.Lock so that Streamlit's concurrent reruns don't corrupt
-the database.  The connection is created with check_same_thread=False.
-
-Streamlit integration
----------------------
-Call get_conversation_db() to get the singleton (cached via @st.cache_resource).
+Uses a threading.Lock to allow concurrent FastAPI workers to access the same
+SQLite file. The connection is created with check_same_thread=False.
 """
 from __future__ import annotations
 
@@ -309,12 +308,9 @@ class ConversationDB:
 
 
 # ---------------------------------------------------------------------------
-# Streamlit singleton factory
+# Singleton factory
 # ---------------------------------------------------------------------------
 
 def get_conversation_db() -> ConversationDB:
-    """
-    Return the singleton ConversationDB.
-    Import and wrap with @st.cache_resource in the Streamlit app.
-    """
+    """Return a ConversationDB instance (lightweight, can be called per request)."""
     return ConversationDB()
