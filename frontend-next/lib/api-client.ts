@@ -36,6 +36,17 @@ export type RagasResult = {
   aggregate: RagasMetrics;
 };
 
+export type LlmSettings = {
+  llm_chat: string;
+  llm_analysis: string;
+  llm_repass: string;
+};
+
+export type LlmSettingsResponse = {
+  settings: LlmSettings;
+  allowed: string[];
+};
+
 async function handle<T>(res: Response): Promise<T> {
   if (!res.ok) {
     let detail = "Erreur inconnue";
@@ -366,6 +377,23 @@ export const api = {
       { method: "DELETE" },
     );
     return handle<{ ok: boolean }>(res);
+  },
+
+  // Admin LLM settings
+  async adminGetLlmSettings(): Promise<LlmSettingsResponse> {
+    const res = await fetch("/api/admin/settings/llm");
+    return handle<LlmSettingsResponse>(res);
+  },
+
+  async adminSetLlmSettings(
+    values: Partial<LlmSettings>,
+  ): Promise<LlmSettingsResponse> {
+    const res = await fetch("/api/admin/settings/llm", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(values),
+    });
+    return handle<LlmSettingsResponse>(res);
   },
 
   // RAGAS evaluation (multipart CSV upload)

@@ -30,6 +30,17 @@ from langchain_openai import ChatOpenAI
 
 from .chain import _format_context
 from .config import BM25_DIR, DATA_DIR, LLM_MODEL, LLM_TEMPERATURE, QDRANT_URL
+from .settings import get_setting
+
+
+def _analysis_model() -> str:
+    """Return the LLM model selected for the gap analysis (admin setting)."""
+    return get_setting("llm_analysis", LLM_MODEL)
+
+
+def _repass_model() -> str:
+    """Return the LLM model selected for the re-pass on ambiguous verdicts."""
+    return get_setting("llm_repass", "gpt-4o")
 from .ingest import _load_documents, get_embeddings
 from .retriever import get_retriever_for_user
 
@@ -76,9 +87,10 @@ RETRIEVAL_K = 10
 HYDE_ENABLED = True
 HYDE_MAX_CHARS = 600  # cap on hypothesis length to keep latency low
 
-# v3.8.0 — Re-pass on ambiguous verdicts with a stronger LLM (gpt-4o)
+# v3.8.0 — Re-pass on ambiguous verdicts with a stronger LLM.
+# The actual model is read at runtime via _repass_model() (admin setting,
+# defaults to gpt-4o). Kept here as a doc/reference fallback only.
 REPASS_ENABLED = True
-REPASS_MODEL = "gpt-4o"
 REPASS_MAX_PARALLEL = 3
 
 VALID_STATUSES = {"covered", "partial", "missing", "ambiguous"}
@@ -587,7 +599,7 @@ async def extract_requirements(
     3. Merge, deduplicate by title, renumber R001…Rnnn, remap depends_on.
     """
     llm = ChatOpenAI(
-        model=LLM_MODEL,
+        model=_analysis_model(),
         temperature=0.0,
         api_key=openai_api_key,
         model_kwargs={
@@ -1041,8 +1053,9 @@ async def run_gap_analysis(
         return empty_report
 
     # Step 3 — analyse each requirement in parallel
+    analysis_model = _analysis_model()
     llm = ChatOpenAI(
-        model=LLM_MODEL,
+        model=analysis_model,
         temperature=LLM_TEMPERATURE,
         api_key=openai_api_key,
         model_kwargs={
@@ -1054,7 +1067,7 @@ async def run_gap_analysis(
     hyde_llm = None
     if HYDE_ENABLED:
         hyde_llm = ChatOpenAI(
-            model=LLM_MODEL,
+            model=analysis_model,
             temperature=0.2,
             api_key=openai_api_key,
             model_kwargs={"seed": OPENAI_SEED},
@@ -1093,13 +1106,14 @@ async def run_gap_analysis(
             i for i, r in enumerate(analysed) if r.get("status") == "ambiguous"
         ]
         if ambiguous_idx:
+            repass_model = _repass_model()
             logger.info(
                 "Re-pass: %d ambiguous requirement(s) with %s",
-                len(ambiguous_idx), REPASS_MODEL,
+                len(ambiguous_idx), repass_model,
             )
             try:
                 strong_llm = ChatOpenAI(
-                    model=REPASS_MODEL,
+                    model=repass_model,
                     temperature=LLM_TEMPERATURE,
                     api_key=openai_api_key,
                     model_kwargs={
@@ -1128,7 +1142,7 @@ async def run_gap_analysis(
                         req, srcs, ctx, strong_llm, repass_sem,
                     )
                     rejudged["repass_applied"] = True
-                    rejudged["repass_model"] = REPASS_MODEL
+                    rejudged["repass_model"] = repass_model
                     # Preserve HyDE metadata from initial pass
                     if req.get("hyde_used"):
                         rejudged["hyde_used"] = True

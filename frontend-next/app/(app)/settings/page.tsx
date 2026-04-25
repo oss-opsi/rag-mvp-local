@@ -22,6 +22,7 @@ import { PipelineBadges } from "@/components/pipeline-badges";
 import { ContextPanel } from "@/components/context-panel";
 import { useAppShell } from "@/components/app-shell-context";
 import { useToast } from "@/components/ui/use-toast";
+import { LlmModelsCard } from "@/components/llm-models-card";
 import { api } from "@/lib/api-client";
 import type { ApiKeyInfo } from "@/lib/types";
 
@@ -29,6 +30,7 @@ export default function SettingsPage() {
   const router = useRouter();
   const { toast } = useToast();
   const { user } = useAppShell();
+  const isAdmin = user?.role === "admin";
 
   const [keyInfo, setKeyInfo] = React.useState<ApiKeyInfo | null>(null);
   const [loading, setLoading] = React.useState(true);
@@ -117,6 +119,14 @@ export default function SettingsPage() {
             >
               Pipeline
             </a>
+            {isAdmin ? (
+              <a
+                href="#llm-models"
+                className="px-4 py-2 text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+              >
+                Modèles LLM
+              </a>
+            ) : null}
           </nav>
         </div>
       </ContextPanel>
@@ -248,12 +258,26 @@ export default function SettingsPage() {
           >
             <h2 className="mb-3 text-lg font-semibold">Pipeline</h2>
             <p className="mb-3 text-sm text-muted-foreground">
-              Le pipeline d'analyse combine HyDE, un re-pass GPT-4o sur les
-              exigences ambiguës, le modèle d'embedding bge-m3, le reranker
-              v2-m3, et un chunker sémantique version 2.
+              Le pipeline d'analyse combine HyDE, un re-pass sur les exigences
+              ambiguës, le modèle d'embedding bge-m3, le reranker v2-m3, et un
+              chunker sémantique version 2. Les modèles LLM utilisés sont
+              configurables par un administrateur.
             </p>
             <PipelineBadges />
           </section>
+
+          {isAdmin ? (
+            <section
+              id="llm-models"
+              className="rounded-lg border border-border bg-background p-5"
+            >
+              <h2 className="mb-1 text-lg font-semibold">Modèles LLM</h2>
+              <p className="mb-4 text-xs text-muted-foreground">
+                Réservé aux administrateurs.
+              </p>
+              <LlmModelsCard />
+            </section>
+          ) : null}
         </div>
       </div>
     </div>

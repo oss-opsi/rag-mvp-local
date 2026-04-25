@@ -23,6 +23,12 @@ from langchain_core.runnables import RunnablePassthrough
 from langchain_openai import ChatOpenAI
 
 from .config import LLM_MODEL, LLM_TEMPERATURE, QDRANT_URL
+from .settings import get_setting
+
+
+def _chat_model() -> str:
+    """Return the LLM model selected for the chat (admin setting, with env fallback)."""
+    return get_setting("llm_chat", LLM_MODEL)
 from .retriever import HybridRetriever, get_retriever_for_user
 
 logger = logging.getLogger(__name__)
@@ -69,7 +75,7 @@ def _format_context(chunks: list[dict[str, Any]]) -> str:
 def _build_llm_chain(openai_api_key: str):
     """Build and return the LangChain LCEL chain (prompt → LLM → parser)."""
     llm = ChatOpenAI(
-        model=LLM_MODEL,
+        model=_chat_model(),
         temperature=LLM_TEMPERATURE,
         api_key=openai_api_key,
     )
@@ -198,7 +204,7 @@ def stream_answer(
 
     # 4. Build LLM chain and stream
     llm = ChatOpenAI(
-        model=LLM_MODEL,
+        model=_chat_model(),
         temperature=LLM_TEMPERATURE,
         api_key=openai_api_key,
         streaming=True,
@@ -220,7 +226,7 @@ def stream_answer(
 def get_answer_non_streaming(question: str, context: str, openai_api_key: str) -> str:
     """Non-streaming answer — used by RAGAS evaluation."""
     llm = ChatOpenAI(
-        model=LLM_MODEL,
+        model=_chat_model(),
         temperature=LLM_TEMPERATURE,
         api_key=openai_api_key,
         streaming=False,

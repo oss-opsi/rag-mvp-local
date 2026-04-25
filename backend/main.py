@@ -658,6 +658,53 @@ async def admin_delete_user(
 
 
 # ---------------------------------------------------------------------------
+# Admin — application settings (LLM models per usage)
+# ---------------------------------------------------------------------------
+
+from rag.settings import (
+    ALLOWED_MODELS as LLM_ALLOWED_MODELS,
+    get_llm_settings,
+    set_llm_settings,
+)
+
+
+@app.get("/admin/settings/llm", tags=["Admin"])
+async def admin_get_llm_settings(_: str = Depends(require_admin)) -> dict:
+    """Return the current LLM model selection per usage (admin only)."""
+    return {
+        "settings": get_llm_settings(),
+        "allowed": list(LLM_ALLOWED_MODELS),
+    }
+
+
+@app.put("/admin/settings/llm", tags=["Admin"])
+async def admin_set_llm_settings(
+    payload: dict,
+    _: str = Depends(require_admin),
+) -> dict:
+    """Update LLM model selection (admin only).
+
+    Body example:
+        {"llm_chat": "gpt-4o-mini",
+         "llm_analysis": "gpt-4o",
+         "llm_repass": "gpt-5"}
+
+    Only the keys present in the body are updated.
+    """
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Corps JSON invalide.")
+    # Filter out unknown keys early for a clearer error.
+    cleaned = {k: v for k, v in payload.items() if isinstance(v, str)}
+    if not cleaned:
+        raise HTTPException(status_code=400, detail="Aucune valeur fournie.")
+    try:
+        new_state = set_llm_settings(cleaned)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"settings": new_state, "allowed": list(LLM_ALLOWED_MODELS)}
+
+
+# ---------------------------------------------------------------------------
 # User OpenAI API key (stored encrypted in users DB)
 # ---------------------------------------------------------------------------
 
