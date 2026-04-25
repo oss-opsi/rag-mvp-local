@@ -1,7 +1,7 @@
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
-export const DEFAULT_PIPELINE_VERSION = "v3.9.1";
+export const DEFAULT_PIPELINE_VERSION = "v3.9.0";
 export const PRODUCT_VERSION = "v4.0.0";
 
 export function PipelineBadges({

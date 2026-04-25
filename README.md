@@ -1,153 +1,71 @@
-# RAG MVP — Recherche Documentaire Hybride
+# Tell me — Plateforme RAG SIRH/Paie
 
-## Nouveautés v3.1 — Mode Docker parité complète avec le mode autonome
+**Tell me** est une plateforme de Retrieval-Augmented Generation (RAG) spécialisée pour les consultants en SIRH, paie, RH, GTA et DSN. Elle permet d'indexer des documents métier (CCN, doc produit, CDC client, guides…) et d'obtenir des réponses sourcées en langage naturel, ainsi que d'analyser automatiquement la couverture d'un cahier des charges client.
 
-Les fonctionnalités v3 (auth JWT, historique des conversations, évaluation RAGAS) sont désormais disponibles **dans les deux modes** : Docker split (FastAPI + Streamlit) et mode autonome (`streamlit_app.py`).
-
-| # | Fonctionnalité | Mode Docker | Mode Autonome |
-|---|---|---|---|
-| 1 | **Auth JWT** | ✅ Login / Inscription / Invité via `/auth/*` | ✅ streamlit-authenticator |
-| 2 | **Index par utilisateur** | ✅ Collection `rag_<user_id>` dans Qdrant persistant | ✅ Collection en mémoire |
-| 3 | **Historique SQLite** | ✅ Persistant dans volume Docker `/data/conversations.db` | ✅ Persistant dans `./data/` |
-| 4 | **Évaluation RAGAS** | ✅ Endpoint `/evaluate` (CSV upload) | ✅ Onglet dédié |
-| 5 | **Token cookie** | ✅ extra-streamlit-components CookieManager | — |
-
-### Architecture multi-utilisateurs (mode Docker)
-
-Chaque utilisateur authentifié possède :
-- Sa propre **collection Qdrant** : `rag_<user_id>` (ex: `rag_alice`)
-- Son propre **corpus BM25** persisté dans `/data/bm25/<user_id>.pkl`
-- Son propre **historique de conversations** filtré par `user_id` en SQLite
-
-Le token JWT (HS256, 7 jours) est émis par le backend à la connexion et vérifié sur chaque requête protégée via un header `Authorization: Bearer <token>`.
-
-### Variable d'environnement JWT_SECRET
-
-⚠️ **Changez impérativement `JWT_SECRET` en production** :
-
-```bash
-# Générer une valeur forte :
-python -c "import secrets; print(secrets.token_urlsafe(48))"
-
-# Dans votre .env :
-JWT_SECRET=<valeur_générée>
-```
+Éditée par **Opsidium**.
 
 ---
 
-## Nouveautés v3 Phase A
+## Fonctionnalités
 
-| # | Fonctionnalité | Détail |
-|---|---|---|
-| 1 | **Évaluation RAGAS** | Onglet dédié `📊 Évaluation RAGAS` : uploadez un CSV `question,ground_truth`, lancez l'évaluation et obtenez les scores RAGAS (faithfulness, answer_relevancy, context_precision, context_recall) avec indicateurs visuels colorés et export CSV. |
-| 2 | **Historique des conversations (SQLite)** | Onglet `🗂️ Historique` : toutes vos conversations sont persistées en SQLite (`./data/conversations.db`). Vous pouvez les consulter, les exporter en JSON ou les supprimer. Chaque échange est horodaté. |
-| 3 | **Authentification multi-utilisateurs** | Système de login/inscription. Chaque utilisateur a son propre index Qdrant isolé (`rag_<username>`). **Mode invité** disponible sur l'écran de connexion. |
-
----
-
-## Nouveautés v2
-
-| # | Amélioration | Détail |
-|---|---|---|
-| 1 | **Mode mémoire (clean-session)** | `streamlit_app.py` utilise `QdrantClient(":memory:")` : l'index Qdrant et le corpus BM25 sont entièrement en mémoire et réinitialisés à chaque redémarrage. |
-| 2 | **Réponses en streaming (token par token)** | Le LLM génère les réponses en flux continu via `chain.stream(...)`. Dans `streamlit_app.py` et `frontend/app.py`, `st.write_stream(...)` affiche les tokens au fur et à mesure. Le backend FastAPI expose un endpoint `POST /query/stream` (Server-Sent Events). |
-| 3 | **Cross-encoder reranker** | Un reranker `CrossEncoderReranker` basé sur `BAAI/bge-reranker-base` est disponible en option. Activé via une case à cocher dans la barre latérale. |
-| 4 | **Support DOCX, TXT, Markdown** | L'indexation accepte `.pdf`, `.docx`, `.txt` et `.md`. |
+| Onglet | Description |
+|---|---|
+| **Indexation** | Upload de documents (PDF, DOCX, TXT, MD), jobs d'ingestion async, gestion du corpus utilisateur |
+| **Chat** | Conversations avec RAG hybride (dense + sparse + reranker), citations, streaming SSE, feedback ±1 |
+| **Analyse d'écarts** | Workspace clients/CDCs, lancement d'analyse async, rapport de couverture (donut, filtres, qualification slide-over), export xlsx/md |
+| **Évaluation RAGAS** | Évaluation de la qualité du RAG sur un CSV `question, ground_truth` (4 métriques) |
+| **Paramètres** | Clé API OpenAI chiffrée, sélection des modèles LLM (admin), informations pipeline |
+| **Utilisateurs** | Gestion des comptes (self-service mot de passe + admin CRUD utilisateurs) |
 
 ---
 
-## Description du projet
+## Stack technique
 
-RAG MVP est une application de **Retrieval-Augmented Generation** (RAG) locale et complète. Elle permet d'indexer des documents (PDF, DOCX, TXT, MD) et de poser des questions en langage naturel, en obtenant des réponses sourcées générées par GPT-4o-mini.
+### Pipeline RAG (`v3.9.0`)
+- **Embeddings** : `BAAI/bge-m3` (multilingue, 1024 dim)
+- **Reranker** : `BAAI/bge-reranker-v2-m3`
+- **Chunking** : sémantique + structure-aware (`v2`)
+- **Retrieval hybride** : dense Qdrant + BM25 → RRF (k=60) → top-K rerank
+- **Gap analysis** : extraction d'exigences map-reduce, dedup sémantique, HyDE, re-pass GPT-4o sur les ambigus, cache disque
 
-L'application implémente une **recherche hybride** combinant :
-- **Recherche dense** (embeddings BAAI/bge-small-en-v1.5 dans Qdrant)
-- **Recherche sparse** (BM25 via rank-bm25)
-- **Fusion RRF** (Reciprocal Rank Fusion) — 100 % mathématique, sans modèle de reranking lourd
-
-Deux modes de déploiement sont disponibles depuis la même base de code :
-
-| Mode | Description |
-|------|-------------|
-| **Docker Compose** | Streamlit + FastAPI + Qdrant dans des conteneurs séparés — persistance complète, multi-utilisateurs, auth JWT |
-| **Autonome** | Un seul fichier `streamlit_app.py` avec Qdrant en mémoire |
-
----
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Mode Docker Compose (v3.1)                    │
-│                                                                  │
-│   ┌──────────────┐    HTTP/JWT  ┌─────────────────┐             │
-│   │  Streamlit   │ ──────────►  │   FastAPI         │             │
-│   │  :8501       │             │   Backend :8000   │             │
-│   │  (frontend)  │             │                   │             │
-│   └──────────────┘             │  /auth/*  (JWT)   │             │
-│                                │  /upload          │             │
-│                                │  /query/stream    │             │
-│                                │  /conversations   │             │
-│                                │  /evaluate        │             │
-│                                └────────┬──────────┘             │
-│                                         │                        │
-│                            ┌────────────┼────────────┐          │
-│                            ▼            ▼            ▼          │
-│                    ┌──────────┐  ┌──────────┐  ┌──────────┐    │
-│                    │  Qdrant  │  │ users.db │  │conversations│  │
-│                    │  :6333   │  │ (SQLite) │  │ .db       │   │
-│                    │  /data/  │  │ /data/   │  │ /data/    │   │
-│                    └──────────┘  └──────────┘  └──────────┘    │
-└─────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────┐
-│                        Mode Autonome (v3)                        │
-│                                                                  │
-│   ┌──────────────────────────────────────────────────────────┐  │
-│   │                  streamlit_app.py                         │  │
-│   │  ┌────────────┐  ┌────────────┐  ┌────────────────────┐  │  │
-│   │  │  Ingest    │  │  Retriever │  │   LangChain Chain  │  │  │
-│   │  │  (PDF→HF)  │  │  BM25+RRF │  │   GPT-4o-mini      │  │  │
-│   │  └────────────┘  └────────────┘  └────────────────────┘  │  │
-│   │  ┌────────────┐  ┌────────────┐  ┌────────────────────┐  │  │
-│   │  │  Auth      │  │  History   │  │   RAGAS Eval       │  │  │
-│   │  │  (SQLite)  │  │  (SQLite)  │  │   (datasets)       │  │  │
-│   │  └────────────┘  └────────────┘  └────────────────────┘  │  │
-│   └──────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
-```
+### Architecture
+- **Frontend** : Next.js 15 + TypeScript + Tailwind + Radix UI
+- **Backend** : FastAPI + LangChain (LCEL) + LangSmith-compatible
+- **Stockage vectoriel** : Qdrant (collection per-user `rag_<user_id>`)
+- **Stockage relationnel** : SQLite (users, conversations, workspace, jobs)
+- **Auth** : JWT HS256 (cookie session) + rôles `admin` / `user`
+- **LLM** : OpenAI GPT-4o-mini par défaut (clé fournie par l'utilisateur, chiffrée Fernet)
 
 ---
 
 ## Prérequis
 
-- **Docker** ≥ 24 et **Docker Compose** ≥ 2.20 (mode Docker)
-- **Python** ≥ 3.11 (mode autonome)
-- **Clé API OpenAI** (saisie dans l'interface, jamais stockée)
+- **Docker** ≥ 24 et **Docker Compose** ≥ 2.20
+- **Clé API OpenAI** (saisie dans Paramètres, chiffrée et stockée par utilisateur)
 
 ---
 
-## Installation rapide (mode Docker)
+## Installation
 
 ```bash
 # 1. Cloner le projet
-git clone https://github.com/oss-opsi/rag-mvp-local rag-mvp
-cd rag-mvp
+git clone https://github.com/oss-opsi/rag-mvp-local.git
+cd rag-mvp-local
 
-# 2. Configurer les variables d'environnement (IMPORTANT en production)
+# 2. Configurer les variables d'environnement
 cp .env.example .env
-# Éditez .env et changez JWT_SECRET !
-# python -c "import secrets; print(secrets.token_urlsafe(48))"
+# Éditer .env, en particulier JWT_SECRET :
+python -c "import secrets; print(secrets.token_urlsafe(48))"
 
-# 3. Construire et démarrer tous les services
+# 3. Construire et démarrer
 docker compose up --build -d
 ```
 
-La première exécution télécharge le modèle d'embeddings (~130 Mo) — prévoir quelques minutes.
+La première exécution télécharge les modèles d'embeddings et reranker (~1 Go) — prévoir quelques minutes.
 
 ---
 
-## Déploiement sur VPS (mise à jour)
+## Mise à jour sur VPS
 
 ```bash
 cd /opt/rag-mvp-local
@@ -160,134 +78,95 @@ docker compose up -d --build
 ## Accès aux services
 
 | Service | URL |
-|---------|-----|
-| Interface Streamlit | http://localhost:8501 |
+|---|---|
+| Frontend Tell me | http://localhost:8501 (mappé sur le port interne 3000) |
 | API FastAPI (Swagger) | http://localhost:8000/docs |
 | Tableau de bord Qdrant | http://localhost:6333/dashboard |
 
 ---
 
-## Mode autonome (sans Docker)
+## Premier démarrage
 
-```bash
-# 1. Installer les dépendances
-pip install -r requirements.txt
-
-# 2. Lancer l'application
-streamlit run streamlit_app.py
-```
-
-En mode autonome, Qdrant et le corpus BM25 sont entièrement **en mémoire** : l'index est réinitialisé à chaque redémarrage. Les données utilisateurs et l'historique des conversations sont persistées dans `./data/` (SQLite).
-
----
-
-## Usage
-
-### 1. Connexion / Mode invité (v3)
-Sur l'écran d'accueil, vous pouvez :
-- **Se connecter** avec un compte existant
-- **S'inscrire** pour créer un compte (onglet Inscription)
-- **Mode invité** : accès direct sans compte. *L'index invité est partagé entre tous les visiteurs en mode invité.*
-
-### 2. Renseigner la clé OpenAI
-Dans la barre latérale gauche, entrez votre clé API OpenAI (`sk-...`). Elle est transmise directement à l'API OpenAI sans être stockée.
-
-### 3. Indexer un document
-1. Glissez-déposez un ou plusieurs fichiers PDF, DOCX, TXT ou MD
-2. Cliquez sur **Indexer les documents**
-3. Attendez la confirmation (nombre de fragments indexés)
-
-### 4. Poser une question (onglet 💬 Chat)
-Tapez votre question dans le champ de saisie. L'assistant recherche les passages pertinents et génère une réponse sourcée en streaming.
-
-### 5. Évaluation RAGAS (onglet 📊 Évaluation RAGAS)
-1. Préparez un CSV avec les colonnes `question` et `ground_truth` (max 20 lignes)
-2. Uploadez-le dans l'onglet Évaluation
-3. Cliquez sur **Lancer l'évaluation**
-4. Consultez les scores et exportez les résultats
-
-### 6. Historique (onglet 🗂️ Historique)
-- Toutes vos conversations sont sauvegardées automatiquement (mode Docker, utilisateurs connectés)
-- Cliquez sur une conversation pour la relire, la renommer, l'exporter ou la supprimer
+1. **Inscription** : à la première connexion, créer le compte `daniel` (ou autre) — il sera automatiquement promu `admin`
+2. **Saisir la clé OpenAI** dans **Paramètres** (chiffrée localement)
+3. **Indexer des documents** dans **Indexation** (drag & drop)
+4. **Poser des questions** dans **Chat** ou **lancer une analyse de CDC** dans **Analyse d'écarts**
 
 ---
 
 ## Variables d'environnement
 
 | Variable | Valeur par défaut | Description |
-|----------|------------------|-------------|
-| `JWT_SECRET` | *(valeur dev insécurisée)* | **⚠️ CHANGER EN PRODUCTION** — Secret de signature JWT |
+|---|---|---|
+| `JWT_SECRET` | *(insécurisé en dev)* | **⚠️ À changer en production** — secret de signature JWT |
 | `QDRANT_URL` | `http://qdrant:6333` | URL du serveur Qdrant |
-| `QDRANT_COLLECTION` | `rag_documents` | Nom de collection par défaut |
-| `LLM_MODEL` | `gpt-4o-mini` | Modèle OpenAI |
+| `EMBEDDING_MODEL` | `BAAI/bge-m3` | Modèle d'embeddings (1024 dim) |
+| `RERANKER_MODEL` | `BAAI/bge-reranker-v2-m3` | Modèle cross-encoder de rerank |
+| `LLM_MODEL` | `gpt-4o-mini` | Modèle OpenAI par défaut |
 | `LLM_TEMPERATURE` | `0.1` | Température du LLM |
-| `EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` | Modèle d'embeddings |
 | `DATA_DIR` | `/data` | Répertoire des données (SQLite, BM25) |
-| `CHUNK_SIZE` | `800` | Taille des fragments (caractères) |
+| `CHUNK_SIZE` | `800` | Taille des fragments (chars) |
 | `CHUNK_OVERLAP` | `120` | Chevauchement des fragments |
-| `RETRIEVAL_K` | `5` | Nombre de résultats finaux |
-| `BACKEND_URL` | `http://backend:8000` | URL backend (frontend Docker) |
+| `RETRIEVAL_K` | `5` | Top-K final (chat) |
+| `BACKEND_URL` | `http://backend:8000` | URL backend (depuis le frontend) |
 
-> **Important** : La clé API OpenAI n'est **jamais** stockée dans les variables d'environnement. Elle est saisie par l'utilisateur dans l'interface Streamlit.
+**Important** : la clé API OpenAI **n'est jamais stockée dans les variables d'environnement**. Elle est saisie par l'utilisateur dans l'onglet Paramètres et chiffrée avec Fernet en SQLite.
 
 ---
 
 ## Structure du projet
 
 ```
-rag-mvp/
-├── README.md                    # Ce fichier
-├── docker-compose.yml           # Orchestration Docker
-├── .env.example                 # Variables d'environnement (exemple)
-├── requirements.txt             # Dépendances (mode autonome)
-├── streamlit_app.py             # Application autonome v3 (auth + RAGAS + historique)
-├── data/                        # SQLite databases (éphémère, non versionné)
+rag-mvp-local/
+├── README.md                       # Ce fichier
+├── ROLLBACK.md                     # Procédure de retour au tag v3.9.0-stable
+├── BACKLOG.md                      # (à venir) Roadmap v4
+├── docker-compose.yml              # Orchestration Docker (qdrant + backend + frontend)
+├── .env.example                    # Variables d'environnement (exemple)
+├── data/                           # SQLite + Qdrant + BM25 (volume Docker)
 ├── backend/
 │   ├── Dockerfile
-│   ├── main.py                  # API FastAPI v3.1 (auth JWT + history + RAGAS)
+│   ├── main.py                     # API FastAPI v3.1
 │   ├── requirements.txt
-│   └── rag/
-│       ├── __init__.py
-│       ├── config.py            # Configuration (JWT, DATA_DIR, BM25_DIR, etc.)
-│       ├── jwt_utils.py         # [v3.1] JWT create/decode
-│       ├── ingest.py            # Ingestion par utilisateur (collection + BM25 per-user)
-│       ├── retriever.py         # Recherche hybride + RRF (+ factory per-user)
-│       ├── reranker.py          # Cross-encoder reranker
-│       ├── chain.py             # Chaîne LangChain + streaming (per-user)
-│       ├── evaluation.py        # Évaluation RAGAS
-│       ├── history.py           # Historique SQLite des conversations
-│       └── auth.py              # Authentification (SQLite + bcrypt + JWT re-export)
-└── frontend/
+│   └── rag/                        # Modules métier (chain, retriever, gap_analysis, etc.)
+└── frontend-next/
     ├── Dockerfile
-    ├── app.py                   # Interface Streamlit v3.1 (auth + history + RAGAS)
-    └── requirements.txt
+    ├── app/                        # Pages Next.js App Router
+    ├── components/                 # Composants React (incl. shadcn/ui)
+    ├── lib/                        # Client API typé, helpers
+    ├── middleware.ts               # Auth cookie session
+    └── package.json
 ```
 
 ---
 
-## Arrêter les services
+## Arrêter / réinitialiser
 
 ```bash
 # Arrêter les conteneurs
 docker compose down
 
-# Arrêter et effacer les données (volumes)
+# Arrêter et effacer toutes les données (⚠️ irréversible)
 docker compose down -v
 ```
 
 ---
 
-## Technologies utilisées
+## Rollback
 
-- [Qdrant](https://qdrant.tech/) v1.11 — base de données vectorielle persistante
-- [LangChain](https://python.langchain.com/) — chaîne RAG (LCEL)
-- [HuggingFace / sentence-transformers](https://huggingface.co/) — modèle d'embeddings
-- [rank-bm25](https://github.com/dorianbrown/rank_bm25) — recherche BM25
-- [RAGAS](https://docs.ragas.io/) — framework d'évaluation RAG
-- [PyJWT](https://pyjwt.readthedocs.io/) — tokens JWT HS256
-- [bcrypt](https://pypi.org/project/bcrypt/) — hachage de mots de passe
+En cas de problème, voir [ROLLBACK.md](./ROLLBACK.md) — tag stable de référence : **`v3.9.0-stable`**.
+
+---
+
+## Technologies
+
+- [Next.js 15](https://nextjs.org/) — framework React
+- [Tailwind CSS](https://tailwindcss.com/) + [Radix UI](https://www.radix-ui.com/) — UI
 - [FastAPI](https://fastapi.tiangolo.com/) — API REST backend
-- [Streamlit](https://streamlit.io/) — interface utilisateur
-- [extra-streamlit-components](https://github.com/nicedouble/StreamlitAntdComponents) — CookieManager
-- [pypdf](https://pypdf.readthedocs.io/) — lecture de fichiers PDF
-- [OpenAI GPT-4o-mini](https://openai.com/) — génération de réponses
+- [LangChain](https://python.langchain.com/) — chaîne RAG (LCEL)
+- [Qdrant](https://qdrant.tech/) — base vectorielle
+- [Hugging Face / sentence-transformers](https://huggingface.co/) — embeddings & reranker
+- [rank-bm25](https://github.com/dorianbrown/rank_bm25) — recherche BM25
+- [RAGAS](https://docs.ragas.io/) — évaluation RAG
+- [PyJWT](https://pyjwt.readthedocs.io/) + [bcrypt](https://pypi.org/project/bcrypt/) — auth
+- [OpenAI GPT-4o-mini](https://openai.com/) — génération
