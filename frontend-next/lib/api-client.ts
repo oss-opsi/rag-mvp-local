@@ -284,6 +284,36 @@ export const api = {
     return handle<AnalysisJob>(res);
   },
 
+  /**
+   * Download an analysis export (xlsx or md) by triggering a save dialog.
+   * Throws on backend error so the caller can show a toast.
+   */
+  async downloadCdcExport(id: number, fmt: "xlsx" | "md"): Promise<void> {
+    const res = await fetch(`/api/workspace/cdcs/${id}/export/${fmt}`);
+    if (!res.ok) {
+      let detail = `Erreur ${res.status}`;
+      try {
+        const j = (await res.json()) as { detail?: string };
+        if (j.detail) detail = j.detail;
+      } catch {
+        // ignore
+      }
+      throw new Error(detail);
+    }
+    const blob = await res.blob();
+    const disposition = res.headers.get("content-disposition") || "";
+    const match = disposition.match(/filename="([^"]+)"/);
+    const filename = match ? match[1] : `analyse.${fmt}`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  },
+
   async analysisJob(id: number): Promise<AnalysisJob> {
     const res = await fetch(`/api/analysis-jobs/${id}`);
     return handle<AnalysisJob>(res);

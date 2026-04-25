@@ -560,6 +560,7 @@ export default function AnalysePage() {
     <>
       {contextPanelContent}
       <CdcReport
+        cdcId={selectedCdcId}
         filename={report.filename}
         summary={report.summary}
         requirements={report.requirements}

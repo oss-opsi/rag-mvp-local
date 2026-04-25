@@ -58,7 +58,7 @@ from fastapi import (
     status,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from rag.auth import (
@@ -1535,6 +1535,49 @@ def workspace_download_cdc(
         filename=cdc["filename"],
         media_type="application/octet-stream",
     )
+
+
+@app.get("/workspace/cdcs/{cdc_id}/export/{fmt}", tags=["Workspace"])
+def workspace_export_cdc(
+    cdc_id: int,
+    fmt: str,
+    authorization: str = Header(None),
+):
+    """Export the latest analysis report as Excel (xlsx) or Markdown (md)."""
+    user_id = get_current_user(authorization)
+    cdc = workspace.get_cdc(user_id, cdc_id)
+    if not cdc:
+        raise HTTPException(status_code=404, detail="CDC introuvable.")
+    analysis = workspace.get_latest_analysis(user_id, cdc_id)
+    if not analysis or not analysis.get("report"):
+        raise HTTPException(
+            status_code=409,
+            detail="Aucune analyse disponible pour ce CDC. Lancez d'abord une analyse.",
+        )
+    report = analysis["report"]
+    base_filename = os.path.splitext(cdc["filename"])[0] or f"cdc-{cdc_id}"
+    from rag import export as cdc_export  # local import to avoid circular
+
+    fmt = (fmt or "").lower()
+    if fmt in ("xlsx", "excel"):
+        data = cdc_export.build_xlsx(cdc["filename"], report)
+        return Response(
+            content=data,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": f'attachment; filename="{base_filename}-analyse.xlsx"'
+            },
+        )
+    if fmt in ("md", "markdown"):
+        text = cdc_export.build_markdown(cdc["filename"], report)
+        return Response(
+            content=text.encode("utf-8"),
+            media_type="text/markdown; charset=utf-8",
+            headers={
+                "Content-Disposition": f'attachment; filename="{base_filename}-analyse.md"'
+            },
+        )
+    raise HTTPException(status_code=400, detail="Format non supporté (xlsx ou md).")
 
 
 @app.delete("/workspace/cdcs/{cdc_id}", tags=["Workspace"])

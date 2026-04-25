@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Search, RefreshCw, Trash2, Download } from "lucide-react";
+import { Search, RefreshCw, Trash2, Download, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -21,12 +21,15 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuCheckboxItem,
+  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { CoverageDonut } from "@/components/coverage-donut";
 import { RequirementRow } from "@/components/requirement-row";
 import { RequirementSheet } from "@/components/requirement-sheet";
+import { useToast } from "@/components/ui/use-toast";
+import { api } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 import type {
   AnalysisSummary,
@@ -49,6 +52,7 @@ const STATUS_CHIPS: { key: StatusFilter; label: string; chipClass: string }[] = 
 ];
 
 export function CdcReport({
+  cdcId,
   filename,
   summary,
   requirements,
@@ -57,6 +61,7 @@ export function CdcReport({
   onDelete,
   reanalysing,
 }: {
+  cdcId: number | null;
   filename: string;
   summary: AnalysisSummary | Partial<AnalysisSummary> | null | undefined;
   requirements: Requirement[];
@@ -65,6 +70,7 @@ export function CdcReport({
   onDelete: () => void | Promise<void>;
   reanalysing?: boolean;
 }) {
+  const { toast } = useToast();
   const [statusFilter, setStatusFilter] = React.useState<StatusFilter>("all");
   const [search, setSearch] = React.useState("");
   const [selectedCategories, setSelectedCategories] = React.useState<Set<string>>(
@@ -72,6 +78,20 @@ export function CdcReport({
   );
   const [activeReq, setActiveReq] = React.useState<Requirement | null>(null);
   const [sheetOpen, setSheetOpen] = React.useState(false);
+  const [exporting, setExporting] = React.useState<"xlsx" | "md" | null>(null);
+
+  const handleExport = async (fmt: "xlsx" | "md") => {
+    if (cdcId === null) return;
+    setExporting(fmt);
+    try {
+      await api.downloadCdcExport(cdcId, fmt);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Erreur d'export";
+      toast({ title: "Échec de l'export", description: msg, variant: "destructive" });
+    } finally {
+      setExporting(null);
+    }
+  };
 
   const categories = React.useMemo(() => {
     const set = new Set<string>();
@@ -92,6 +112,31 @@ export function CdcReport({
       return true;
     });
   }, [requirements, statusFilter, search, selectedCategories]);
+
+  // Counts per status, applied AFTER category + search filters so chips reflect
+  // what the user would see after each toggle.
+  const counts = React.useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const base = requirements.filter((r) => {
+      if (selectedCategories.size > 0 && !selectedCategories.has(r.category))
+        return false;
+      if (q && !`${r.id} ${r.title} ${r.description}`.toLowerCase().includes(q))
+        return false;
+      return true;
+    });
+    const acc: Record<StatusFilter, number> = {
+      all: base.length,
+      covered: 0,
+      partial: 0,
+      missing: 0,
+      ambiguous: 0,
+    };
+    for (const r of base) {
+      const k = r.status as RequirementStatus;
+      if (k in acc) acc[k] += 1;
+    }
+    return acc;
+  }, [requirements, selectedCategories, search]);
 
   const toggleCategory = (cat: string) => {
     setSelectedCategories((prev) => {
@@ -133,15 +178,36 @@ export function CdcReport({
           </Badge>
         </div>
         <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled
-            title="Export bientôt disponible"
-          >
-            <Download className="mr-2 h-4 w-4" />
-            Exporter
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={cdcId === null || exporting !== null}
+                title="Exporter le rapport d'analyse"
+              >
+                {exporting !== null ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Download className="mr-2 h-4 w-4" />
+                )}
+                {exporting === "xlsx"
+                  ? "Export Excel..."
+                  : exporting === "md"
+                  ? "Export Markdown..."
+                  : "Exporter"}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuLabel>Format d'export</DropdownMenuLabel>
+              <DropdownMenuItem onSelect={() => void handleExport("xlsx")}>
+                Excel (.xlsx)
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => void handleExport("md")}>
+                Markdown (.md)
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </header>
 
@@ -235,13 +301,23 @@ export function CdcReport({
                 type="button"
                 onClick={() => setStatusFilter(chip.key)}
                 className={cn(
-                  "rounded-md px-3 py-1 text-xs font-medium transition-colors",
+                  "flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium transition-colors",
                   statusFilter === chip.key
                     ? chip.chipClass
                     : "bg-background text-muted-foreground hover:bg-muted/50"
                 )}
               >
-                {chip.label}
+                <span>{chip.label}</span>
+                <span
+                  className={cn(
+                    "rounded-full px-1.5 py-0.5 text-[10px] font-semibold tabular-nums",
+                    statusFilter === chip.key
+                      ? "bg-background/50"
+                      : "bg-muted text-muted-foreground"
+                  )}
+                >
+                  {counts[chip.key]}
+                </span>
               </button>
             ))}
             <div className="mx-2 h-5 w-px bg-border" aria-hidden />
@@ -280,6 +356,31 @@ export function CdcReport({
                 className="pl-8"
               />
             </div>
+          </div>
+
+          <div className="flex items-center justify-between gap-2 border-b border-border bg-muted/30 px-4 py-2 text-xs text-muted-foreground md:px-6">
+            <div>
+              <span className="font-semibold tabular-nums text-foreground">
+                {filtered.length}
+              </span>{" "}
+              exigence{filtered.length > 1 ? "s" : ""} sur{" "}
+              <span className="tabular-nums">{requirements.length}</span>
+            </div>
+            {(statusFilter !== "all" ||
+              selectedCategories.size > 0 ||
+              search.trim() !== "") && (
+              <button
+                type="button"
+                onClick={() => {
+                  setStatusFilter("all");
+                  setSelectedCategories(new Set());
+                  setSearch("");
+                }}
+                className="text-xs font-medium text-accent hover:underline"
+              >
+                Réinitialiser les filtres
+              </button>
+            )}
           </div>
 
           <div className="flex-1 overflow-auto">
