@@ -62,13 +62,21 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from rag.auth import (
+    VALID_ROLES,
+    admin_set_password,
+    change_password,
     create_token,
     decode_token,
+    delete_user,
     delete_user_api_key,
+    ensure_first_admin,
     get_user,
     get_user_api_key,
+    is_admin,
+    list_all_users,
     register_user,
     set_user_api_key,
+    set_user_role,
     verify_user,
 )
 from rag.chain import answer_question, get_answer_non_streaming, stream_answer
@@ -347,6 +355,15 @@ def _start_ingestion_worker() -> None:
 def _start_gap_analysis_worker() -> None:
     gap_analysis_jobs.start_worker_on_boot()
 
+
+@app.on_event("startup")
+def _bootstrap_first_admin() -> None:
+    """Promote the first user to admin if no admin exists yet."""
+    try:
+        ensure_first_admin()
+    except Exception as exc:  # pragma: no cover - best effort
+        logging.getLogger(__name__).warning("first-admin bootstrap failed: %s", exc)
+
 # ---------------------------------------------------------------------------
 # Auth dependency
 # ---------------------------------------------------------------------------
@@ -491,10 +508,153 @@ async def auth_guest() -> TokenResponse:
 
 @app.get("/auth/me", tags=["Auth"])
 async def auth_me(user_id: str = Depends(get_current_user)) -> dict:
-    """Return current user info."""
+    """Return current user info (including role)."""
+    if user_id == "guest":
+        return {"user_id": "guest", "name": "Invité", "role": "guest"}
     user = get_user(user_id)
     name = user["name"] if user else user_id
-    return {"user_id": user_id, "name": name}
+    role = user.get("role", "user") if user else "user"
+    return {"user_id": user_id, "name": name, "role": role}
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+@app.put("/auth/password", tags=["Auth"])
+async def auth_change_password(
+    req: ChangePasswordRequest,
+    user_id: str = Depends(get_current_user),
+) -> dict:
+    """Self-service password change for the authenticated user."""
+    if user_id == "guest":
+        raise HTTPException(
+            status_code=403,
+            detail="Le changement de mot de passe n'est pas disponible en mode invité.",
+        )
+    try:
+        change_password(user_id, req.current_password, req.new_password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Admin: user management
+# ---------------------------------------------------------------------------
+
+
+def require_admin(user_id: str = Depends(get_current_user)) -> str:
+    """Dependency that raises 403 if the caller is not an admin."""
+    if user_id == "guest" or not is_admin(user_id):
+        raise HTTPException(
+            status_code=403,
+            detail="Accès réservé aux administrateurs.",
+        )
+    return user_id
+
+
+class AdminCreateUserRequest(BaseModel):
+    username: str
+    name: str = ""
+    email: str = ""
+    password: str
+    role: str = "user"
+
+
+class AdminSetPasswordRequest(BaseModel):
+    new_password: str
+
+
+class AdminSetRoleRequest(BaseModel):
+    role: str
+
+
+@app.get("/admin/users", tags=["Admin"])
+async def admin_list_users(_: str = Depends(require_admin)) -> dict:
+    """List all users (admin only)."""
+    return {"users": list_all_users()}
+
+
+@app.post("/admin/users", tags=["Admin"], status_code=201)
+async def admin_create_user(
+    req: AdminCreateUserRequest,
+    _: str = Depends(require_admin),
+) -> dict:
+    """Create a new user (admin only)."""
+    role = (req.role or "user").strip().lower()
+    if role not in VALID_ROLES:
+        raise HTTPException(status_code=400, detail=f"Rôle invalide : {role}")
+    try:
+        register_user(
+            req.username,
+            req.email or "",
+            req.name or req.username,
+            req.password,
+            role=role,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    user = get_user(req.username)
+    return {"user": user}
+
+
+@app.put("/admin/users/{username}/password", tags=["Admin"])
+async def admin_reset_password(
+    username: str,
+    req: AdminSetPasswordRequest,
+    _: str = Depends(require_admin),
+) -> dict:
+    """Reset a user's password (admin only)."""
+    if not get_user(username):
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable.")
+    try:
+        admin_set_password(username, req.new_password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True}
+
+
+@app.put("/admin/users/{username}/role", tags=["Admin"])
+async def admin_change_role(
+    username: str,
+    req: AdminSetRoleRequest,
+    admin_user: str = Depends(require_admin),
+) -> dict:
+    """Change a user's role (admin only). Cannot demote yourself."""
+    if username.lower() == admin_user.lower() and req.role != "admin":
+        raise HTTPException(
+            status_code=400,
+            detail="Vous ne pouvez pas vous retirer le rôle administrateur.",
+        )
+    if not get_user(username):
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable.")
+    try:
+        set_user_role(username, req.role)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True}
+
+
+@app.delete("/admin/users/{username}", tags=["Admin"])
+async def admin_delete_user(
+    username: str,
+    admin_user: str = Depends(require_admin),
+) -> dict:
+    """Delete a user (admin only). Cannot delete yourself."""
+    if username.lower() == admin_user.lower():
+        raise HTTPException(
+            status_code=400,
+            detail="Vous ne pouvez pas supprimer votre propre compte.",
+        )
+    if not get_user(username):
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable.")
+    try:
+        delete_user(username)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------

@@ -1,4 +1,18 @@
-export type User = { user_id: string; name: string };
+export type UserRole = "admin" | "user" | "guest";
+
+export type User = {
+  user_id: string;
+  name: string;
+  role?: UserRole;
+};
+
+export type AdminUser = {
+  username: string;
+  name: string;
+  email: string;
+  role: "admin" | "user";
+  created_at: string;
+};
 
 export type ApiKeyInfo = { has_key: boolean; masked?: string; reason?: string };
 

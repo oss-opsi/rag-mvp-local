@@ -38,9 +38,12 @@ CREATE TABLE IF NOT EXISTS users (
     name               TEXT NOT NULL DEFAULT '',
     hashed_password    TEXT NOT NULL,
     created_at         TIMESTAMP NOT NULL,
-    openai_api_key_enc TEXT NOT NULL DEFAULT ''
+    openai_api_key_enc TEXT NOT NULL DEFAULT '',
+    role               TEXT NOT NULL DEFAULT 'user'
 );
 """
+
+VALID_ROLES = ("admin", "user")
 
 
 def _now() -> str:
@@ -71,18 +74,60 @@ class _UserDB:
                 self._conn.execute(
                     "ALTER TABLE users ADD COLUMN openai_api_key_enc TEXT NOT NULL DEFAULT ''"
                 )
+            if "role" not in cols:
+                self._conn.execute(
+                    "ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'"
+                )
             self._conn.commit()
 
-    def register(self, username: str, email: str, name: str, password: str) -> None:
+    def ensure_first_admin(self) -> None:
+        """Promote the first existing user to admin if no admin exists.
+
+        Priority: 'daniel' if present, otherwise the earliest registered user.
+        """
+        with self._lock:
+            cur = self._conn.execute(
+                "SELECT COUNT(*) AS c FROM users WHERE role='admin'"
+            )
+            if cur.fetchone()["c"] > 0:
+                return
+            cur = self._conn.execute(
+                "SELECT username FROM users WHERE username='daniel' LIMIT 1"
+            )
+            row = cur.fetchone()
+            if row is None:
+                cur = self._conn.execute(
+                    "SELECT username FROM users ORDER BY created_at ASC LIMIT 1"
+                )
+                row = cur.fetchone()
+            if row is None:
+                return
+            self._conn.execute(
+                "UPDATE users SET role='admin' WHERE username=?",
+                (row["username"],),
+            )
+            self._conn.commit()
+            logger.info("Promoted '%s' to admin (first admin bootstrap)", row["username"])
+
+    def register(
+        self,
+        username: str,
+        email: str,
+        name: str,
+        password: str,
+        role: str = "user",
+    ) -> None:
         import bcrypt
 
+        if role not in VALID_ROLES:
+            raise ValueError(f"Rôle invalide : {role}")
         hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
         with self._lock:
             try:
                 self._conn.execute(
-                    "INSERT INTO users(username, email, name, hashed_password, created_at) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (username.lower(), email, name, hashed, _now()),
+                    "INSERT INTO users(username, email, name, hashed_password, created_at, role) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (username.lower(), email, name, hashed, _now(), role),
                 )
                 self._conn.commit()
             except sqlite3.IntegrityError as exc:
@@ -104,11 +149,46 @@ class _UserDB:
     def get_user(self, username: str) -> dict[str, Any] | None:
         with self._lock:
             cur = self._conn.execute(
-                "SELECT username, email, name, created_at FROM users WHERE username=?",
+                "SELECT username, email, name, created_at, role FROM users WHERE username=?",
                 (username.lower(),),
             )
             row = cur.fetchone()
         return dict(row) if row else None
+
+    def set_password(self, username: str, new_password: str) -> None:
+        import bcrypt
+
+        hashed = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE users SET hashed_password=? WHERE username=?",
+                (hashed, username.lower()),
+            )
+            if cur.rowcount == 0:
+                raise ValueError(f"Utilisateur inconnu : {username}")
+            self._conn.commit()
+
+    def set_role(self, username: str, role: str) -> None:
+        if role not in VALID_ROLES:
+            raise ValueError(f"Rôle invalide : {role}")
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE users SET role=? WHERE username=?",
+                (role, username.lower()),
+            )
+            if cur.rowcount == 0:
+                raise ValueError(f"Utilisateur inconnu : {username}")
+            self._conn.commit()
+
+    def delete(self, username: str) -> None:
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM users WHERE username=?",
+                (username.lower(),),
+            )
+            if cur.rowcount == 0:
+                raise ValueError(f"Utilisateur inconnu : {username}")
+            self._conn.commit()
 
     def set_api_key(self, username: str, plaintext_key: str) -> None:
         """Encrypt and persist the OpenAI API key for a user."""
@@ -146,7 +226,7 @@ class _UserDB:
     def all_users(self) -> list[dict[str, Any]]:
         with self._lock:
             cur = self._conn.execute(
-                "SELECT username, email, name, hashed_password FROM users"
+                "SELECT username, email, name, hashed_password, role, created_at FROM users"
             )
             return [dict(r) for r in cur.fetchall()]
 
@@ -173,7 +253,13 @@ def _get_db() -> _UserDB:
 # ---------------------------------------------------------------------------
 
 
-def register_user(username: str, email: str, name: str, password: str) -> None:
+def register_user(
+    username: str,
+    email: str,
+    name: str,
+    password: str,
+    role: str = "user",
+) -> None:
     """
     Register a new user.
 
@@ -192,7 +278,56 @@ def register_user(username: str, email: str, name: str, password: str) -> None:
     if len(password) < 6:
         raise ValueError("Le mot de passe doit faire au moins 6 caractères.")
 
-    _get_db().register(username, email, name, password)
+    _get_db().register(username, email, name, password, role=role)
+
+
+def change_password(username: str, current_password: str, new_password: str) -> None:
+    """Self-service password change. Verifies current password first."""
+    if not new_password or len(new_password) < 6:
+        raise ValueError("Le nouveau mot de passe doit faire au moins 6 caractères.")
+    if not _get_db().verify(username, current_password):
+        raise ValueError("Le mot de passe actuel est incorrect.")
+    _get_db().set_password(username, new_password)
+
+
+def admin_set_password(username: str, new_password: str) -> None:
+    """Admin password reset (no current password required)."""
+    if not new_password or len(new_password) < 6:
+        raise ValueError("Le mot de passe doit faire au moins 6 caractères.")
+    _get_db().set_password(username, new_password)
+
+
+def set_user_role(username: str, role: str) -> None:
+    _get_db().set_role(username, role)
+
+
+def delete_user(username: str) -> None:
+    _get_db().delete(username)
+
+
+def list_all_users() -> list[dict[str, Any]]:
+    """Return all users WITHOUT password hashes (safe for admin UI)."""
+    users = _get_db().all_users()
+    return [
+        {
+            "username": u["username"],
+            "email": u["email"],
+            "name": u["name"],
+            "role": u.get("role", "user"),
+            "created_at": u.get("created_at", ""),
+        }
+        for u in users
+    ]
+
+
+def ensure_first_admin() -> None:
+    """Bootstrap helper: promote the first user to admin if none exists."""
+    _get_db().ensure_first_admin()
+
+
+def is_admin(username: str) -> bool:
+    user = get_user(username)
+    return bool(user and user.get("role") == "admin")
 
 
 def verify_user(username: str, password: str) -> bool:
@@ -255,6 +390,14 @@ __all__ = [
     "get_user_api_key",
     "delete_user_api_key",
     "list_users_for_authenticator",
+    "change_password",
+    "admin_set_password",
+    "set_user_role",
+    "delete_user",
+    "list_all_users",
+    "ensure_first_admin",
+    "is_admin",
+    "VALID_ROLES",
     "create_token",
     "decode_token",
 ]

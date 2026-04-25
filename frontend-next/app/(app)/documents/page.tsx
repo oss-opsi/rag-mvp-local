@@ -283,7 +283,7 @@ export default function DocumentsPage() {
       <Topbar
         breadcrumb={
           <>
-            Index <span className="mx-1.5 text-muted-foreground">—</span>
+            Indexation <span className="mx-1.5 text-muted-foreground">—</span>
             <span className="font-normal text-muted-foreground">
               {username}
             </span>

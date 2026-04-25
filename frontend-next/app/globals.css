@@ -4,17 +4,36 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 240 10% 4%;
-    --muted: 240 5% 96%;
-    --muted-foreground: 240 4% 46%;
-    --border: 240 6% 90%;
-    --accent: 221 83% 53%;
+    /* Tell me v4.3 — palette */
+    /* Surface F7F9FC */
+    --background: 218 33% 98%;
+    /* Ink 0B1B2B */
+    --foreground: 211 60% 11%;
+    /* Card #FFFFFF */
+    --card: 0 0% 100%;
+    --card-foreground: 211 60% 11%;
+    /* Surface (subtle muted blocks) */
+    --muted: 218 33% 96%;
+    /* Muted text 6B7A90 */
+    --muted-foreground: 215 16% 49%;
+    /* Line E4E9F2 */
+    --border: 218 35% 92%;
+    /* Accent 2E6BE6 */
+    --accent: 219 78% 54%;
+    --accent-hover: 220 73% 43%;
     --accent-fg: 0 0% 100%;
-    --success: 142 71% 45%;
+    /* Teal 14B8A6 */
+    --success: 173 80% 40%;
+    /* Amber F59E0B */
     --warning: 38 92% 50%;
-    --danger: 0 84% 60%;
-    --radius: 8px;
+    /* Rose E11D48 */
+    --danger: 347 78% 50%;
+    /* Violet 7C3AED (RAGAS) */
+    --violet: 263 83% 58%;
+    /* Ink-on-dark surface (sidebar/login hero) */
+    --ink: 211 60% 11%;
+    --ink-fg: 0 0% 100%;
+    --radius: 12px;
   }
 
   * {

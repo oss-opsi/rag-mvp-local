@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/sheet";
 import { LeftRailContent } from "@/components/left-rail";
 import { useContextPanel } from "@/components/context-panel";
+import { BrandWordmark } from "@/components/brand-logo";
 
 /**
  * Barre supérieure spécifique mobile (<md) : 2 boutons fixes pour ouvrir
@@ -38,14 +39,14 @@ export function MobileNavBar() {
         </Button>
         <SheetContent
           side="left"
-          className="w-[88px] max-w-[88px] p-0 sm:max-w-[88px]"
+          className="w-[96px] max-w-[96px] p-0 sm:max-w-[96px]"
         >
           <SheetTitle className="sr-only">Navigation</SheetTitle>
           <LeftRailContent onNavigate={() => setNavOpen(false)} />
         </SheetContent>
       </Sheet>
 
-      <span className="text-sm font-semibold tracking-tight">Opsidium</span>
+      <BrandWordmark />
 
       {hasContent ? (
         <Button

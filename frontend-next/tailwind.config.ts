@@ -32,10 +32,19 @@ const config: Config = {
         accent: {
           DEFAULT: "hsl(var(--accent))",
           foreground: "hsl(var(--accent-fg))",
+          hover: "hsl(var(--accent-hover))",
         },
         primary: {
           DEFAULT: "hsl(var(--accent))",
           foreground: "hsl(var(--accent-fg))",
+        },
+        violet: {
+          DEFAULT: "hsl(var(--violet))",
+          foreground: "hsl(0 0% 100%)",
+        },
+        ink: {
+          DEFAULT: "hsl(var(--ink))",
+          foreground: "hsl(var(--ink-fg))",
         },
         secondary: {
           DEFAULT: "hsl(var(--muted))",
@@ -62,8 +71,8 @@ const config: Config = {
           foreground: "hsl(var(--foreground))",
         },
         card: {
-          DEFAULT: "hsl(var(--background))",
-          foreground: "hsl(var(--foreground))",
+          DEFAULT: "hsl(var(--card))",
+          foreground: "hsl(var(--card-foreground))",
         },
       },
       borderRadius: {

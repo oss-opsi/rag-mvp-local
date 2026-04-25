@@ -9,8 +9,9 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "Opsidium — Analyse d'écarts",
-  description: "Plateforme d'analyse de cahiers des charges",
+  title: "Tell me — Plateforme RAG",
+  description:
+    "Tell me — Plateforme RAG : indexation, chat, analyse d'écarts et évaluation RAGAS.",
 };
 
 export default function RootLayout({

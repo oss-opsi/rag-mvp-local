@@ -1,4 +1,5 @@
 import type {
+  AdminUser,
   AnalysisJob,
   ApiKeyInfo,
   Client,
@@ -12,6 +13,28 @@ import type {
   UploadResponse,
   User,
 } from "./types";
+
+export type RagasMetrics = {
+  faithfulness: number;
+  answer_relevancy: number;
+  context_precision: number;
+  context_recall: number;
+};
+
+export type RagasPerQuestion = {
+  question: string;
+  ground_truth: string;
+  answer: string;
+  faithfulness: number;
+  answer_relevancy: number;
+  context_precision: number;
+  context_recall: number;
+};
+
+export type RagasResult = {
+  per_question: RagasPerQuestion[];
+  aggregate: RagasMetrics;
+};
 
 async function handle<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -266,5 +289,96 @@ export const api = {
     const res = await fetch(`/api/analysis-jobs${qs}`);
     const data = await handle<{ jobs: AnalysisJob[] }>(res);
     return data.jobs || [];
+  },
+
+  // Self-service password change
+  async changePassword(
+    current_password: string,
+    new_password: string,
+  ): Promise<{ ok: boolean }> {
+    const res = await fetch("/api/auth/password", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ current_password, new_password }),
+    });
+    return handle<{ ok: boolean }>(res);
+  },
+
+  // Admin: list users
+  async adminListUsers(): Promise<AdminUser[]> {
+    const res = await fetch("/api/admin/users");
+    const data = await handle<{ users: AdminUser[] }>(res);
+    return data.users || [];
+  },
+
+  // Admin: create user
+  async adminCreateUser(input: {
+    username: string;
+    name?: string;
+    email?: string;
+    password: string;
+    role?: "admin" | "user";
+  }): Promise<{ user: AdminUser }> {
+    const res = await fetch("/api/admin/users", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    return handle<{ user: AdminUser }>(res);
+  },
+
+  // Admin: reset password
+  async adminResetPassword(
+    username: string,
+    new_password: string,
+  ): Promise<{ ok: boolean }> {
+    const res = await fetch(
+      `/api/admin/users/${encodeURIComponent(username)}/password`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ new_password }),
+      },
+    );
+    return handle<{ ok: boolean }>(res);
+  },
+
+  // Admin: change role
+  async adminSetRole(
+    username: string,
+    role: "admin" | "user",
+  ): Promise<{ ok: boolean }> {
+    const res = await fetch(
+      `/api/admin/users/${encodeURIComponent(username)}/role`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role }),
+      },
+    );
+    return handle<{ ok: boolean }>(res);
+  },
+
+  // Admin: delete user
+  async adminDeleteUser(username: string): Promise<{ ok: boolean }> {
+    const res = await fetch(
+      `/api/admin/users/${encodeURIComponent(username)}`,
+      { method: "DELETE" },
+    );
+    return handle<{ ok: boolean }>(res);
+  },
+
+  // RAGAS evaluation (multipart CSV upload)
+  async evaluateRagas(
+    file: File,
+    openai_api_key: string,
+  ): Promise<{ per_question: RagasPerQuestion[]; aggregate: RagasMetrics }> {
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("openai_api_key", openai_api_key);
+    const res = await fetch("/api/evaluate", { method: "POST", body: fd });
+    return handle<{ per_question: RagasPerQuestion[]; aggregate: RagasMetrics }>(
+      res,
+    );
   },
 };
