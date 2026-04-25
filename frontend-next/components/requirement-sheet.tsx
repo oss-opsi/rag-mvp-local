@@ -30,11 +30,11 @@ export function RequirementSheet({
 }) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="flex h-full w-full flex-col gap-0 p-0 sm:max-w-xl">
+      <SheetContent side="right" className="flex w-full flex-col gap-0 p-0 sm:max-w-xl">
         {requirement ? (
           <>
-            <SheetHeader className="border-b border-border p-6 pr-12">
-              <div className="flex flex-wrap items-center gap-2">
+            <SheetHeader className="border-b border-border p-6">
+              <div className="flex items-center gap-3">
                 <span
                   className={cn(
                     "h-2.5 w-2.5 shrink-0 rounded-full",
@@ -67,7 +67,7 @@ export function RequirementSheet({
               <SheetTitle className="mt-1 text-xl">{requirement.title}</SheetTitle>
               <SheetDescription>{requirement.category}</SheetDescription>
             </SheetHeader>
-            <ScrollArea className="min-h-0 flex-1">
+            <ScrollArea className="flex-1">
               <div className="flex flex-col gap-5 p-6">
                 {requirement.description ? (
                   <section>

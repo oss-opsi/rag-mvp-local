@@ -45,11 +45,7 @@ export default function DocumentsPage() {
   const [uploading, setUploading] = React.useState(false);
   const [jobs, setJobs] = React.useState<IngestionJob[]>([]);
   // Track which finished jobs we've already toasted so we don't double-notify.
-  // Au premier chargement de la page, on n'affiche pas de toast pour les jobs
-  // déjà terminés (sinon ils réapparaissent à chaque rafraîchissement).
   const toastedRef = React.useRef<Set<number>>(new Set());
-  const initializedRef = React.useRef(false);
-  const [jobsLoaded, setJobsLoaded] = React.useState(false);
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
 
   const username = user?.name || user?.user_id || "moi";
@@ -72,7 +68,6 @@ export default function DocumentsPage() {
     try {
       const list = await api.ingestionJobs();
       setJobs(list);
-      setJobsLoaded(true);
       return list;
     } catch {
       // Silent — polling shouldn't spam toasts on transient errors.
@@ -100,19 +95,6 @@ export default function DocumentsPage() {
 
   // Detect newly-finished jobs → toast + refresh the documents list once.
   React.useEffect(() => {
-    // Attendre la première réponse de l'API avant toute logique de toast.
-    if (!jobsLoaded) return;
-    // Premier passage après chargement : on mémorise tous les jobs déjà
-    // terminés sans afficher de toast (événements passés, déjà vus par l'utilisateur).
-    if (!initializedRef.current) {
-      initializedRef.current = true;
-      for (const j of jobs) {
-        if (j.status === "done" || j.status === "error") {
-          toastedRef.current.add(j.id);
-        }
-      }
-      return;
-    }
     let changed = false;
     for (const j of jobs) {
       if (j.status !== "done" && j.status !== "error") continue;
@@ -133,7 +115,7 @@ export default function DocumentsPage() {
       }
     }
     if (changed) void reload();
-  }, [jobs, jobsLoaded, reload, toast]);
+  }, [jobs, reload, toast]);
 
   const handleUpload = async (file: File) => {
     setUploading(true);
