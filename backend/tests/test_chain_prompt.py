@@ -65,6 +65,28 @@ class TestSystemPrompt(unittest.TestCase):
         self.assertIn(SECTION_KB_TITLE, prompt)
         self.assertNotIn(SECTION_PRIVATE_TITLE, prompt)
 
+    def test_ambiguity_handling_instructions_present(self) -> None:
+        """Le system prompt doit instruire le LLM sur la gestion des questions ambiguës."""
+        for has_private, has_kb in [(True, True), (True, False), (False, True)]:
+            prompt = _build_system_prompt(has_private=has_private, has_kb=has_kb)
+            lower = prompt.lower()
+            # Présence de l'intention « clarification / précision / ambiguïté ».
+            self.assertTrue(
+                ("ambig" in lower) and ("clarif" in lower or "précision" in lower),
+                "Le prompt doit mentionner la gestion des questions ambiguës "
+                "(mots-clés : ambig + clarif/précision).",
+            )
+            # Préfixe imposé pour la question de clarification.
+            self.assertIn("Précision nécessaire", prompt)
+            # Doit mentionner explicitement l'usage du contexte conversationnel.
+            self.assertTrue(
+                "contexte conversationnel" in lower or "échanges précédents" in lower,
+                "Le prompt doit indiquer d'utiliser l'historique conversationnel "
+                "avant de redemander une précision.",
+            )
+            # Doit interdire les puces et listes multiples dans la clarification.
+            self.assertIn("une seule question", lower)
+
 
 class TestBuildMessages(unittest.TestCase):
     def test_both_collections_produce_dual_sections(self) -> None:
