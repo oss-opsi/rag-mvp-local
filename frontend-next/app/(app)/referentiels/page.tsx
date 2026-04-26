@@ -196,25 +196,11 @@ export default function ReferentielsPage() {
 
   return (
     <div className="flex h-full flex-col">
-      <Topbar
-        breadcrumb={
-          <>
-            Référentiels{" "}
-            <span className="mx-1.5 text-muted-foreground">—</span>
-            <span className="font-normal text-muted-foreground">
-              Méthodologie interne (analyse des cahiers des charges)
-            </span>
-          </>
-        }
-      />
+      <Topbar breadcrumb="Référentiels" />
 
       <div className="flex flex-1 flex-col gap-6 overflow-y-auto p-6">
         <div>
           <h1 className="text-xl font-semibold">Référentiels Opsidium</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Documents internes utilisés exclusivement par l'Analyse d'écarts CDC
-            (jamais lus par le chat « Tell me »).
-          </p>
         </div>
 
         <UploadDropzone
