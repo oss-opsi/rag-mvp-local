@@ -44,6 +44,15 @@ class TestSystemPrompt(unittest.TestCase):
         self.assertIn(SECTION_KB_TITLE, prompt)
         self.assertIn("deux sections", prompt)
 
+    def test_sirh_business_context_present(self) -> None:
+        """Le system prompt doit fixer le contexte métier SIRH."""
+        for has_private, has_kb in [(True, True), (True, False), (False, True)]:
+            prompt = _build_system_prompt(has_private=has_private, has_kb=has_kb)
+            self.assertIn("SIRH", prompt)
+            # Mentions clés du contexte métier (paie / DSN / droit du travail).
+            self.assertIn("paie", prompt)
+            self.assertIn("DSN", prompt)
+
     def test_only_private_section(self) -> None:
         prompt = _build_system_prompt(has_private=True, has_kb=False)
         self.assertIn(SECTION_PRIVATE_TITLE, prompt)
