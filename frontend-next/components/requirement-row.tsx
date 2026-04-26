@@ -1,7 +1,9 @@
 "use client";
 
 import * as React from "react";
+import { ThumbsDown, ThumbsUp } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { ConfidencePill } from "@/components/confidence";
 import { cn } from "@/lib/utils";
 import type { Requirement, RequirementStatus } from "@/lib/types";
 
@@ -42,9 +44,11 @@ export function statusPillClass(status: RequirementStatus): string {
 
 export function RequirementRow({
   requirement,
+  feedbackVote,
   onClick,
 }: {
   requirement: Requirement;
+  feedbackVote?: "up" | "down" | null;
   onClick: () => void;
 }) {
   const s = requirement.status;
@@ -69,12 +73,34 @@ export function RequirementRow({
             {requirement.title}
           </span>
         </div>
+        {requirement.subdomain ? (
+          <div className="text-xs text-muted-foreground/80">
+            {requirement.subdomain}
+          </div>
+        ) : null}
         <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
           <span>{requirement.category}</span>
           <span aria-hidden>·</span>
           <span className={cn("rounded px-1.5 py-0.5 text-xs", meta.pill)}>
             {meta.label}
           </span>
+          <ConfidencePill value={requirement.confidence} />
+          {feedbackVote === "up" ? (
+            <span
+              className="inline-flex items-center gap-1 rounded bg-accent/10 px-1.5 py-0.5 text-[10px] text-accent"
+              title="Vous avez signalé un verdict pertinent"
+            >
+              <ThumbsUp className="h-3 w-3" aria-hidden />
+            </span>
+          ) : null}
+          {feedbackVote === "down" ? (
+            <span
+              className="inline-flex items-center gap-1 rounded bg-danger/10 px-1.5 py-0.5 text-[10px] text-danger"
+              title="Vous avez signalé un verdict à revoir"
+            >
+              <ThumbsDown className="h-3 w-3" aria-hidden />
+            </span>
+          ) : null}
           {requirement.hyde_used ? (
             <Badge variant="outline" className="text-[10px]">
               HyDE

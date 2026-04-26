@@ -165,13 +165,38 @@ export type Requirement = {
   title: string;
   category: string;
   description: string;
-  criteria?: string[];
+  acceptance_criteria?: string[] | null;
   status: RequirementStatus;
   verdict: string;
   evidence: string[];
   sources: RequirementSource[];
   hyde_used?: boolean;
   repass_used?: boolean;
+  confidence?: number | null;
+  llm_confidence?: number | null;
+  retrieval_confidence?: number | null;
+  subdomain?: string | null;
+};
+
+export type RequirementFeedback = {
+  id?: string;
+  analysis_id?: string;
+  requirement_id: string;
+  user_id?: string;
+  vote: "up" | "down";
+  comment: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type QualityDashboard = {
+  analysis_id: string;
+  total_votes: number;
+  up: number;
+  down: number;
+  top_contested: { requirement_id: string; down_votes: number }[];
+  feedback_per_domain: Record<string, { up: number; down: number }>;
+  coverage_corrected: number | null;
 };
 
 export type AnalysisSummary = {

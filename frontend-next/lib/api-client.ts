@@ -9,7 +9,9 @@ import type {
   Conversation,
   ConversationDetail,
   IngestionJob,
+  QualityDashboard,
   QueryResponse,
+  RequirementFeedback,
   UploadResponse,
   User,
 } from "./types";
@@ -341,6 +343,61 @@ export const api = {
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
+  },
+
+  async getAnalysisFeedback(
+    analysisId: number | string,
+  ): Promise<RequirementFeedback[]> {
+    const res = await fetch(
+      `/api/workspace/analyses/${encodeURIComponent(String(analysisId))}/feedback`,
+    );
+    const data = await handle<{ analysis_id: string; feedback: RequirementFeedback[] }>(
+      res,
+    );
+    return data.feedback || [];
+  },
+
+  async submitFeedback(
+    analysisId: number | string,
+    requirementId: string,
+    vote: "up" | "down",
+    comment?: string | null,
+  ): Promise<RequirementFeedback> {
+    const res = await fetch(
+      `/api/workspace/analyses/${encodeURIComponent(
+        String(analysisId),
+      )}/requirements/${encodeURIComponent(requirementId)}/feedback`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ vote, comment: comment ?? null }),
+      },
+    );
+    return handle<RequirementFeedback>(res);
+  },
+
+  async deleteFeedback(
+    analysisId: number | string,
+    requirementId: string,
+  ): Promise<void> {
+    const res = await fetch(
+      `/api/workspace/analyses/${encodeURIComponent(
+        String(analysisId),
+      )}/requirements/${encodeURIComponent(requirementId)}/feedback`,
+      { method: "DELETE" },
+    );
+    await handle(res);
+  },
+
+  async getQualityDashboard(
+    analysisId: number | string,
+  ): Promise<QualityDashboard> {
+    const res = await fetch(
+      `/api/workspace/analyses/${encodeURIComponent(
+        String(analysisId),
+      )}/quality-dashboard`,
+    );
+    return handle<QualityDashboard>(res);
   },
 
   async analysisJob(id: number): Promise<AnalysisJob> {

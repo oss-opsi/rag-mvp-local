@@ -561,6 +561,7 @@ export default function AnalysePage() {
       {contextPanelContent}
       <CdcReport
         cdcId={selectedCdcId}
+        analysisId={report.analysis_id ?? cdcDetail.analysis?.id ?? null}
         filename={report.filename}
         summary={report.summary}
         requirements={report.requirements}
