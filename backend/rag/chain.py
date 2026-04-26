@@ -166,8 +166,16 @@ def answer_question(
         raise ValueError("La clé API OpenAI est manquante.")
 
     # 1. Retrieve chunks
+    # Cloisonnement Chat « Tell me » : collection privée (Indexation user)
+    # + KB publique (service-public, BOSS, DSN-info, URSSAF…).
+    # Les Référentiels Opsidium ne sont JAMAIS lus par le chat (un retriever
+    # dédié ReferentielsOnlyRetriever est utilisé côté analyse CDC).
     if user_id is not None:
-        retriever = get_retriever_for_user(user_id, qdrant_url=qdrant_url)
+        retriever = get_retriever_for_user(
+            user_id,
+            qdrant_url=qdrant_url,
+            include_kb=True,
+        )
     else:
         retriever = HybridRetriever(qdrant_url=qdrant_url)
 
@@ -215,8 +223,14 @@ def stream_answer(
         raise ValueError("La clé API OpenAI est manquante.")
 
     # 1. Retrieve chunks (sync)
+    # Cloisonnement Chat « Tell me » : collection privée (Indexation user)
+    # + KB publique. Les Référentiels Opsidium ne sont JAMAIS lus par le chat.
     if user_id is not None:
-        retriever = get_retriever_for_user(user_id, qdrant_url=qdrant_url)
+        retriever = get_retriever_for_user(
+            user_id,
+            qdrant_url=qdrant_url,
+            include_kb=True,
+        )
     else:
         retriever = HybridRetriever(qdrant_url=qdrant_url)
 

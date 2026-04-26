@@ -4,6 +4,7 @@ import * as React from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
+  BookMarked,
   LayoutGrid,
   MessageCircle,
   FileSearch,
@@ -49,6 +50,11 @@ const SECONDARY_NAV: NavItem[] = [
   { href: "/settings", label: "Paramètres", icon: Settings },
 ];
 
+// Admin-only — injecté conditionnellement dans la nav secondaire.
+const ADMIN_NAV: NavItem[] = [
+  { href: "/referentiels", label: "Référentiels", icon: BookMarked },
+];
+
 /**
  * Rail latéral (80px) — masqué sur mobile (<md). Sur mobile il est ouvert via
  * le bouton hamburger de la barre mobile (cf. `MobileNavBar`), qui réutilise
@@ -70,6 +76,8 @@ export function LeftRailContent({
   const pathname = usePathname();
   const router = useRouter();
   const { user } = useAppShell();
+  const isAdmin = user?.role === "admin";
+  const secondaryNav = isAdmin ? [...ADMIN_NAV, ...SECONDARY_NAV] : SECONDARY_NAV;
 
   const handleLogout = async () => {
     try {
@@ -134,7 +142,7 @@ export function LeftRailContent({
           <div className="my-2 h-px w-8 bg-border" aria-hidden />
 
           {/* Navigation secondaire */}
-          {SECONDARY_NAV.map((item) => {
+          {secondaryNav.map((item) => {
             const Icon = item.icon;
             const active = isActive(item.href);
             return (

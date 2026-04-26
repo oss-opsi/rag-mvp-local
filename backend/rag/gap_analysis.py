@@ -42,7 +42,7 @@ def _repass_model() -> str:
     """Return the LLM model selected for the re-pass on ambiguous verdicts."""
     return get_setting("llm_repass", "gpt-4o")
 from .ingest import _load_documents, get_embeddings
-from .retriever import get_retriever_for_user
+from .retriever import ReferentielsOnlyRetriever, get_retriever_for_user  # noqa: F401
 
 # Deterministic seed passed to OpenAI for best-effort reproducibility
 # (same seed + same prompt + same model = same output, most of the time).
@@ -860,7 +860,13 @@ async def analyse_requirement(
         criteria_text,
     ]
     query = ". ".join(p for p in query_parts if p).strip()
-    retriever = get_retriever_for_user(user_id, qdrant_url=qdrant_url)
+    # Cloisonnement Analyse CDC : Référentiels Opsidium UNIQUEMENT.
+    # On exclut explicitement :
+    #   - la collection privée user (Indexation) — réservée au chat
+    #   - la KB publique (service-public, BOSS, DSN-info, URSSAF) — réservée au chat
+    # Seule la méthodologie interne Opsidium sert de référence pour évaluer
+    # les exigences extraites du cahier des charges client.
+    retriever = ReferentielsOnlyRetriever(qdrant_url=qdrant_url)
 
     hyde_used = False
     hypothesis = ""

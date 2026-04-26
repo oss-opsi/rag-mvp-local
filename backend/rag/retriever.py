@@ -35,12 +35,19 @@ from .config import (
     RETRIEVAL_K_SPARSE,
     RRF_K,
 )
+from .referentiels import REFERENTIELS_COLLECTION
 from .ingest import (
     get_embeddings,
     get_qdrant_client,
     load_bm25_corpus,
     sanitize_collection_name,
 )
+
+__all__ = [
+    "HybridRetriever",
+    "ReferentielsOnlyRetriever",
+    "get_retriever_for_user",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +81,8 @@ class HybridRetriever:
         else:
             self.collection_name = collection_name
             self.user_id = None
-        # Collection partagée « knowledge_base » interrogée en parallèle.
+        # Collection partagée « knowledge_base » (sources publiques :
+        # service-public, BOSS, DSN-info, URSSAF…) — utilisée par le chat.
         self.include_kb = include_kb
         self.kb_collection = kb_collection
 
@@ -116,7 +124,10 @@ class HybridRetriever:
         self, query: str, k_dense: int
     ) -> list[tuple[str, dict[str, Any], float]]:
         """
-        Recherche dense sur la collection privée + (optionnel) la KB partagée.
+        Recherche dense sur :
+          - la collection privée (Indexation user),
+          - la KB partagée (sources publiques) si include_kb.
+
         Les résultats sont concaténés puis triés par score descendant ;
         la fusion RRF en aval ré-classe l’ensemble.
         """
@@ -128,7 +139,6 @@ class HybridRetriever:
         kb_results = self._dense_search_collection(
             query, k_dense, self.kb_collection, scope="kb"
         )
-        # Tri par score descendant pour stabilité du rang
         merged = sorted(
             private_results + kb_results, key=lambda r: r[2], reverse=True
         )
@@ -273,9 +283,124 @@ class HybridRetriever:
         return fused
 
 
-def get_retriever_for_user(user_id: str, qdrant_url: str = QDRANT_URL) -> HybridRetriever:
+class ReferentielsOnlyRetriever:
+    """Retriever dédié à l'analyse CDC : interroge UNIQUEMENT la collection
+    `referentiels_opsidium` (méthodologie interne Opsidium).
+
+    Cloisonnement strict : ce retriever n'a aucune visibilité sur la
+    collection privée de l'utilisateur ni sur la KB publique. Il sert
+    exclusivement au pipeline gap-analysis pour évaluer les exigences
+    d'un cahier des charges client par rapport à la méthodologie Opsidium.
+    """
+
+    def __init__(
+        self,
+        qdrant_url: str = QDRANT_URL,
+        rrf_k: int = RRF_K,
+        collection: str = REFERENTIELS_COLLECTION,
+    ) -> None:
+        self.qdrant_url = qdrant_url
+        self.rrf_k = rrf_k
+        self.collection = collection
+
+    def _dense_search(
+        self, query: str, k_dense: int
+    ) -> list[tuple[str, dict[str, Any], float]]:
+        embeddings = get_embeddings()
+        client = get_qdrant_client(self.qdrant_url)
+        # Si la collection n'existe pas encore (aucun référentiel déposé),
+        # retourner une liste vide plutôt que de lever une exception.
+        try:
+            existing = {c.name for c in client.get_collections().collections}
+            if self.collection not in existing:
+                return []
+        except Exception as exc:
+            logger.warning(
+                "ReferentielsOnlyRetriever: Qdrant unreachable: %s", exc
+            )
+            return []
+
+        vector_store = QdrantVectorStore(
+            client=client,
+            collection_name=self.collection,
+            embedding=embeddings,
+        )
+        try:
+            results = vector_store.similarity_search_with_score(query, k=k_dense)
+        except Exception as exc:
+            logger.warning(
+                "Dense search failed for collection '%s': %s", self.collection, exc
+            )
+            return []
+        out: list[tuple[str, dict[str, Any], float]] = []
+        for doc, score in results:
+            meta = dict(doc.metadata or {})
+            meta.setdefault("scope", "referentiel")
+            meta.setdefault("collection", self.collection)
+            out.append((doc.page_content, meta, float(score)))
+        return out
+
+    def retrieve(
+        self,
+        query: str,
+        k: int = RETRIEVAL_K,
+        k_dense: int = RETRIEVAL_K_DENSE,
+        k_sparse: int = RETRIEVAL_K_SPARSE,  # noqa: ARG002 — ignoré (pas de BM25)
+        rerank: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Recherche dense uniquement (pas de BM25 sur les référentiels).
+
+        Le paramètre `k_sparse` est accepté pour compatibilité de signature
+        avec `HybridRetriever.retrieve()` mais ignoré.
+        """
+        rrf_k = _RERANK_CANDIDATE_K if rerank else k
+        dense = self._dense_search(query, k_dense)
+        if not dense:
+            return []
+
+        # Ranking dense direct, format aligné sur HybridRetriever.retrieve()
+        ranked: list[dict[str, Any]] = []
+        for rank, (text, metadata, score) in enumerate(dense[:rrf_k]):
+            ranked.append(
+                {
+                    "text": text,
+                    "metadata": metadata,
+                    "rrf_score": round(1.0 / (self.rrf_k + rank + 1), 6),
+                    "_dense_score": round(score, 6),
+                }
+            )
+
+        if rerank and ranked:
+            from .reranker import CrossEncoderReranker
+            reranker = CrossEncoderReranker()
+            ranked = reranker.rerank(query, ranked, top_n=k)
+        else:
+            ranked = ranked[:k]
+
+        return ranked
+
+
+def get_retriever_for_user(
+    user_id: str,
+    qdrant_url: str = QDRANT_URL,
+    include_kb: bool | None = None,
+) -> HybridRetriever:
     """
     Factory: return a HybridRetriever scoped to the given user's collection
     and BM25 corpus.
+
+    Cloisonnement des sources (Tell me) :
+      - Chat « Tell me »  → ce retriever (Indexation user + KB publique)
+      - Analyse CDC      → utiliser ReferentielsOnlyRetriever à la place
+
+    Args:
+        include_kb: si fourni, force l'inclusion (ou non) de la KB publique.
+          Si None, retombe sur le flag global ``KB_RETRIEVAL_ENABLED``.
     """
-    return HybridRetriever(qdrant_url=qdrant_url, user_id=user_id)
+    kwargs: dict[str, Any] = {
+        "qdrant_url": qdrant_url,
+        "user_id": user_id,
+    }
+    if include_kb is not None:
+        kwargs["include_kb"] = include_kb
+    return HybridRetriever(**kwargs)

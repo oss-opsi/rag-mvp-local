@@ -992,6 +992,131 @@ async def admin_sources_refresh(
 
 
 # ---------------------------------------------------------------------------
+# Référentiels Opsidium (méthodologie interne) — admin only
+# ---------------------------------------------------------------------------
+# Documents internes (PDF/DOCX) qui alimentent UNIQUEMENT le pipeline
+# d'analyse CDC client (gap-analysis). Ils ne sont pas exposés au chat
+# « Tell me ». Collection Qdrant dédiée : referentiels_opsidium.
+
+
+@app.get("/admin/referentiels/info", tags=["Admin"])
+async def admin_referentiels_info(_: str = Depends(require_admin)) -> dict:
+    """Résumé de la collection des référentiels Opsidium."""
+    from rag.referentiels import get_referentiels_info
+    return get_referentiels_info()
+
+
+@app.get("/admin/referentiels/list", tags=["Admin"])
+async def admin_referentiels_list(_: str = Depends(require_admin)) -> dict:
+    """Liste les référentiels indexés (groupés par fichier source)."""
+    from rag.referentiels import list_referentiels
+    return {"documents": list_referentiels()}
+
+
+@app.post(
+    "/admin/referentiels/upload",
+    tags=["Admin"],
+    status_code=201,
+)
+async def admin_referentiels_upload(
+    file: UploadFile = File(
+        ...,
+        description="Référentiel méthodologie Opsidium (PDF ou DOCX uniquement)",
+    ),
+    _: str = Depends(require_admin),
+) -> dict:
+    """Indexe un référentiel méthodologie interne.
+
+    Le fichier est découpé puis indexé dans la collection partagée
+    `referentiels_opsidium`. Cette collection est interrogée UNIQUEMENT
+    par le pipeline d'analyse CDC client (gap-analysis), jamais par le
+    chat « Tell me ».
+
+    Si un référentiel du même nom existe déjà, ses anciens chunks sont
+    supprimés avant la réindexation (mise à jour atomique).
+    """
+    from rag.referentiels import (
+        SUPPORTED_REFERENTIEL_EXTENSIONS,
+        delete_referentiel,
+        ingest_referentiel,
+    )
+    import pathlib
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Nom de fichier manquant.")
+
+    ext = pathlib.Path(file.filename).suffix.lower()
+    if ext not in SUPPORTED_REFERENTIEL_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Format non supporté pour un référentiel : '{ext}'. "
+                f"Formats acceptés : {', '.join(sorted(SUPPORTED_REFERENTIEL_EXTENSIONS))}."
+            ),
+        )
+
+    # Persist upload to a temp file
+    with tempfile.NamedTemporaryFile(
+        delete=False, suffix=ext, prefix="rag_referentiel_"
+    ) as tmp:
+        content = await file.read()
+        tmp.write(content)
+        tmp_path = tmp.name
+
+    try:
+        # Mise à jour atomique : on supprime d'abord les chunks existants
+        # de ce même fichier source (s'il a déjà été indexé auparavant).
+        try:
+            delete_referentiel(file.filename)
+        except Exception:
+            logger.exception(
+                "[referentiels] purge avant réindexation échouée pour '%s'",
+                file.filename,
+            )
+
+        # Indexation synchrone (volumétrie attendue faible : méthodo interne).
+        result = ingest_referentiel(tmp_path, file.filename)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.exception("[referentiels] upload failed for '%s'", file.filename)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Indexation du référentiel échouée : {exc}",
+        )
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+    return {
+        "source": result["source"],
+        "chunks": result["chunks"],
+        "chunker_version": result["chunker_version"],
+    }
+
+
+@app.delete("/admin/referentiels/{source:path}", tags=["Admin"])
+async def admin_referentiels_delete(
+    source: str,
+    _: str = Depends(require_admin),
+) -> dict:
+    """Supprime un référentiel indexé (filtre Qdrant `metadata.source`)."""
+    from rag.referentiels import delete_referentiel
+    if not source.strip():
+        raise HTTPException(status_code=400, detail="Nom de source vide.")
+    try:
+        return delete_referentiel(source)
+    except Exception as exc:
+        logger.exception("[referentiels] delete failed for '%s'", source)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Suppression du référentiel échouée : {exc}",
+        )
+
+
+# ---------------------------------------------------------------------------
 # User OpenAI API key (stored encrypted in users DB)
 # ---------------------------------------------------------------------------
 
