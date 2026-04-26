@@ -3,7 +3,7 @@
 import * as React from "react";
 import { ThumbsUp, ThumbsDown } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { SourceCard } from "@/components/chat/source-card";
+import { SourcesPanel } from "@/components/chat/sources-panel";
 import { MarkdownContent } from "@/components/chat/markdown-content";
 import { api } from "@/lib/api-client";
 import { useToast } from "@/components/ui/use-toast";
@@ -143,11 +143,7 @@ export function MessageBubble({
           </div>
         )}
         {!isUser && message.sources && message.sources.length > 0 ? (
-          <div className="mt-2 grid gap-2 sm:grid-cols-2">
-            {message.sources.map((s, i) => (
-              <SourceCard key={i} source={s} index={i} />
-            ))}
-          </div>
+          <SourcesPanel sources={message.sources} />
         ) : null}
         {/* Boutons de feedback : visibles seulement sur les réponses
             assistant terminées (avec id retourné par le backend). */}
