@@ -146,6 +146,8 @@ class LegifranceConnector(BaseConnector):
         self.idccs = list(idccs) if idccs is not None else list(LEGIFRANCE_IDCCS)
         self.ct_sections = list(ct_sections) if ct_sections is not None else list(CT_SECTIONS)
         self.max_articles_per_axis = max_articles_per_axis
+        # Collecte des warnings non bloquants pour remontée dans ConnectorRunResult.
+        self._run_errors: list[str] = []
 
     # ------------------------------------------------------------------
     # Fetch — énumération des articles via PISTE
@@ -156,21 +158,43 @@ class LegifranceConnector(BaseConnector):
     ) -> Iterable[dict[str, Any]]:
         """Parcourt la table des matières d'un code et yield les articles bruts.
 
-        L'endpoint PISTE /consult/legi/tableMatieres renvoie un arbre
-        hiérarchique. On descend récursivement et on récupère chaque article
-        via /consult/getArticle.
+        L'endpoint PISTE /consult/code renvoie un arbre hiérarchique
+        (sections + articles). On descend récursivement et on récupère
+        chaque article via /consult/getArticle.
         """
-        try:
-            payload = self._piste.post(
-                "/consult/legi/tableMatieres",
-                json={"textId": code_id, "date": None, "sctId": None},
+        from datetime import date as _date
+        today = _date.today().isoformat()
+        payload: dict[str, Any] | None = None
+        last_exc: Exception | None = None
+        # Plusieurs variantes d'endpoint selon la version de l'API PISTE.
+        # /consult/code est la voie nominale documentée ; on prévoit des fallbacks.
+        for ep, body in (
+            ("/consult/code", {"textId": code_id, "date": today}),
+            ("/consult/legiPart", {"textId": code_id, "date": today}),
+        ):
+            try:
+                payload = self._piste.post(ep, json=body)
+                logger.info("[%s] %s %s OK", self.NAME, ep, code_id)
+                break
+            except (PisteApiError, PisteAuthError) as exc:
+                last_exc = exc
+                logger.warning(
+                    "[%s] %s %s a échoué : %s", self.NAME, ep, code_id, exc
+                )
+                continue
+        if payload is None:
+            self._run_errors.append(
+                f"Code {code_id} ({label}) : tous les endpoints PISTE ont échoué — {last_exc}"
             )
-        except (PisteApiError, PisteAuthError) as exc:
-            logger.warning("[%s] tableMatieres %s a échoué : %s", self.NAME, code_id, exc)
             return
 
         count = 0
-        sections = payload.get("sections") or []
+        # Selon endpoint : 'sections' à la racine ou imbriqué dans 'tableMatieres'
+        sections = (
+            payload.get("sections")
+            or payload.get("tableMatieres", {}).get("sections")
+            or []
+        )
         for section in self._iter_sections(sections):
             if self.ct_sections and code_id == CODE_TRAVAIL_ID:
                 # Filtrage des sections du Code du travail si défini.
@@ -201,21 +225,43 @@ class LegifranceConnector(BaseConnector):
                 count += 1
 
     def _iter_sections(self, sections: list[dict[str, Any]]):
-        """Aplatit récursivement l'arbre des sections."""
+        """Aplatit récursivement l'arbre des sections.
+
+        L'API PISTE peut nommer les enfants 'sections' ou 'sousSections'.
+        """
         for section in sections:
             yield section
-            children = section.get("sections") or []
+            children = section.get("sections") or section.get("sousSections") or []
             if children:
                 yield from self._iter_sections(children)
 
     def _walk_idcc(self, idcc: str) -> Iterable[dict[str, Any]]:
-        """Pour une convention collective IDCC donnée, yield ses articles."""
-        try:
-            payload = self._piste.post(
-                "/consult/kaliCont", json={"idcc": idcc}
+        """Pour une convention collective IDCC donnée, yield ses articles.
+
+        Tente plusieurs endpoints PISTE car la nomenclature varie selon
+        les versions (kaliCont, kaliText, idcc, container).
+        """
+        payload: dict[str, Any] | None = None
+        last_exc: Exception | None = None
+        for ep, body in (
+            ("/consult/kaliCont", {"id": f"KALICONT{int(idcc):018d}"}),
+            ("/consult/kaliCont", {"idcc": idcc}),
+            ("/consult/kaliText", {"idcc": idcc}),
+        ):
+            try:
+                payload = self._piste.post(ep, json=body)
+                logger.info("[%s] %s IDCC=%s OK", self.NAME, ep, idcc)
+                break
+            except (PisteApiError, PisteAuthError) as exc:
+                last_exc = exc
+                logger.warning(
+                    "[%s] %s IDCC=%s a échoué : %s", self.NAME, ep, idcc, exc
+                )
+                continue
+        if payload is None:
+            self._run_errors.append(
+                f"IDCC {idcc} : tous les endpoints PISTE ont échoué — {last_exc}"
             )
-        except (PisteApiError, PisteAuthError) as exc:
-            logger.warning("[%s] kaliCont IDCC=%s : %s", self.NAME, idcc, exc)
             return
         # Selon la version de l'API, la structure varie. On reste défensif.
         articles = (
@@ -347,6 +393,8 @@ class LegifranceConnector(BaseConnector):
     def run(self, **kwargs: Any) -> ConnectorRunResult:  # type: ignore[override]
         """Exécute fetch → parse → chunk → embed → upsert dans knowledge_base."""
         result = ConnectorRunResult(source=self.NAME)
+        # Reset des warnings collectés pendant fetch.
+        self._run_errors = []
 
         if QdrantVectorStore is None:  # pragma: no cover — défensif
             result.errors.append("langchain_qdrant indisponible.")
@@ -400,6 +448,10 @@ class LegifranceConnector(BaseConnector):
             logger.exception("[%s] %s", self.NAME, msg)
             result.errors.append(msg)
         finally:
+            # Remontée des warnings collectés (endpoints en échec, etc.)
+            for err in self._run_errors:
+                if err not in result.errors:
+                    result.errors.append(err)
             self._piste.close()
 
         logger.info(
