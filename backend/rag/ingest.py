@@ -97,7 +97,10 @@ def get_embeddings() -> HuggingFaceEmbeddings:
     - max_seq_length limité à 4096 tokens (au lieu des 8192 max bge-m3) pour
       éviter qu'un chunk pathologique (HTML mal nettoyé, page d'erreur, longue
       chaîne sans espace) ne fasse exploser le tokenizer ou la passe forward.
-    - show_progress_bar=False pour ne pas polluer les logs serveur.
+    - show_progress_bar et convert_to_numpy ne sont PAS passés via encode_kwargs
+      car langchain_huggingface les passe déjà en interne à
+      SentenceTransformer.encode() — un doublon provoque
+      "got multiple values for keyword argument".
     """
     global _embeddings
     if _embeddings is None:
@@ -106,8 +109,6 @@ def get_embeddings() -> HuggingFaceEmbeddings:
             encode_kwargs={
                 "normalize_embeddings": True,
                 "batch_size": EMBED_BATCH_SIZE,
-                "show_progress_bar": False,
-                "convert_to_numpy": True,
             },
         )
         # SentenceTransformer expose max_seq_length sur l'instance interne.
