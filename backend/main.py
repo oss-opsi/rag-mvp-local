@@ -485,6 +485,9 @@ class QueryRequest(BaseModel):
     openai_api_key: str
     k: int = 5
     rerank: bool = False
+    # Optionnel : si fourni, les 5 derniers tours de la conversation sont
+    # injectés dans le prompt LLM pour donner du contexte conversationnel.
+    conversation_id: str | None = None
 
 
 class SourceItem(BaseModel):
@@ -493,6 +496,11 @@ class SourceItem(BaseModel):
     page: Any
     score: float
     rerank_score: float | None = None
+    # Origine de la source : 'private' (documents de l'utilisateur) ou 'kb'
+    # (collection publique partagée). Permet au front de regrouper les
+    # citations par section dans la réponse en deux parties.
+    scope: str | None = None
+    url_canonique: str | None = None
 
 
 class QueryResponse(BaseModel):
@@ -1355,6 +1363,39 @@ async def delete_collection(user_id: str = Depends(get_current_user)) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Query helpers
+# ---------------------------------------------------------------------------
+
+
+def _load_conversation_history(
+    conversation_id: str | None, user_id: str
+) -> list[dict] | None:
+    """Charge les messages d'une conversation pour injection dans le prompt LLM.
+
+    Retourne ``None`` si aucun ``conversation_id`` n'est fourni (premier
+    message d'une nouvelle conversation, comportement historique).
+
+    Vérifie l'appartenance de la conversation à l'utilisateur ; si la
+    conversation n'existe pas ou n'appartient pas à l'utilisateur, on
+    retourne une liste vide (pas d'erreur — on dégrade gracieusement,
+    le retrieval seul suffit à répondre).
+    """
+    if not conversation_id:
+        return None
+    try:
+        db = get_conv_db()
+        convs = db.list_conversations(user_id)
+        if not any(c["id"] == conversation_id for c in convs):
+            return []
+        # get_messages renvoie l'historique complet (ordre chronologique).
+        # La sélection des 5 derniers tours est faite dans rag.chain.
+        return db.get_messages(conversation_id, user_id=user_id)
+    except Exception as exc:  # noqa: BLE001 — non-bloquant
+        logger.warning("Impossible de charger l'historique conversationnel : %s", exc)
+        return []
+
+
+# ---------------------------------------------------------------------------
 # Query (non-streaming)
 # ---------------------------------------------------------------------------
 
@@ -1388,6 +1429,8 @@ async def query(
             detail="Aucun document indexé pour cet utilisateur. Veuillez d'abord indexer vos documents.",
         )
 
+    history = _load_conversation_history(request.conversation_id, user_id)
+
     try:
         result = answer_question(
             question=request.question,
@@ -1396,6 +1439,7 @@ async def query(
             k=request.k,
             rerank=request.rerank,
             user_id=user_id,
+            history=history,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -1410,6 +1454,8 @@ async def query(
             page=s["page"],
             score=s["score"],
             rerank_score=s.get("rerank_score"),
+            scope=s.get("scope"),
+            url_canonique=s.get("url_canonique"),
         )
         for s in result["sources"]
     ]
@@ -1454,6 +1500,8 @@ async def query_stream(
             detail="Aucun document indexé pour cet utilisateur. Veuillez d'abord indexer vos documents.",
         )
 
+    history = _load_conversation_history(request.conversation_id, user_id)
+
     try:
         token_gen, sources = stream_answer(
             question=request.question,
@@ -1462,6 +1510,7 @@ async def query_stream(
             k=request.k,
             rerank=request.rerank,
             user_id=user_id,
+            history=history,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -1481,6 +1530,8 @@ async def query_stream(
                 "page": s["page"],
                 "score": s["score"],
                 "rerank_score": s.get("rerank_score"),
+                "scope": s.get("scope"),
+                "url_canonique": s.get("url_canonique"),
             }
             for s in sources
         ]

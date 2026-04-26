@@ -282,6 +282,59 @@ class HybridRetriever:
 
         return fused
 
+    def retrieve_split(
+        self,
+        query: str,
+        k: int = RETRIEVAL_K,
+        k_dense: int = RETRIEVAL_K_DENSE,
+        k_sparse: int = RETRIEVAL_K_SPARSE,
+        rerank: bool = False,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """
+        Recherche scindée : retourne les chunks classés séparément pour
+        la collection privée (Indexation user) et pour la KB publique.
+
+        Chaque liste est triée par score RRF descendant et limitée à ``k``.
+        Le but est de pouvoir construire une réponse en deux sections
+        distinctes (documents privés / sources publiques).
+
+        Returns:
+            {"private": [...], "kb": [...]}
+            Une liste peut être vide si la collection ne contient aucun
+            résultat pertinent.
+        """
+        rrf_k = _RERANK_CANDIDATE_K if rerank else k
+
+        # Dense par collection
+        private_dense = self._dense_search_collection(
+            query, k_dense, self.collection_name, scope="private"
+        )
+        kb_dense: list[tuple[str, dict[str, Any], float]] = []
+        if self.include_kb:
+            kb_dense = self._dense_search_collection(
+                query, k_dense, self.kb_collection, scope="kb"
+            )
+
+        # BM25 ne couvre que la collection privée de l'utilisateur.
+        sparse = self._sparse_search(query, k_sparse)
+
+        private_fused = self._fuse_rrf(private_dense, sparse, rrf_k)
+        kb_fused = self._fuse_rrf(kb_dense, [], rrf_k)
+
+        if rerank:
+            from .reranker import CrossEncoderReranker
+
+            reranker = CrossEncoderReranker()
+            if private_fused:
+                private_fused = reranker.rerank(query, private_fused, top_n=k)
+            if kb_fused:
+                kb_fused = reranker.rerank(query, kb_fused, top_n=k)
+        else:
+            private_fused = private_fused[:k]
+            kb_fused = kb_fused[:k]
+
+        return {"private": private_fused, "kb": kb_fused}
+
 
 class ReferentielsOnlyRetriever:
     """Retriever dédié à l'analyse CDC : interroge UNIQUEMENT la collection

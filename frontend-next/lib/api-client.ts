@@ -147,12 +147,19 @@ export const api = {
   async query(
     question: string,
     k = 10,
-    rerank = true
+    rerank = true,
+    conversationId?: string | number | null
   ): Promise<QueryResponse> {
     const res = await fetch("/api/query", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question, openai_api_key: "", k, rerank }),
+      body: JSON.stringify({
+        question,
+        openai_api_key: "",
+        k,
+        rerank,
+        conversation_id: conversationId != null ? String(conversationId) : null,
+      }),
     });
     return handle<QueryResponse>(res);
   },
@@ -164,12 +171,19 @@ export const api = {
     question: string,
     k = 6,
     rerank = true,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    conversationId?: string | number | null
   ): Promise<Response> {
     const res = await fetch("/api/query/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question, openai_api_key: "", k, rerank }),
+      body: JSON.stringify({
+        question,
+        openai_api_key: "",
+        k,
+        rerank,
+        conversation_id: conversationId != null ? String(conversationId) : null,
+      }),
       signal,
     });
     if (!res.ok) {

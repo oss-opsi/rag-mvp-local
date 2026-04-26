@@ -196,7 +196,7 @@ export default function ChatPage() {
     let sources: QuerySource[] = [];
 
     try {
-      const res = await api.queryStream(question, 10, true, controller.signal);
+      const res = await api.queryStream(question, 10, true, controller.signal, convId);
       if (!res.body) throw new Error("Pas de flux disponible");
 
       const reader = res.body.getReader();

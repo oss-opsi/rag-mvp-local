@@ -79,6 +79,10 @@ export type QuerySource = {
   page?: number | string;
   score?: number;
   rerank_score?: number;
+  // 'private' = documents ingérés par l'utilisateur,
+  // 'kb'      = sources publiques métier (collection partagée).
+  scope?: "private" | "kb" | string | null;
+  url_canonique?: string | null;
 };
 
 export type QueryResponse = {
