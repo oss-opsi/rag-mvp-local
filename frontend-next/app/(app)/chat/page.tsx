@@ -47,6 +47,27 @@ export default function ChatPage() {
   const [streamSources, setStreamSources] = React.useState<QuerySource[]>([]);
   const [loadingList, setLoadingList] = React.useState(true);
   const [loadingDetail, setLoadingDetail] = React.useState(false);
+  const [deepSearch, setDeepSearch] = React.useState<boolean>(false);
+  const [deepSearchActive, setDeepSearchActive] = React.useState(false);
+
+  // Hydrate deepSearch from localStorage once at mount.
+  React.useEffect(() => {
+    try {
+      const v = window.localStorage.getItem("tellme.deepSearch");
+      if (v === "true") setDeepSearch(true);
+    } catch {
+      // ignore (SSR / privacy mode)
+    }
+  }, []);
+
+  const handleDeepSearchChange = React.useCallback((v: boolean) => {
+    setDeepSearch(v);
+    try {
+      window.localStorage.setItem("tellme.deepSearch", v ? "true" : "false");
+    } catch {
+      // ignore
+    }
+  }, []);
   const abortRef = React.useRef<AbortController | null>(null);
   const scrollRef = React.useRef<HTMLDivElement | null>(null);
 
@@ -181,6 +202,7 @@ export default function ChatPage() {
     setStreaming(true);
     setStreamText("");
     setStreamSources([]);
+    setDeepSearchActive(deepSearch);
 
     // Fire and forget: persist user message
     if (convId !== null) {
@@ -196,7 +218,7 @@ export default function ChatPage() {
     let sources: QuerySource[] = [];
 
     try {
-      const res = await api.queryStream(question, 10, true, controller.signal, convId);
+      const res = await api.queryStream(question, 10, deepSearch, controller.signal, convId);
       if (!res.body) throw new Error("Pas de flux disponible");
 
       const reader = res.body.getReader();
@@ -291,6 +313,7 @@ export default function ChatPage() {
       setStreaming(false);
       setStreamText("");
       setStreamSources([]);
+      setDeepSearchActive(false);
       abortRef.current = null;
     }
   };
@@ -420,14 +443,22 @@ export default function ChatPage() {
           )}
 
           {streaming ? (
-            <MessageBubble
-              message={{
-                role: "assistant",
-                content: streamText,
-                sources: streamSources,
-              }}
-              streaming
-            />
+            <>
+              {deepSearchActive && !streamText ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Recherche approfondie en cours…
+                </div>
+              ) : null}
+              <MessageBubble
+                message={{
+                  role: "assistant",
+                  content: streamText,
+                  sources: streamSources,
+                }}
+                streaming
+              />
+            </>
           ) : null}
         </div>
       </div>
@@ -439,6 +470,8 @@ export default function ChatPage() {
         onStop={handleStop}
         streaming={streaming}
         disabled={streaming}
+        deepSearch={deepSearch}
+        onDeepSearchChange={handleDeepSearchChange}
       />
 
       <Dialog open={renameOpen} onOpenChange={setRenameOpen}>

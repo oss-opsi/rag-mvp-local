@@ -147,7 +147,7 @@ export const api = {
   async query(
     question: string,
     k = 10,
-    rerank = true,
+    rerank = false,
     conversationId?: string | number | null
   ): Promise<QueryResponse> {
     const res = await fetch("/api/query", {
@@ -170,7 +170,7 @@ export const api = {
   async queryStream(
     question: string,
     k = 6,
-    rerank = true,
+    rerank = false,
     signal?: AbortSignal,
     conversationId?: string | number | null
   ): Promise<Response> {

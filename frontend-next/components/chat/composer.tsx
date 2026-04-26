@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Send, StopCircle } from "lucide-react";
+import { Send, StopCircle, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -12,6 +12,8 @@ export function Composer({
   onStop,
   disabled,
   streaming,
+  deepSearch = false,
+  onDeepSearchChange,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -19,6 +21,8 @@ export function Composer({
   onStop?: () => void;
   disabled?: boolean;
   streaming?: boolean;
+  deepSearch?: boolean;
+  onDeepSearchChange?: (v: boolean) => void;
 }) {
   const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
 
@@ -36,8 +40,35 @@ export function Composer({
     }
   };
 
+  const toggleDeepSearch = () => {
+    if (onDeepSearchChange) onDeepSearchChange(!deepSearch);
+  };
+
   return (
     <div className="border-t border-border bg-background p-4">
+      {onDeepSearchChange ? (
+        <div className="mx-auto mb-2 flex max-w-3xl flex-col gap-1">
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant={deepSearch ? "default" : "outline"}
+              onClick={toggleDeepSearch}
+              aria-pressed={deepSearch}
+              className="h-7 gap-1.5 px-2.5 text-xs"
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+              Recherche approfondie
+            </Button>
+            <span className="text-[11px] text-muted-foreground">
+              {deepSearch ? "Activée" : "Désactivée"}
+            </span>
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            Améliore la pertinence des résultats mais peut prendre 1 à 3 minutes.
+          </p>
+        </div>
+      ) : null}
       <div
         className={cn(
           "flex items-end gap-2 rounded-lg border border-border bg-background px-3 py-2",
@@ -76,7 +107,7 @@ export function Composer({
         )}
       </div>
       <div className="mt-2 text-center text-[11px] text-muted-foreground">
-        k=10 · reranker activé · HyDE activé
+        k=10 · HyDE activé · reranker {deepSearch ? "activé" : "désactivé"}
       </div>
     </div>
   );
