@@ -862,12 +862,80 @@ async def admin_sources_status(_: str = Depends(require_admin)) -> dict:
     }
 
 
-@app.post("/admin/sources/refresh", tags=["Admin"])
-async def admin_sources_refresh(
+def _purge_source_from_kb(source: str) -> int:
+    """Supprime tous les vecteurs d'une source dans la collection KB partagée.
+
+    Filtre Qdrant sur la métadonnée `metadata.source == <source>`.
+    Renvoie le nombre de points supprimés (estimé à partir du compte avant/après).
+    """
+    from qdrant_client.http import models as qmodels
+    from rag.config import KNOWLEDGE_BASE_COLLECTION
+    from rag.ingest import get_qdrant_client
+
+    client = get_qdrant_client(QDRANT_URL)
+    existing = {c.name for c in client.get_collections().collections}
+    if KNOWLEDGE_BASE_COLLECTION not in existing:
+        return 0
+
+    before = int(
+        getattr(client.get_collection(KNOWLEDGE_BASE_COLLECTION), "points_count", 0) or 0
+    )
+
+    # Le QdrantVectorStore (langchain) stocke les métadonnées sous la clé "metadata"
+    flt = qmodels.Filter(
+        must=[
+            qmodels.FieldCondition(
+                key="metadata.source",
+                match=qmodels.MatchValue(value=source),
+            )
+        ]
+    )
+    client.delete(
+        collection_name=KNOWLEDGE_BASE_COLLECTION,
+        points_selector=qmodels.FilterSelector(filter=flt),
+        wait=True,
+    )
+    after = int(
+        getattr(client.get_collection(KNOWLEDGE_BASE_COLLECTION), "points_count", 0) or 0
+    )
+    deleted = max(0, before - after)
+    logger.info("[%s] Purge KB : %d points supprimés (avant=%d, après=%d)", source, deleted, before, after)
+    return deleted
+
+
+@app.post("/admin/sources/purge", tags=["Admin"])
+async def admin_sources_purge(
     source: str,
     _: str = Depends(require_admin),
 ) -> dict:
+    """Supprime les vecteurs d'une source dans la KB partagée.
+
+    Utile pour vider une source avant un refresh (évite les doublons), ou pour
+    retirer une source qui ne doit plus apparaître dans les réponses.
+    """
+    if source not in _SOURCES_REGISTRY:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Source inconnue : '{source}'.",
+        )
+    try:
+        deleted = _purge_source_from_kb(source)
+    except Exception as exc:
+        logger.exception("[%s] purge failed", source)
+        raise HTTPException(status_code=500, detail=f"Purge '{source}' a échoué : {exc}")
+    return {"source": source, "deleted": deleted}
+
+
+@app.post("/admin/sources/refresh", tags=["Admin"])
+async def admin_sources_refresh(
+    source: str,
+    purge_first: bool = True,
+    _: str = Depends(require_admin),
+) -> dict:
     """Déclenche un refresh manuel d'un connecteur source.
+
+    Par défaut, purge d'abord les vecteurs existants de cette source dans la KB
+    (évite les doublons). Mettre `purge_first=false` pour un upsert additif.
 
     Lot 2bis : `service_public` est disponible (ZIP XML DILA).
     BOSS / DSN-info / URSSAF arrivent dans les commits suivants.
@@ -896,6 +964,16 @@ async def admin_sources_refresh(
         )
 
     started = _time.time()
+    purged = 0
+    if purge_first:
+        try:
+            purged = _purge_source_from_kb(source)
+        except Exception as exc:
+            logger.exception("[%s] purge avant refresh échouée", source)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Purge avant refresh '{source}' a échoué : {exc}",
+            )
     try:
         run_result = connector.run()
     except Exception as exc:  # défensif — éviter 500 silencieux
@@ -906,6 +984,7 @@ async def admin_sources_refresh(
     last_run = {
         "started_at": int(started),
         "duration_s": duration,
+        "purged": purged,
         **run_result.to_dict(),
     }
     _SOURCES_LAST_RUN[source] = last_run
