@@ -106,11 +106,30 @@ class DsnInfoConnector(BaseConnector):
                 logger.warning("[%s] HTTP %s sur a_id=%s — fiche ignorée",
                                self.NAME, res.status_code, a_id)
                 continue
+            # Filtrage page d'erreur CustHelp : la plateforme redirige les
+            # fiches manquantes vers /app/error/error_id/N. Le HTML rendu n'a
+            # pas de #rn_AnswerText et peut contenir des blocs JS qui ne sont
+            # pas du contenu utile (et qui peuvent perturber le pipeline
+            # d'embedding s'ils sont chunkés tels quels).
+            final_url = (res.url or "").lower()
+            if "/app/error/" in final_url:
+                logger.warning(
+                    "[%s] a_id=%s redirigé vers page d'erreur (%s) — fiche ignorée",
+                    self.NAME, a_id, res.url,
+                )
+                continue
+            html_text = res.text or ""
+            if len(html_text) < 200 or "rn_AnswerText" not in html_text:
+                logger.warning(
+                    "[%s] a_id=%s : HTML sans rn_AnswerText (taille=%d) — fiche ignorée",
+                    self.NAME, a_id, len(html_text),
+                )
+                continue
             yield {
                 "a_id": a_id,
                 "sujet": sujet,
                 "url": url,
-                "html": res.text,
+                "html": html_text,
                 "domaine": domaine,
             }
 

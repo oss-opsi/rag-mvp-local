@@ -86,13 +86,44 @@ def _collection_for_user(user_id: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+EMBED_BATCH_SIZE: int = int(os.getenv("EMBED_BATCH_SIZE", "8"))
+EMBED_MAX_SEQ_LENGTH: int = int(os.getenv("EMBED_MAX_SEQ_LENGTH", "4096"))
+
+
 def get_embeddings() -> HuggingFaceEmbeddings:
+    """Singleton bge-m3 hardé pour usage CPU.
+
+    - batch_size petit (défaut 8) pour éviter les pics mémoire CPU.
+    - max_seq_length limité à 4096 tokens (au lieu des 8192 max bge-m3) pour
+      éviter qu'un chunk pathologique (HTML mal nettoyé, page d'erreur, longue
+      chaîne sans espace) ne fasse exploser le tokenizer ou la passe forward.
+    - show_progress_bar=False pour ne pas polluer les logs serveur.
+    """
     global _embeddings
     if _embeddings is None:
         _embeddings = HuggingFaceEmbeddings(
             model_name=EMBEDDING_MODEL,
-            encode_kwargs={"normalize_embeddings": True},
+            encode_kwargs={
+                "normalize_embeddings": True,
+                "batch_size": EMBED_BATCH_SIZE,
+                "show_progress_bar": False,
+                "convert_to_numpy": True,
+            },
         )
+        # SentenceTransformer expose max_seq_length sur l'instance interne.
+        # On le réduit à 4096 pour borner le coût de l'embedding par chunk.
+        try:
+            _embeddings._client.max_seq_length = EMBED_MAX_SEQ_LENGTH
+            logger.info(
+                "Embeddings bge-m3 prêts (batch_size=%d, max_seq_length=%d)",
+                EMBED_BATCH_SIZE,
+                EMBED_MAX_SEQ_LENGTH,
+            )
+        except Exception as exc:  # pragma: no cover — défensif
+            logger.warning(
+                "Impossible de fixer max_seq_length sur le SentenceTransformer: %s",
+                exc,
+            )
     return _embeddings
 
 
