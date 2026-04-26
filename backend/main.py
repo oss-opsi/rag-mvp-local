@@ -250,6 +250,29 @@ def _cleanup_old_chunker_collections() -> None:
 
 _cleanup_old_chunker_collections()
 
+
+def _ensure_knowledge_base_collection() -> None:
+    """Lot 1 — crée la collection partagée knowledge_base si absente.
+
+    Cette collection est alimentée par les connecteurs sources publiques
+    (Légifrance, BOSS, DSN-info, etc.) et interrogée en parallèle des
+    collections privées rag_<user_id> par le HybridRetriever.
+    """
+    try:
+        from rag.config import KNOWLEDGE_BASE_COLLECTION
+        from rag.ingest import ensure_collection, get_qdrant_client
+
+        client = get_qdrant_client(QDRANT_URL)
+        ensure_collection(client, KNOWLEDGE_BASE_COLLECTION)
+        logger.info(
+            "Knowledge base collection '%s' ready.", KNOWLEDGE_BASE_COLLECTION
+        )
+    except Exception as exc:
+        logger.warning("Could not ensure knowledge_base collection: %s", exc)
+
+
+_ensure_knowledge_base_collection()
+
 # ---------------------------------------------------------------------------
 # Singletons
 # ---------------------------------------------------------------------------
@@ -747,6 +770,111 @@ async def admin_set_llm_settings(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"settings": new_state, "allowed": list(LLM_ALLOWED_MODELS)}
+
+
+# ---------------------------------------------------------------------------
+# Admin — Sources publiques (KB partagée knowledge_base) — Lot 1
+# ---------------------------------------------------------------------------
+
+# Registry des connecteurs disponibles. Alimenté au fil des lots
+# (L2 Légifrance, L3 BOSS, L4 DSN-info, L5 Ameli/URSSAF/service-public).
+_SOURCES_REGISTRY: dict[str, dict] = {
+    "legifrance": {
+        "label": "Légifrance (API PISTE)",
+        "status": "planned",
+        "domaine": ["paie", "administration", "gta", "absences"],
+    },
+    "boss": {
+        "label": "BOSS — Bulletin officiel Sécurité sociale",
+        "status": "planned",
+        "domaine": ["paie", "dsn"],
+    },
+    "dsn_info": {
+        "label": "DSN-info — net-entreprises",
+        "status": "planned",
+        "domaine": ["dsn", "paie"],
+    },
+    "ameli_employeur": {
+        "label": "Ameli employeur",
+        "status": "planned",
+        "domaine": ["absences", "paie"],
+    },
+    "urssaf": {
+        "label": "URSSAF",
+        "status": "planned",
+        "domaine": ["paie", "dsn"],
+    },
+    "service_public": {
+        "label": "service-public.fr (employeur)",
+        "status": "planned",
+        "domaine": ["administration", "absences", "portail"],
+    },
+}
+
+
+@app.get("/admin/sources/status", tags=["Admin"])
+async def admin_sources_status(_: str = Depends(require_admin)) -> dict:
+    """Résumé de la base de connaissances partagée (knowledge_base).
+
+    Renvoie :
+      - kb_collection  : nom de la collection Qdrant
+      - vectors_count  : nombre de vecteurs dans la KB
+      - sources        : liste des connecteurs déclarés avec leur statut
+    """
+    from rag.config import KNOWLEDGE_BASE_COLLECTION
+    from rag.ingest import get_qdrant_client
+
+    vectors_count = 0
+    kb_exists = False
+    try:
+        client = get_qdrant_client(QDRANT_URL)
+        existing = {c.name for c in client.get_collections().collections}
+        kb_exists = KNOWLEDGE_BASE_COLLECTION in existing
+        if kb_exists:
+            info = client.get_collection(KNOWLEDGE_BASE_COLLECTION)
+            vectors_count = int(getattr(info, "points_count", 0) or 0)
+    except Exception as exc:
+        logger.warning("sources/status — Qdrant unreachable: %s", exc)
+
+    return {
+        "kb_collection": KNOWLEDGE_BASE_COLLECTION,
+        "kb_exists": kb_exists,
+        "vectors_count": vectors_count,
+        "sources": [
+            {"id": sid, **info} for sid, info in _SOURCES_REGISTRY.items()
+        ],
+    }
+
+
+@app.post("/admin/sources/refresh", tags=["Admin"])
+async def admin_sources_refresh(
+    source: str,
+    _: str = Depends(require_admin),
+) -> dict:
+    """Déclenche un refresh manuel d'un connecteur source.
+
+    À ce stade (Lot 1), la mécanique est en place mais aucun connecteur
+    concret n'est encore branché — ils seront ajoutés aux Lots 2-5
+    (Légifrance, BOSS, DSN-info, Ameli, URSSAF, service-public).
+    """
+    if source not in _SOURCES_REGISTRY:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Source inconnue : '{source}'. Sources déclarées : "
+            + ", ".join(_SOURCES_REGISTRY.keys()),
+        )
+    info = _SOURCES_REGISTRY[source]
+    if info["status"] != "available":
+        return {
+            "source": source,
+            "status": info["status"],
+            "message": "Connecteur planifié — sera disponible dans un prochain lot.",
+        }
+    # Quand un connecteur concret sera branché, on instanciera ici
+    # via une factory et on appellera connector.run().
+    raise HTTPException(
+        status_code=501, detail="Exécution non encore implémentée."
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -40,7 +40,12 @@ logger = logging.getLogger(__name__)
 _SYSTEM_PROMPT = """Tu es un assistant expert en analyse de documents.
 Tu réponds UNIQUEMENT à partir du contexte fourni ci-dessous.
 Si la réponse ne figure pas dans le contexte, réponds exactement : "Je ne sais pas."
-Cite toujours tes sources entre crochets, par exemple [rapport.pdf p.3].
+
+Le contexte contient deux types de sources :
+- Sources privées de l’utilisateur (documents internes), citées au format [nom_fichier p.X].
+- Sources publiques de référence métier (KB), citées au format [KB — source p.X] avec, si disponible, l’URL canonique entre parenthèses.
+
+Cite toujours la source de chaque élément de réponse. Quand une information est confirmée à la fois par les documents privés et par la KB, mentionne les deux.
 
 Règles de style strictes :
 - Réponds en 4 à 8 phrases maximum, sans répétition.
@@ -68,13 +73,24 @@ _PROMPT = ChatPromptTemplate.from_messages(
 
 
 def _format_context(chunks: list[dict[str, Any]]) -> str:
-    """Convert retrieved chunks into a formatted context string."""
+    """Convert retrieved chunks into a formatted context string.
+
+    Distingue les sources privées (collection user) des sources KB partagées,
+    en ajoutant l’URL canonique pour les sources publiques quand elle existe.
+    """
     parts = []
     for chunk in chunks:
         meta = chunk["metadata"]
         source = meta.get("source", "inconnu")
         page = meta.get("page", "?")
-        parts.append(f"[{source} p.{page}]\n{chunk['text']}")
+        scope = meta.get("scope", "private")
+        if scope == "kb":
+            url = meta.get("url_canonique") or meta.get("url")
+            url_part = f" ({url})" if url else ""
+            header = f"[KB — {source} p.{page}]{url_part}"
+        else:
+            header = f"[{source} p.{page}]"
+        parts.append(f"{header}\n{chunk['text']}")
     return "\n\n---\n\n".join(parts)
 
 
@@ -96,17 +112,27 @@ def _build_llm_chain(openai_api_key: str):
 
 
 def _chunks_to_sources(chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Convert retrieved chunks to a list of source dicts for API responses."""
-    return [
-        {
-            "text": chunk["text"],
-            "source": chunk["metadata"].get("source", "inconnu"),
-            "page": chunk["metadata"].get("page", "?"),
-            "score": chunk["rrf_score"],
-            "rerank_score": chunk["metadata"].get("rerank_score"),
-        }
-        for chunk in chunks
-    ]
+    """Convert retrieved chunks to a list of source dicts for API responses.
+
+    Inclut le scope ('private' / 'kb') et, si disponible, l’URL canonique et
+    le domaine métier des sources KB.
+    """
+    out: list[dict[str, Any]] = []
+    for chunk in chunks:
+        meta = chunk["metadata"]
+        out.append(
+            {
+                "text": chunk["text"],
+                "source": meta.get("source", "inconnu"),
+                "page": meta.get("page", "?"),
+                "score": chunk["rrf_score"],
+                "rerank_score": meta.get("rerank_score"),
+                "scope": meta.get("scope", "private"),
+                "url_canonique": meta.get("url_canonique") or meta.get("url"),
+                "domaine": meta.get("domaine"),
+            }
+        )
+    return out
 
 
 # ---------------------------------------------------------------------------
