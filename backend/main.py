@@ -43,6 +43,7 @@ import json
 import logging
 import os
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any, Optional
 
@@ -781,8 +782,9 @@ async def admin_set_llm_settings(
 _SOURCES_REGISTRY: dict[str, dict] = {
     "legifrance": {
         "label": "Légifrance (API PISTE)",
-        "status": "planned",
-        "domaine": ["paie", "administration", "gta", "absences"],
+        "status": "available",  # Lot 2 — dépend des credentials (cf. /admin/sources/status)
+        "requires_credentials": True,
+        "domaine": ["paie", "administration", "gta", "absences", "dsn"],
     },
     "boss": {
         "label": "BOSS — Bulletin officiel Sécurité sociale",
@@ -812,6 +814,40 @@ _SOURCES_REGISTRY: dict[str, dict] = {
 }
 
 
+# Tableau d'état des derniers runs des connecteurs (en mémoire process —
+# suffisant pour le besoin admin actuel ; peut être persisté plus tard).
+_LAST_REFRESH: dict[str, dict] = {}
+_REFRESH_LOCKS: dict[str, threading.Lock] = {}
+
+
+def _legifrance_credentials_configured() -> bool:
+    from rag.settings import (
+        LEGIFRANCE_CLIENT_ID_KEY,
+        LEGIFRANCE_CLIENT_SECRET_KEY,
+        has_secret,
+    )
+    return has_secret(LEGIFRANCE_CLIENT_ID_KEY) and has_secret(
+        LEGIFRANCE_CLIENT_SECRET_KEY
+    )
+
+
+def _source_state(source_id: str) -> dict:
+    """Calcule le statut effectif d'une source (registry + credentials + last_run)."""
+    info = dict(_SOURCES_REGISTRY[source_id])
+    info["id"] = source_id
+    if info.get("requires_credentials"):
+        configured = False
+        if source_id == "legifrance":
+            configured = _legifrance_credentials_configured()
+        info["credentials_configured"] = configured
+        if not configured and info.get("status") == "available":
+            info["status"] = "needs_credentials"
+    last = _LAST_REFRESH.get(source_id)
+    if last:
+        info["last_run"] = last
+    return info
+
+
 @app.get("/admin/sources/status", tags=["Admin"])
 async def admin_sources_status(_: str = Depends(require_admin)) -> dict:
     """Résumé de la base de connaissances partagée (knowledge_base).
@@ -819,7 +855,8 @@ async def admin_sources_status(_: str = Depends(require_admin)) -> dict:
     Renvoie :
       - kb_collection  : nom de la collection Qdrant
       - vectors_count  : nombre de vecteurs dans la KB
-      - sources        : liste des connecteurs déclarés avec leur statut
+      - sources        : liste des connecteurs avec statut effectif et
+                          dernier run (si disponible)
     """
     from rag.config import KNOWLEDGE_BASE_COLLECTION
     from rag.ingest import get_qdrant_client
@@ -840,10 +877,59 @@ async def admin_sources_status(_: str = Depends(require_admin)) -> dict:
         "kb_collection": KNOWLEDGE_BASE_COLLECTION,
         "kb_exists": kb_exists,
         "vectors_count": vectors_count,
-        "sources": [
-            {"id": sid, **info} for sid, info in _SOURCES_REGISTRY.items()
-        ],
+        "sources": [_source_state(sid) for sid in _SOURCES_REGISTRY.keys()],
     }
+
+
+def _run_legifrance_refresh_thread() -> None:
+    """Worker en thread pour exécuter le connecteur Légifrance.
+
+    Met à jour _LAST_REFRESH['legifrance'] avec le résultat ou l'erreur.
+    """
+    import time
+    from rag.connectors.legifrance import LegifranceConnector
+    from rag.settings import get_legifrance_credentials
+
+    started = time.time()
+    _LAST_REFRESH["legifrance"] = {
+        "status": "running",
+        "started_at": started,
+        "finished_at": None,
+        "fetched": 0,
+        "chunks": 0,
+        "upserted": 0,
+        "errors": [],
+    }
+    try:
+        cid, csec = get_legifrance_credentials()
+        connector = LegifranceConnector(client_id=cid, client_secret=csec)
+        result = connector.run()
+        _LAST_REFRESH["legifrance"].update(
+            {
+                "status": "done" if not result.errors else "done_with_errors",
+                "finished_at": time.time(),
+                "fetched": result.fetched,
+                "chunks": result.chunks,
+                "upserted": result.upserted,
+                "errors": result.errors[:10],  # tronqué pour l'API
+            }
+        )
+    except Exception as exc:
+        logger.exception("Légifrance refresh failed")
+        _LAST_REFRESH["legifrance"].update(
+            {
+                "status": "failed",
+                "finished_at": time.time(),
+                "errors": [str(exc)],
+            }
+        )
+    finally:
+        lock = _REFRESH_LOCKS.get("legifrance")
+        if lock and lock.locked():
+            try:
+                lock.release()
+            except RuntimeError:
+                pass
 
 
 @app.post("/admin/sources/refresh", tags=["Admin"])
@@ -851,11 +937,10 @@ async def admin_sources_refresh(
     source: str,
     _: str = Depends(require_admin),
 ) -> dict:
-    """Déclenche un refresh manuel d'un connecteur source.
+    """Déclenche un refresh manuel d'un connecteur (asynchrone).
 
-    À ce stade (Lot 1), la mécanique est en place mais aucun connecteur
-    concret n'est encore branché — ils seront ajoutés aux Lots 2-5
-    (Légifrance, BOSS, DSN-info, Ameli, URSSAF, service-public).
+    Retourne immédiatement avec status='accepted'. Le client interroge
+    /admin/sources/status pour suivre l'avancement (last_run.status).
     """
     if source not in _SOURCES_REGISTRY:
         raise HTTPException(
@@ -863,18 +948,95 @@ async def admin_sources_refresh(
             detail=f"Source inconnue : '{source}'. Sources déclarées : "
             + ", ".join(_SOURCES_REGISTRY.keys()),
         )
-    info = _SOURCES_REGISTRY[source]
-    if info["status"] != "available":
+    state = _source_state(source)
+    if state["status"] == "needs_credentials":
+        raise HTTPException(
+            status_code=400,
+            detail="Credentials manquants pour cette source. "
+            "Configurer via /admin/settings/legifrance avant de rafraîchir.",
+        )
+    if state["status"] != "available":
         return {
             "source": source,
-            "status": info["status"],
-            "message": "Connecteur planifié — sera disponible dans un prochain lot.",
+            "status": state["status"],
+            "message": "Connecteur non encore disponible — sera ajouté dans un prochain lot.",
         }
-    # Quand un connecteur concret sera branché, on instanciera ici
-    # via une factory et on appellera connector.run().
+
+    if source == "legifrance":
+        lock = _REFRESH_LOCKS.setdefault("legifrance", threading.Lock())
+        if not lock.acquire(blocking=False):
+            return {
+                "source": source,
+                "status": "already_running",
+                "message": "Un rafraîchissement Légifrance est déjà en cours.",
+            }
+        threading.Thread(
+            target=_run_legifrance_refresh_thread,
+            name="legifrance-refresh",
+            daemon=True,
+        ).start()
+        return {
+            "source": source,
+            "status": "accepted",
+            "message": "Rafraîchissement Légifrance lancé — suivre via /admin/sources/status.",
+        }
+
     raise HTTPException(
-        status_code=501, detail="Exécution non encore implémentée."
+        status_code=501, detail="Exécution non encore implémentée pour cette source."
     )
+
+
+# ---------------------------------------------------------------------------
+# Admin — Credentials Légifrance / PISTE (chiffrés, jamais retournés en clair)
+# ---------------------------------------------------------------------------
+
+class LegifranceCredentialsRequest(BaseModel):
+    client_id: str
+    client_secret: str
+
+
+@app.get("/admin/settings/legifrance", tags=["Admin"])
+async def admin_get_legifrance(_: str = Depends(require_admin)) -> dict:
+    """État de configuration des credentials PISTE (sans renvoyer les valeurs)."""
+    from rag.settings import (
+        LEGIFRANCE_CLIENT_ID_KEY,
+        LEGIFRANCE_CLIENT_SECRET_KEY,
+        get_secret,
+        has_secret,
+    )
+    cid_present = has_secret(LEGIFRANCE_CLIENT_ID_KEY)
+    cs_present = has_secret(LEGIFRANCE_CLIENT_SECRET_KEY)
+    cid = get_secret(LEGIFRANCE_CLIENT_ID_KEY) if cid_present else ""
+    masked = (cid[:4] + "…" + cid[-4:]) if len(cid) >= 8 else ("•" * len(cid))
+    return {
+        "client_id_configured": cid_present,
+        "client_secret_configured": cs_present,
+        "client_id_masked": masked if cid_present else "",
+    }
+
+
+@app.put("/admin/settings/legifrance", tags=["Admin"])
+async def admin_set_legifrance(
+    payload: LegifranceCredentialsRequest,
+    _: str = Depends(require_admin),
+) -> dict:
+    """Persiste les credentials PISTE chiffrés. Chaînes vides = effacement."""
+    from rag.settings import set_legifrance_credentials
+    set_legifrance_credentials(payload.client_id, payload.client_secret)
+    return {"ok": True, "message": "Credentials Légifrance enregistrés."}
+
+
+@app.post("/admin/settings/legifrance/test", tags=["Admin"])
+async def admin_test_legifrance(_: str = Depends(require_admin)) -> dict:
+    """Teste les credentials PISTE actuellement stockés (OAuth uniquement)."""
+    from rag.connectors.piste_client import ping
+    from rag.settings import get_legifrance_credentials
+    cid, csec = get_legifrance_credentials()
+    if not cid or not csec:
+        raise HTTPException(
+            status_code=400, detail="Credentials Légifrance non configurés."
+        )
+    return ping(cid, csec)
 
 
 # ---------------------------------------------------------------------------

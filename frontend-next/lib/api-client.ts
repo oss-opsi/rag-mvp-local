@@ -9,7 +9,10 @@ import type {
   Conversation,
   ConversationDetail,
   IngestionJob,
+  LegifranceCredsState,
   QueryResponse,
+  SourceRefreshResponse,
+  SourcesStatus,
   UploadResponse,
   User,
 } from "./types";
@@ -444,6 +447,49 @@ export const api = {
       body: JSON.stringify(values),
     });
     return handle<LlmSettingsResponse>(res);
+  },
+
+  // Admin — Sources publiques (KB partagée knowledge_base)
+  async adminGetSourcesStatus(): Promise<SourcesStatus> {
+    const res = await fetch("/api/admin/sources/status");
+    return handle<SourcesStatus>(res);
+  },
+
+  async adminRefreshSource(source: string): Promise<SourceRefreshResponse> {
+    const res = await fetch(
+      `/api/admin/sources/refresh?source=${encodeURIComponent(source)}`,
+      { method: "POST" },
+    );
+    return handle<SourceRefreshResponse>(res);
+  },
+
+  // Admin — Credentials Légifrance (PISTE)
+  async adminGetLegifranceCreds(): Promise<LegifranceCredsState> {
+    const res = await fetch("/api/admin/settings/legifrance");
+    return handle<LegifranceCredsState>(res);
+  },
+
+  async adminSetLegifranceCreds(
+    client_id: string,
+    client_secret: string,
+  ): Promise<{ ok: boolean; message?: string }> {
+    const res = await fetch("/api/admin/settings/legifrance", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ client_id, client_secret }),
+    });
+    return handle<{ ok: boolean; message?: string }>(res);
+  },
+
+  async adminTestLegifranceCreds(): Promise<{
+    ok: boolean;
+    env: string;
+    message: string;
+  }> {
+    const res = await fetch("/api/admin/settings/legifrance/test", {
+      method: "POST",
+    });
+    return handle<{ ok: boolean; env: string; message: string }>(res);
   },
 
   // RAGAS evaluation (multipart CSV upload)
