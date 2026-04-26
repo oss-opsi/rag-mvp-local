@@ -787,17 +787,17 @@ _SOURCES_REGISTRY: dict[str, dict] = {
     },
     "boss": {
         "label": "BOSS — Bulletin officiel Sécurité sociale",
-        "status": "planned",
+        "status": "available",
         "domaine": ["paie", "dsn"],
     },
     "dsn_info": {
         "label": "DSN-info — net-entreprises",
-        "status": "planned",
+        "status": "available",
         "domaine": ["dsn", "paie"],
     },
     "urssaf": {
         "label": "URSSAF — site employeur",
-        "status": "planned",
+        "status": "available",
         "domaine": ["paie", "dsn"],
     },
     "legifrance": {
@@ -819,7 +819,15 @@ def _get_connector(source_id: str):
     if source_id == "service_public":
         from rag.connectors.service_public import ServicePublicConnector
         return ServicePublicConnector()
-    # boss / dsn_info / urssaf : à brancher dans les commits suivants du Lot 2bis
+    if source_id == "boss":
+        from rag.connectors.boss import BossConnector
+        return BossConnector()
+    if source_id == "dsn_info":
+        from rag.connectors.dsn_info import DsnInfoConnector
+        return DsnInfoConnector()
+    if source_id == "urssaf":
+        from rag.connectors.urssaf import UrssafConnector
+        return UrssafConnector()
     return None
 
 
@@ -937,8 +945,8 @@ async def admin_sources_refresh(
     Par défaut, purge d'abord les vecteurs existants de cette source dans la KB
     (évite les doublons). Mettre `purge_first=false` pour un upsert additif.
 
-    Lot 2bis : `service_public` est disponible (ZIP XML DILA).
-    BOSS / DSN-info / URSSAF arrivent dans les commits suivants.
+    Lot 2bis : `service_public`, `boss`, `dsn_info` et `urssaf` sont disponibles.
+    Légifrance reste en pause (Lot 6 — citations sourcées).
     """
     import time as _time
 
