@@ -1,66 +1,78 @@
 """Connecteur URSSAF — fiches employeur (urssaf.fr).
 
-Stratégie P0 : 12 fiches employeur prioritaires (taux secteur privé/public,
-plafond SS, SMIC, DPAE, RGDU, exo heures sup, etc.).
+Stratégie P0 : 12 fiches employeur prioritaires (cotisations, exonérations,
+DPAE, frais professionnels, avantages en nature, etc.).
 
-URSSAF.fr est protégé par Cloudflare/Akamai et REQUIERT HTTP/2 — sinon
-`RemoteDisconnected` ou réponse vide. On utilise donc httpx avec http2=True
-(la lib `h2` est embarquée par `httpx[http2]`). Pause politesse 2.0s.
+urssaf.fr est protégé par Cloudflare avec TLS fingerprinting : httpx (même en
+HTTP/2) est désormais détecté et la connexion est coupée. On utilise donc
+`curl_cffi` avec `impersonate=chrome120` qui reproduit le ClientHello de Chrome
+via libcurl-impersonate. Pause politesse 2.0s.
+
+Arborescence URSSAF actualisée 2026 : l'ancienne structure
+/cotisations/calculer-cotisations/taux-bareme/* a été abandonnée. Les fiches P0
+pointent désormais vers /cotisations/, /beneficier-exonerations/ et
+/embaucher-gerer-salaries/.
 
 Métadonnées harmonisées KB : source, source_id (urssaf/<slug>), url_canonique,
 date_maj (parsée depuis "Mis à jour le 5 mars 2025"), domaine[], scope='kb'.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
+import os
 import re
+import time
+from pathlib import Path
 from typing import Any, Iterable
 
+from curl_cffi import requests as cffi_requests
+
 from .base import BaseConnector, KBChunk
-from .http_fetcher import BaseHttpFetcher
+from .http_fetcher import BaseHttpFetcher, FetchResult
 
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://www.urssaf.fr"
 
-# 12 fiches P0 (slug, chemin absolu, domaine[])
+# 12 fiches P0 (slug, chemin absolu, domaine[]) — arborescence URSSAF 2026
 P0_FICHES: list[tuple[str, str, list[str]]] = [
-    ("taux-secteur-prive",
-     "/accueil/employeur/cotisations/calculer-cotisations/taux-bareme/taux-cotisations-secteur-prive.html",
+    ("liste-cotisations",
+     "/accueil/employeur/cotisations/liste-cotisations.html",
      ["paie"]),
-    ("taux-secteur-public",
-     "/accueil/employeur/cotisations/calculer-cotisations/taux-bareme/taux-cotisations-secteur-public.html",
-     ["paie"]),
-    ("taux-reduit-allocations",
-     "/accueil/employeur/cotisations/calculer-cotisations/taux-bareme/taux-reduit-allocations-familia.html",
-     ["paie"]),
-    ("taux-reduit-maladie",
-     "/accueil/employeur/cotisations/calculer-cotisations/taux-bareme/taux-reduit-maladie.html",
-     ["paie"]),
-    ("vrp-multicartes",
-     "/accueil/employeur/cotisations/calculer-cotisations/taux-bareme/taux-cotisations-vrp-multicartes.html",
-     ["paie"]),
-    ("plafond-securite-sociale",
-     "/accueil/employeur/cotisations/elements-soumis/plafond-securite-sociale.html",
-     ["paie"]),
-    ("smic-mg",
-     "/accueil/employeur/cotisations/elements-soumis/smic.html",
-     ["paie"]),
-    ("dpae",
-     "/accueil/employeur/embaucher-salarie/declaration-prealable-embauche.html",
-     ["rh"]),
-    ("rgdu",
-     "/accueil/employeur/cotisations/calculer-cotisations/regularisation-cotisations.html",
-     ["paie"]),
-    ("exo-heures-sup",
-     "/accueil/employeur/cotisations/exonerations-aides/exoneration-heures-supplementai.html",
+    ("calcul-cotisations-employeur",
+     "/accueil/employeur/cotisations/comprendre-cotisations/calcul-cotisations-employeur.html",
      ["paie"]),
     ("avantages-en-nature",
-     "/accueil/employeur/cotisations/elements-soumis/avantages-en-nature.html",
+     "/accueil/employeur/cotisations/avantages-en-nature.html",
      ["paie"]),
-    ("conges-payes",
-     "/accueil/employeur/cotisations/elements-soumis/conges-payes.html",
+    ("frais-professionnels",
+     "/accueil/employeur/beneficier-exonerations/frais-professionnels.html",
+     ["paie"]),
+    ("reduction-generale-cotisation",
+     "/accueil/employeur/beneficier-exonerations/reduction-generale-cotisation.html",
+     ["paie"]),
+    ("exo-heures-sup-salariales",
+     "/accueil/employeur/beneficier-exonerations/exonerations-heures/reduction-cotisations-salariales.html",
+     ["paie"]),
+    ("prime-partage-valeur",
+     "/accueil/employeur/beneficier-exonerations/prime-partage-valeur.html",
+     ["paie"]),
+    ("dpae",
+     "/accueil/employeur/embaucher-gerer-salaries/embaucher/declaration-prealable-embauche.html",
      ["rh"]),
+    ("contrat-apprentissage",
+     "/accueil/employeur/embaucher-gerer-salaries/embaucher/contrat-apprentissage.html",
+     ["paie", "rh"]),
+    ("complementaire-frais-sante",
+     "/accueil/employeur/embaucher-gerer-salaries/embaucher/complementaire-frais-sante.html",
+     ["paie"]),
+    ("absences-maladie-at-mp",
+     "/accueil/employeur/embaucher-gerer-salaries/absences-maladie-AT-MP.html",
+     ["paie", "rh"]),
+    ("rupture-conventionnelle",
+     "/accueil/employeur/embaucher-gerer-salaries/gerer-fin-relation-travail/rupture-conventionnelle.html",
+     ["paie", "rh"]),
 ]
 
 DROP_SELECTORS = [
@@ -68,6 +80,126 @@ DROP_SELECTORS = [
     ".breadcrumb", ".navigation", ".menu", ".cookies",
     "#header", "#footer",
 ]
+
+DEFAULT_CACHE_DIR = Path(os.getenv("RAG_HTTP_CACHE_DIR", "/tmp/rag_http_cache"))
+
+
+class CffiFetcher:
+    """Fetcher minimal basé sur curl_cffi (anti-Cloudflare via TLS impersonation).
+
+    Cache disque + politesse identiques à BaseHttpFetcher pour rester compatible
+    avec le reste du pipeline.
+    """
+
+    def __init__(
+        self,
+        *,
+        source_name: str,
+        impersonate: str = "chrome120",
+        polite_delay: float = 2.0,
+        timeout: float = 30.0,
+        max_retries: int = 3,
+        headers: dict[str, str] | None = None,
+        cache_enabled: bool = True,
+        cache_dir: Path | None = None,
+        cache_ttl_seconds: int = 86_400,
+    ) -> None:
+        self.source_name = source_name
+        self.impersonate = impersonate
+        self.polite_delay = polite_delay
+        self.timeout = timeout
+        self.max_retries = max_retries
+        self.headers = {
+            "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            **(headers or {}),
+        }
+        self.cache_enabled = cache_enabled
+        self.cache_dir = (cache_dir or DEFAULT_CACHE_DIR) / source_name
+        self.cache_ttl_seconds = cache_ttl_seconds
+        if self.cache_enabled:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self._last_request_at: float = 0.0
+
+    def _wait_if_needed(self) -> None:
+        if self.polite_delay <= 0:
+            return
+        elapsed = time.time() - self._last_request_at
+        if elapsed < self.polite_delay:
+            time.sleep(self.polite_delay - elapsed)
+        self._last_request_at = time.time()
+
+    def _cache_path(self, url: str) -> Path:
+        digest = hashlib.sha256(url.encode("utf-8")).hexdigest()
+        return self.cache_dir / f"{digest}.bin"
+
+    def _read_cache(self, url: str) -> bytes | None:
+        if not self.cache_enabled:
+            return None
+        path = self._cache_path(url)
+        if not path.exists():
+            return None
+        if (time.time() - path.stat().st_mtime) > self.cache_ttl_seconds:
+            return None
+        try:
+            return path.read_bytes()
+        except OSError as exc:
+            logger.warning("[%s] cache read failed for %s: %s", self.source_name, url, exc)
+            return None
+
+    def _write_cache(self, url: str, content: bytes) -> None:
+        if not self.cache_enabled:
+            return
+        try:
+            self._cache_path(url).write_bytes(content)
+        except OSError as exc:
+            logger.warning("[%s] cache write failed for %s: %s", self.source_name, url, exc)
+
+    def get_html(self, url: str, *, use_cache: bool = True) -> FetchResult:
+        if use_cache:
+            cached = self._read_cache(url)
+            if cached is not None:
+                logger.debug("[%s] cache hit %s", self.source_name, url)
+                return FetchResult(url=url, status_code=200, content=cached, from_cache=True)
+
+        last_exc: Exception | None = None
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                self._wait_if_needed()
+                resp = cffi_requests.get(
+                    url,
+                    impersonate=self.impersonate,
+                    timeout=self.timeout,
+                    headers=self.headers,
+                    allow_redirects=True,
+                )
+                content = resp.content
+                result = FetchResult(
+                    url=str(resp.url),
+                    status_code=resp.status_code,
+                    content=content,
+                    headers=dict(resp.headers),
+                )
+                if result.ok:
+                    self._write_cache(url, content)
+                    return result
+                if 400 <= result.status_code < 500 and result.status_code != 429:
+                    return result
+                logger.info(
+                    "[%s] HTTP %s on %s (attempt %d/%d)",
+                    self.source_name, result.status_code, url, attempt, self.max_retries,
+                )
+            except Exception as exc:
+                last_exc = exc
+                logger.info(
+                    "[%s] network error on %s (attempt %d/%d): %s",
+                    self.source_name, url, attempt, self.max_retries, exc,
+                )
+            time.sleep(2 ** (attempt - 1))
+
+        if last_exc is not None:
+            raise last_exc
+        return FetchResult(url=url, status_code=0, content=b"")
 
 MOIS_FR = {
     "janvier": "01", "février": "02", "fevrier": "02", "mars": "03",
@@ -107,16 +239,14 @@ class UrssafConnector(BaseConnector):
     ) -> None:
         super().__init__(**kwargs)
         self.max_chars_per_chunk = max_chars_per_chunk
-        self._fetcher = BaseHttpFetcher(
+        # curl_cffi avec impersonation Chrome 120 — passe la protection
+        # Cloudflare/TLS fingerprinting qui bloque httpx.
+        self._fetcher = CffiFetcher(
             source_name=self.NAME,
-            http2=True,  # OBLIGATOIRE — Cloudflare bloque HTTP/1.1 sinon
-            use_urllib=False,
+            impersonate="chrome120",
             polite_delay=2.0,
             timeout=30.0,
             cache_ttl_seconds=24 * 3600,
-            headers={
-                "User-Agent": "Mozilla/5.0 (compatible; TellMe-Indexer/1.0)",
-            },
         )
 
     # ------------------------------------------------------------------
@@ -150,9 +280,11 @@ class UrssafConnector(BaseConnector):
     def parse(self, raw: dict[str, Any]) -> dict[str, Any]:
         soup = BaseHttpFetcher.parse_html(raw["html"], drop_selectors=DROP_SELECTORS)
 
-        # Conteneur principal : div.debord_full-content div.col-lg-8 (URSSAF)
+        # Conteneur principal URSSAF (refonte 2026) : main#contenuPage
+        # Fallback sur les anciens sélecteurs au cas où.
         main = (
-            soup.select_one("div.debord_full-content div.col-lg-8")
+            soup.select_one("main#contenuPage")
+            or soup.select_one("div.debord_full-content div.col-lg-8")
             or soup.select_one("div.col-lg-8")
             or soup.select_one("main")
             or soup.body
