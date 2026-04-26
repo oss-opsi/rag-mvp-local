@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .config import USERS_DB_PATH
+from .crypto_utils import decrypt_str, encrypt_str
 
 logger = logging.getLogger(__name__)
 
@@ -118,3 +119,55 @@ def set_llm_settings(values: dict[str, str]) -> dict[str, str]:
             )
         set_setting(key, val)
     return get_llm_settings()
+
+
+# ---------------------------------------------------------------------------
+# Lot 2 — Clés API tierces (chiffrées au repos via Fernet/JWT_SECRET)
+# ---------------------------------------------------------------------------
+#
+# Convention : on stocke la valeur chiffrée dans app_settings sous une clé
+# préfixée "secret.<provider>.<champ>". Le déchiffrement est explicite via
+# get_secret() ; la valeur n'est jamais retournée en clair par les endpoints
+# admin (cf. has_*/masked dans main.py).
+
+LEGIFRANCE_CLIENT_ID_KEY = "secret.legifrance.client_id"
+LEGIFRANCE_CLIENT_SECRET_KEY = "secret.legifrance.client_secret"
+
+
+def set_secret(key: str, plaintext: str) -> None:
+    """Stocke une valeur sensible chiffrée dans app_settings.
+
+    Si plaintext est vide, supprime la valeur existante.
+    """
+    if not plaintext:
+        # Effacer en écrivant une chaine vide (compat schéma : value NOT NULL)
+        set_setting(key, "")
+        return
+    set_setting(key, encrypt_str(plaintext))
+
+
+def get_secret(key: str) -> str:
+    """Récupère et déchiffre une valeur sensible. Renvoie '' si absente."""
+    raw = get_setting(key, default="")
+    if not raw:
+        return ""
+    return decrypt_str(raw)
+
+
+def has_secret(key: str) -> bool:
+    """Indique si une valeur (non vide) est stockée pour cette clé."""
+    return bool(get_setting(key, default=""))
+
+
+def get_legifrance_credentials() -> tuple[str, str]:
+    """Retourne (client_id, client_secret) en clair. ('', '') si absents."""
+    return (
+        get_secret(LEGIFRANCE_CLIENT_ID_KEY),
+        get_secret(LEGIFRANCE_CLIENT_SECRET_KEY),
+    )
+
+
+def set_legifrance_credentials(client_id: str, client_secret: str) -> None:
+    """Persiste les credentials PISTE chiffrés. Chaînes vides = effacement."""
+    set_secret(LEGIFRANCE_CLIENT_ID_KEY, client_id)
+    set_secret(LEGIFRANCE_CLIENT_SECRET_KEY, client_secret)

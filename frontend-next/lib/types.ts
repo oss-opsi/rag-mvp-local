@@ -226,3 +226,49 @@ export type CdcDetail = {
   corpus_fingerprint?: string;
   analysis: AnalysisRow | null;
 };
+
+// ---------------------------------------------------------------------------
+// Admin — Sources publiques (KB partagée knowledge_base)
+// ---------------------------------------------------------------------------
+
+export type SourceLastRun = {
+  status: "running" | "done" | "done_with_errors" | "failed";
+  started_at: number;
+  finished_at: number | null;
+  fetched: number;
+  chunks: number;
+  upserted: number;
+  errors: string[];
+};
+
+export type SourceState = {
+  id: string;
+  label: string;
+  status:
+    | "available"
+    | "planned"
+    | "needs_credentials";
+  domaine: string[];
+  requires_credentials?: boolean;
+  credentials_configured?: boolean;
+  last_run?: SourceLastRun;
+};
+
+export type SourcesStatus = {
+  kb_collection: string;
+  kb_exists: boolean;
+  vectors_count: number;
+  sources: SourceState[];
+};
+
+export type SourceRefreshResponse = {
+  source: string;
+  status: "accepted" | "already_running" | string;
+  message?: string;
+};
+
+export type LegifranceCredsState = {
+  client_id_configured: boolean;
+  client_secret_configured: boolean;
+  client_id_masked: string;
+};

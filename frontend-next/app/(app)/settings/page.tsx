@@ -23,6 +23,7 @@ import { ContextPanel } from "@/components/context-panel";
 import { useAppShell } from "@/components/app-shell-context";
 import { useToast } from "@/components/ui/use-toast";
 import { LlmModelsCard } from "@/components/llm-models-card";
+import { SourcesPubliquesCard } from "@/components/sources-publiques-card";
 import { api } from "@/lib/api-client";
 import type { ApiKeyInfo } from "@/lib/types";
 
@@ -120,12 +121,20 @@ export default function SettingsPage() {
               Pipeline
             </a>
             {isAdmin ? (
-              <a
-                href="#llm-models"
-                className="px-4 py-2 text-muted-foreground hover:bg-muted/50 hover:text-foreground"
-              >
-                Modèles LLM
-              </a>
+              <>
+                <a
+                  href="#llm-models"
+                  className="px-4 py-2 text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+                >
+                  Modèles LLM
+                </a>
+                <a
+                  href="#sources-publiques"
+                  className="px-4 py-2 text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+                >
+                  Sources publiques
+                </a>
+              </>
             ) : null}
           </nav>
         </div>
@@ -267,16 +276,33 @@ export default function SettingsPage() {
           </section>
 
           {isAdmin ? (
-            <section
-              id="llm-models"
-              className="rounded-lg border border-border bg-background p-5"
-            >
-              <h2 className="mb-1 text-lg font-semibold">Modèles LLM</h2>
-              <p className="mb-4 text-xs text-muted-foreground">
-                Réservé aux administrateurs.
-              </p>
-              <LlmModelsCard />
-            </section>
+            <>
+              <section
+                id="llm-models"
+                className="rounded-lg border border-border bg-background p-5"
+              >
+                <h2 className="mb-1 text-lg font-semibold">Modèles LLM</h2>
+                <p className="mb-4 text-xs text-muted-foreground">
+                  Réservé aux administrateurs.
+                </p>
+                <LlmModelsCard />
+              </section>
+
+              <section
+                id="sources-publiques"
+                className="rounded-lg border border-border bg-background p-5"
+              >
+                <h2 className="mb-1 text-lg font-semibold">
+                  Sources publiques
+                </h2>
+                <p className="mb-4 text-xs text-muted-foreground">
+                  Connecteurs alimentant la base de connaissances partagée
+                  (« knowledge_base ») interrogée en parallèle des
+                  documents privés.
+                </p>
+                <SourcesPubliquesCard />
+              </section>
+            </>
           ) : null}
         </div>
       </div>
