@@ -1021,7 +1021,7 @@ async def admin_referentiels_list(_: str = Depends(require_admin)) -> dict:
 async def admin_referentiels_upload(
     file: UploadFile = File(
         ...,
-        description="Référentiel méthodologie Opsidium (PDF ou DOCX uniquement)",
+        description="Référentiel méthodologie Opsidium (PDF, DOCX, XLSX, XLS)",
     ),
     _: str = Depends(require_admin),
 ) -> dict:
