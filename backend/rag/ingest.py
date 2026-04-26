@@ -17,7 +17,6 @@ import logging
 import os
 import pickle
 import re
-import uuid
 from pathlib import Path
 from typing import Any
 
@@ -346,19 +345,6 @@ def ingest_file(
 # ---------------------------------------------------------------------------
 
 
-def get_indexed_doc_count(qdrant_url: str = QDRANT_URL, collection_name: str = QDRANT_COLLECTION) -> int:
-    """Return total number of vectors in the given collection."""
-    try:
-        client = get_qdrant_client(qdrant_url)
-        existing = [c.name for c in client.get_collections().collections]
-        if collection_name not in existing:
-            return 0
-        info = client.get_collection(collection_name)
-        return info.points_count or 0
-    except Exception:
-        return 0
-
-
 def get_all_collections(qdrant_url: str = QDRANT_URL) -> dict[str, int]:
     """Return a dict of {collection_name: vector_count} for all collections."""
     try:
@@ -500,17 +486,3 @@ def reset_collection(qdrant_url: str = QDRANT_URL, user_id: str = "default") -> 
     ensure_collection(client, collection_name)
     reset_bm25_corpus(user_id)
     logger.info("Collection '%s' reset for user '%s'.", collection_name, user_id)
-
-
-# ---------------------------------------------------------------------------
-# Legacy aliases (kept for backwards compatibility)
-# ---------------------------------------------------------------------------
-
-
-def ingest_pdf(
-    file_path: str,
-    source_name: str,
-    qdrant_url: str = QDRANT_URL,
-) -> int:
-    """Alias for ingest_file — retained for backwards compatibility."""
-    return ingest_file(file_path, source_name, qdrant_url=qdrant_url)

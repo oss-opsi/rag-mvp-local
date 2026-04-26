@@ -91,7 +91,6 @@ from rag.config import (
     CONVERSATIONS_DB_PATH,
     DATA_DIR,
     QDRANT_URL,
-    USERS_DB_PATH,
 )
 from rag.history import ConversationDB
 from rag.ingest import (
@@ -102,7 +101,6 @@ from rag.ingest import (
     ingest_file,
     load_bm25_corpus,
     reset_collection,
-    sanitize_collection_name,
 )
 
 logging.basicConfig(level=logging.INFO)

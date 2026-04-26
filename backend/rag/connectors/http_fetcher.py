@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from bs4 import BeautifulSoup, Tag
+from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
@@ -269,9 +269,3 @@ class BaseHttpFetcher:
                 tag.decompose()
         return soup
 
-    @staticmethod
-    def extract_text(node: Tag | None, separator: str = "\n") -> str:
-        """Extrait le texte d'un nœud BS, en respectant les sauts de ligne."""
-        if node is None:
-            return ""
-        return node.get_text(separator=separator, strip=True)

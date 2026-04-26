@@ -174,15 +174,6 @@ def list_jobs(
         return [dict(r) for r in rows]
 
 
-def count_active_jobs() -> int:
-    """Count queued + running jobs across all users (for health/UX)."""
-    with _connect() as conn:
-        row = conn.execute(
-            "SELECT COUNT(*) AS n FROM ingestion_jobs WHERE status IN ('queued','running')"
-        ).fetchone()
-        return int(row["n"]) if row else 0
-
-
 # ---------------------------------------------------------------------------
 # Worker thread
 # ---------------------------------------------------------------------------

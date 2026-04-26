@@ -31,11 +31,6 @@ export type RagasPerQuestion = {
   context_recall: number;
 };
 
-export type RagasResult = {
-  per_question: RagasPerQuestion[];
-  aggregate: RagasMetrics;
-};
-
 export type LlmSettings = {
   llm_chat: string;
   llm_analysis: string;

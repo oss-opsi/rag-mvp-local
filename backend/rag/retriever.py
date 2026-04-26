@@ -21,11 +21,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_qdrant import QdrantVectorStore
 
 from .config import (
-    EMBEDDING_MODEL,
     KB_RETRIEVAL_ENABLED,
     KNOWLEDGE_BASE_COLLECTION,
     QDRANT_COLLECTION,

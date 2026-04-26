@@ -16,12 +16,6 @@ export type AdminUser = {
 
 export type ApiKeyInfo = { has_key: boolean; masked?: string; reason?: string };
 
-export type Health = {
-  status: string;
-  qdrant_url: string;
-  indexed_vectors: Record<string, number>;
-};
-
 export type DocumentInfo = {
   source: string;
   chunks: number;

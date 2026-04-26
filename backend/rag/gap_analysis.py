@@ -1106,7 +1106,6 @@ async def run_gap_analysis(
             analysed.append(res)
 
     # Step 3.5 — Re-pass on ambiguous with a stronger model (GPT-4o)
-    repass_count = 0
     if REPASS_ENABLED:
         ambiguous_idx = [
             i for i, r in enumerate(analysed) if r.get("status") == "ambiguous"
@@ -1169,7 +1168,6 @@ async def run_gap_analysis(
                         analysed[i]["repass_applied"] = False
                     else:
                         analysed[i] = new_r
-                        repass_count += 1
             except Exception as exc:
                 logger.warning("Re-pass skipped due to error: %s", exc)
 

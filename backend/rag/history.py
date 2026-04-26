@@ -294,23 +294,3 @@ class ConversationDB:
             "messages": messages,
         }
 
-    # ------------------------------------------------------------------
-    # Auto-title helper
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def title_from_message(text: str, max_len: int = 60) -> str:
-        """Derive a conversation title from the first user message."""
-        clean = text.strip().replace("\n", " ")
-        if len(clean) <= max_len:
-            return clean
-        return clean[:max_len].rsplit(" ", 1)[0] + "…"
-
-
-# ---------------------------------------------------------------------------
-# Singleton factory
-# ---------------------------------------------------------------------------
-
-def get_conversation_db() -> ConversationDB:
-    """Return a ConversationDB instance (lightweight, can be called per request)."""
-    return ConversationDB()
