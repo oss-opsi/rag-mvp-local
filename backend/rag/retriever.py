@@ -334,6 +334,122 @@ class HybridRetriever:
         return {"private": private_fused, "kb": kb_fused}
 
 
+# ---------------------------------------------------------------------------
+# Cache process-wide du corpus BM25 sur la collection `referentiels_opsidium`.
+# Volumétrie attendue faible (méthodologie interne) — on charge le corpus une
+# fois via un scroll Qdrant, puis on l'invalide quand le `points_count` change
+# (ajout/suppression d'un référentiel par l'admin).
+# ---------------------------------------------------------------------------
+
+_REFERENTIELS_BM25_CACHE: dict[str, Any] = {
+    "collection": None,
+    "points_count": -1,
+    "corpus": [],
+}
+
+
+def _load_referentiels_bm25_corpus(
+    qdrant_url: str, collection: str
+) -> list[dict[str, Any]]:
+    """Construit (ou recharge) le corpus BM25 pour la collection référentiels.
+
+    Le corpus est dérivé d'un scroll Qdrant : pour chaque point on stocke
+    {id, text, metadata}. Mis en cache process-wide ; invalidé quand le
+    `points_count` change (signal simple d'évolution du contenu).
+    Renvoie une liste vide si la collection est absente, vide ou si Qdrant
+    est injoignable — l'appelant retombe alors sur du dense pur.
+    """
+    try:
+        client = get_qdrant_client(qdrant_url)
+        existing = {c.name for c in client.get_collections().collections}
+        if collection not in existing:
+            return []
+        info = client.get_collection(collection)
+        points_count = int(getattr(info, "points_count", 0) or 0)
+    except Exception as exc:
+        logger.warning(
+            "Référentiels BM25: Qdrant unreachable for '%s': %s",
+            collection, exc,
+        )
+        return []
+
+    cached = _REFERENTIELS_BM25_CACHE
+    if (
+        cached["collection"] == collection
+        and cached["points_count"] == points_count
+        and cached["corpus"]
+    ):
+        return cached["corpus"]
+
+    if points_count == 0:
+        _REFERENTIELS_BM25_CACHE.update(
+            {"collection": collection, "points_count": 0, "corpus": []}
+        )
+        return []
+
+    corpus: list[dict[str, Any]] = []
+    try:
+        offset = None
+        while True:
+            points, offset = client.scroll(
+                collection_name=collection,
+                limit=256,
+                with_payload=True,
+                with_vectors=False,
+                offset=offset,
+            )
+            for p in points:
+                payload = p.payload or {}
+                # langchain_qdrant stocke le texte sous "page_content" et les
+                # métadonnées sous "metadata". On reste tolérant si le schéma
+                # diffère (clé "text" / payload plat).
+                text = (
+                    payload.get("page_content")
+                    or payload.get("text")
+                    or ""
+                )
+                meta = dict(payload.get("metadata") or {})
+                if not meta:
+                    meta = {
+                        k: v for k, v in payload.items()
+                        if k not in {"page_content", "text"}
+                    }
+                if not text:
+                    continue
+                meta.setdefault("scope", "referentiel")
+                meta.setdefault("collection", collection)
+                corpus.append({
+                    "id": str(p.id),
+                    "text": text,
+                    "metadata": meta,
+                })
+            if offset is None:
+                break
+    except Exception as exc:
+        logger.warning(
+            "Référentiels BM25: scroll failed for '%s': %s", collection, exc
+        )
+        return []
+
+    _REFERENTIELS_BM25_CACHE.update({
+        "collection": collection,
+        "points_count": points_count,
+        "corpus": corpus,
+    })
+    logger.info(
+        "Référentiels BM25: corpus chargé (%d chunks, collection '%s').",
+        len(corpus), collection,
+    )
+    return corpus
+
+
+def reset_referentiels_bm25_cache() -> None:
+    """Force le rechargement du corpus BM25 référentiels au prochain appel."""
+    _REFERENTIELS_BM25_CACHE.update(
+        {"collection": None, "points_count": -1, "corpus": []}
+    )
+
+
 class ReferentielsOnlyRetriever:
     """Retriever dédié à l'analyse CDC : interroge UNIQUEMENT la collection
     `referentiels_opsidium` (méthodologie interne Opsidium).
@@ -342,6 +458,11 @@ class ReferentielsOnlyRetriever:
     collection privée de l'utilisateur ni sur la KB publique. Il sert
     exclusivement au pipeline gap-analysis pour évaluer les exigences
     d'un cahier des charges client par rapport à la méthodologie Opsidium.
+
+    v3.10.0 — ajout d'un mode hybride dense + BM25 fusionnés via RRF. Le
+    corpus BM25 est dérivé d'un scroll Qdrant sur la collection référentiels
+    (volumétrie faible, OK en mémoire). Si Qdrant est injoignable ou la
+    collection est vide, on retombe sur du dense pur (pas de régression).
     """
 
     def __init__(
@@ -391,35 +512,109 @@ class ReferentielsOnlyRetriever:
             out.append((doc.page_content, meta, float(score)))
         return out
 
+    def _sparse_search(
+        self, query: str, k_sparse: int
+    ) -> list[tuple[str, dict[str, Any], float]]:
+        """BM25 sparse search sur la collection référentiels.
+
+        Renvoie une liste vide si le corpus BM25 n'est pas disponible
+        (collection inexistante, Qdrant injoignable, etc.) ; le caller
+        retombe sur du dense pur sans casser le pipeline.
+        """
+        corpus = _load_referentiels_bm25_corpus(self.qdrant_url, self.collection)
+        if not corpus:
+            logger.warning(
+                "Référentiels BM25 indisponible pour '%s' — fallback dense pur.",
+                self.collection,
+            )
+            return []
+        try:
+            from rank_bm25 import BM25Okapi
+        except Exception as exc:
+            logger.warning("rank_bm25 import failed: %s", exc)
+            return []
+
+        tokenized_corpus = [entry["text"].lower().split() for entry in corpus]
+        bm25 = BM25Okapi(tokenized_corpus)
+        tokenized_query = query.lower().split()
+        scores = bm25.get_scores(tokenized_query)
+        indexed = sorted(
+            enumerate(scores), key=lambda x: x[1], reverse=True
+        )[:k_sparse]
+        return [
+            (corpus[i]["text"], corpus[i]["metadata"], float(s))
+            for i, s in indexed
+            if s > 0
+        ]
+
+    def _fuse_rrf(
+        self,
+        dense: list[tuple[str, dict[str, Any], float]],
+        sparse: list[tuple[str, dict[str, Any], float]],
+        k: int,
+    ) -> list[dict[str, Any]]:
+        """Fusion RRF dense + sparse (clé chunk_id, fallback texte tronqué)."""
+        rrf_scores: dict[str, float] = {}
+        store: dict[str, dict[str, Any]] = {}
+
+        def _key(text: str, meta: dict) -> str:
+            return meta.get("chunk_id") or text[:80]
+
+        for rank, (text, meta, _) in enumerate(dense):
+            key = _key(text, meta)
+            rrf_scores[key] = rrf_scores.get(key, 0.0) + 1.0 / (self.rrf_k + rank + 1)
+            store[key] = {"text": text, "metadata": meta}
+
+        for rank, (text, meta, _) in enumerate(sparse):
+            key = _key(text, meta)
+            rrf_scores[key] = rrf_scores.get(key, 0.0) + 1.0 / (self.rrf_k + rank + 1)
+            if key not in store:
+                store[key] = {"text": text, "metadata": meta}
+
+        ordered = sorted(rrf_scores, key=lambda x: rrf_scores[x], reverse=True)
+        out: list[dict[str, Any]] = []
+        for key in ordered[:k]:
+            entry = store[key]
+            out.append({
+                "text": entry["text"],
+                "metadata": entry["metadata"],
+                "rrf_score": round(rrf_scores[key], 6),
+            })
+        return out
+
     def retrieve(
         self,
         query: str,
         k: int = RETRIEVAL_K,
         k_dense: int = RETRIEVAL_K_DENSE,
-        k_sparse: int = RETRIEVAL_K_SPARSE,  # noqa: ARG002 — ignoré (pas de BM25)
+        k_sparse: int = RETRIEVAL_K_SPARSE,
         rerank: bool = False,
     ) -> list[dict[str, Any]]:
-        """Recherche dense uniquement (pas de BM25 sur les référentiels).
+        """Recherche hybride dense + BM25 fusionnée via RRF sur les référentiels.
 
-        Le paramètre `k_sparse` est accepté pour compatibilité de signature
-        avec `HybridRetriever.retrieve()` mais ignoré.
+        Si le corpus BM25 n'est pas disponible (collection vide, Qdrant
+        injoignable, etc.), retombe sur du dense pur — le pipeline n'est
+        jamais cassé.
         """
         rrf_k = _RERANK_CANDIDATE_K if rerank else k
         dense = self._dense_search(query, k_dense)
-        if not dense:
+        sparse = self._sparse_search(query, k_sparse)
+
+        if not dense and not sparse:
             return []
 
-        # Ranking dense direct, format aligné sur HybridRetriever.retrieve()
-        ranked: list[dict[str, Any]] = []
-        for rank, (text, metadata, score) in enumerate(dense[:rrf_k]):
-            ranked.append(
-                {
+        if sparse:
+            ranked = self._fuse_rrf(dense, sparse, rrf_k)
+        else:
+            # Fallback : dense pur, format aligné sur le mode hybride.
+            ranked = []
+            for rank, (text, metadata, score) in enumerate(dense[:rrf_k]):
+                ranked.append({
                     "text": text,
                     "metadata": metadata,
                     "rrf_score": round(1.0 / (self.rrf_k + rank + 1), 6),
                     "_dense_score": round(score, 6),
-                }
-            )
+                })
 
         if rerank and ranked:
             from .reranker import CrossEncoderReranker

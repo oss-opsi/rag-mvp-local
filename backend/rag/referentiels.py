@@ -158,6 +158,14 @@ def ingest_referentiel(file_path: str, source_name: str) -> dict[str, Any]:
     )
     vector_store.add_documents(docs)
 
+    # v3.10.0 : invalider le cache BM25 référentiels (sera reconstruit au
+    # prochain appel du ReferentielsOnlyRetriever).
+    try:
+        from .retriever import reset_referentiels_bm25_cache
+        reset_referentiels_bm25_cache()
+    except Exception:  # pragma: no cover — défensif
+        pass
+
     logger.info(
         "[referentiels] Indexé %d chunks depuis '%s' (collection '%s').",
         len(docs),
@@ -243,6 +251,13 @@ def delete_referentiel(source: str) -> dict[str, Any]:
     except Exception as exc:
         logger.error("[referentiels] delete failed for '%s': %s", source, exc)
         raise
+
+    # v3.10.0 : invalider le cache BM25 référentiels.
+    try:
+        from .retriever import reset_referentiels_bm25_cache
+        reset_referentiels_bm25_cache()
+    except Exception:  # pragma: no cover — défensif
+        pass
 
     logger.info(
         "[referentiels] Supprimé %d chunks pour '%s'.",

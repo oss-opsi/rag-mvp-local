@@ -2194,6 +2194,98 @@ def get_analysis_job(
 
 
 # ---------------------------------------------------------------------------
+# Workspace — Feedback sur exigences (v3.10.0)
+# ---------------------------------------------------------------------------
+
+
+class RequirementFeedbackRequest(BaseModel):
+    vote: str  # "up" ou "down"
+    comment: str | None = None
+
+
+def _ensure_analysis_owned(user_id: str, analysis_id: str) -> None:
+    """Vérifie l'appartenance d'une analyse — 404 sinon."""
+    if not workspace.user_owns_analysis(user_id, analysis_id):
+        raise HTTPException(
+            status_code=404,
+            detail="Analyse introuvable ou accès refusé.",
+        )
+
+
+@app.post(
+    "/workspace/analyses/{analysis_id}/requirements/{requirement_id}/feedback",
+    tags=["Workspace"],
+)
+def workspace_post_requirement_feedback(
+    analysis_id: str,
+    requirement_id: str,
+    req: RequirementFeedbackRequest,
+    user_id: str = Depends(get_current_user),
+) -> dict:
+    """Enregistre (ou met à jour) un feedback 👍/👎 sur une exigence."""
+    _ensure_analysis_owned(user_id, analysis_id)
+    try:
+        return workspace.upsert_feedback(
+            analysis_id=analysis_id,
+            requirement_id=requirement_id,
+            user_id=user_id,
+            vote=req.vote,
+            comment=req.comment,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.delete(
+    "/workspace/analyses/{analysis_id}/requirements/{requirement_id}/feedback",
+    tags=["Workspace"],
+)
+def workspace_delete_requirement_feedback(
+    analysis_id: str,
+    requirement_id: str,
+    user_id: str = Depends(get_current_user),
+) -> dict:
+    """Supprime le feedback de l'utilisateur sur une exigence."""
+    _ensure_analysis_owned(user_id, analysis_id)
+    removed = workspace.delete_feedback(
+        analysis_id=analysis_id,
+        requirement_id=requirement_id,
+        user_id=user_id,
+    )
+    return {"removed": removed}
+
+
+@app.get(
+    "/workspace/analyses/{analysis_id}/feedback",
+    tags=["Workspace"],
+)
+def workspace_list_requirement_feedback(
+    analysis_id: str,
+    user_id: str = Depends(get_current_user),
+) -> dict:
+    """Liste tous les feedbacks de l'analyse (pour l'utilisateur courant)."""
+    _ensure_analysis_owned(user_id, analysis_id)
+    items = [
+        f for f in workspace.list_feedback_for_analysis(analysis_id)
+        if f.get("user_id") == user_id
+    ]
+    return {"analysis_id": analysis_id, "feedback": items}
+
+
+@app.get(
+    "/workspace/analyses/{analysis_id}/quality-dashboard",
+    tags=["Workspace"],
+)
+def workspace_quality_dashboard(
+    analysis_id: str,
+    user_id: str = Depends(get_current_user),
+) -> dict:
+    """Stats agrégées pour le dashboard qualité d'une analyse."""
+    _ensure_analysis_owned(user_id, analysis_id)
+    return workspace.get_feedback_stats(analysis_id)
+
+
+# ---------------------------------------------------------------------------
 # Entry point (for local dev without Docker)
 # ---------------------------------------------------------------------------
 

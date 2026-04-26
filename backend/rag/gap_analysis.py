@@ -59,7 +59,7 @@ DEDUP_SIMILARITY_THRESHOLD = 0.88
 logger = logging.getLogger(__name__)
 
 # Bump this when prompts or pipeline change to invalidate old cache entries.
-PIPELINE_VERSION = "v3.9.0"
+PIPELINE_VERSION = "v3.10.0"
 
 # Persistent cache directory on disk.
 GAP_CACHE_DIR = os.path.join(DATA_DIR, "gap_cache")
@@ -96,18 +96,24 @@ REPASS_MAX_PARALLEL = 3
 VALID_STATUSES = {"covered", "partial", "missing", "ambiguous"}
 VALID_PRIORITIES = {"must", "should", "could", "wont"}
 VALID_OBLIGATIONS = {"contractuelle", "recommandée", "optionnelle"}
+# v3.10.0 — Taxonomie métier SIRH (8 domaines + fallback "Autre").
+# Remplace l'ancienne grille ISO 25010 (qualité logicielle générique) par une
+# segmentation orientée besoin SIRH/paie, plus parlante pour les consultants
+# AMOA et les chefs de projet.
 VALID_CATEGORIES = {
-    "Fonctionnel — Métier",
-    "Fonctionnel — Interface utilisateur",
-    "Intégration",
-    "Données",
-    "Sécurité & confidentialité",
-    "Performance",
-    "Disponibilité & résilience",
-    "Conformité réglementaire",
-    "Support & maintenance",
+    "Paie",
+    "DSN",
+    "GTA",
+    "Absences/Congés",
+    "Contrats/Administration",
+    "Portail/Self-service",
+    "Intégrations/Interfaces",
+    "Réglementaire",
     "Autre",
 }
+
+# Borne max pour le champ libre `subdomain` (sous-domaine métier SIRH).
+SUBDOMAIN_MAX_CHARS = 80
 
 
 # ---------------------------------------------------------------------------
@@ -181,17 +187,50 @@ Si ambigu, applique "must" par défaut et note l'ambiguïté dans notes.
 Obligation_level : "contractuelle" (must), "recommandée" (should),
 "optionnelle" (could / wont).
 
-Catégorie (ISO/IEC 25010 adapté) — choisis UNE seule parmi :
-- Fonctionnel — Métier
-- Fonctionnel — Interface utilisateur
-- Intégration
-- Données
-- Sécurité & confidentialité
-- Performance
-- Disponibilité & résilience
-- Conformité réglementaire
-- Support & maintenance
-- Autre (à justifier dans notes)
+Catégorie (taxonomie métier SIRH) — choisis UNE seule parmi :
+- Paie
+    Calcul et production des bulletins de paie (brut/net, cotisations sociales,
+    indemnités, primes, saisies-arrêts, IJSS subrogées, prélèvement à la source).
+    Ex. "Calcul du brut imposable", "Gestion des saisies-arrêts sur salaire".
+- DSN
+    Déclaration sociale nominative : DSN mensuelle, DSN événementielle (arrêt
+    maladie, fin de contrat), retours CRAM/CPAM, conformité norme GIP-MDS.
+    Ex. "DSN événementielle arrêt maladie", "Production DSN mensuelle".
+- GTA
+    Gestion des temps et activités : pointage, suivi des heures travaillées,
+    annualisation, modulation, plannings, badgeuses.
+    Ex. "Pointage par badgeuse physique", "Annualisation du temps de travail".
+- Absences/Congés
+    Demandes et soldes de congés payés, RTT, congés spéciaux, arrêts maladie,
+    workflow de validation manager.
+    Ex. "Solde RTT en self-service", "Workflow de validation des congés".
+- Contrats/Administration
+    Contrats de travail, avenants, dossiers salariés, données administratives,
+    cycle de vie collaborateur, gestion documentaire RH.
+    Ex. "Génération automatique d'un avenant", "Coffre-fort numérique RH".
+- Portail/Self-service
+    Espace collaborateur (RH self-service), espace manager, accès aux bulletins,
+    saisie déclarative, demande d'absences en ligne.
+    Ex. "Téléchargement du bulletin par le salarié", "Tableau de bord manager".
+- Intégrations/Interfaces
+    Échanges avec d'autres SI : comptabilité (Sage, Cegid), pointeuses, SIRH
+    tiers, API/webhooks, fichiers plats, formats normalisés.
+    Ex. "Interface paie-comptabilité au format SAGE", "Webhook salarié-créé".
+- Réglementaire
+    Conformité légale et réglementaire au-delà de la DSN : RGPD, droit du
+    travail, conventions collectives, archivage légal, audit, accessibilité.
+    Ex. "Archivage légal des bulletins 50 ans", "Conformité RGPD données salariés".
+- Autre (à justifier dans notes — uniquement si vraiment hors-cadre SIRH)
+
+Sous-domaine (subdomain) — champ libre optionnel (≤ 80 caractères) pour
+préciser le sous-thème métier dans la catégorie choisie. Remplis-le quand
+c'est pertinent et apporte une information utile (catégorie/sous-thème).
+Exemples :
+- "Paie" → "Paie/cotisations", "Paie/saisies-arrêts", "Paie/IJSS"
+- "DSN" → "DSN/événementielle", "DSN/mensuelle", "DSN/retours"
+- "Intégrations/Interfaces" → "Interfaces/comptabilité SAGE", "API/REST"
+- "Absences/Congés" → "Absences/maladie", "Congés/RTT"
+Si rien d'utile à préciser, laisse vide ou null.
 
 Critères d'acceptation : 2 à 5 critères testables et mesurables, à l'impératif
 ou au présent. Ils serviront à vérifier la couverture produit.
@@ -227,7 +266,8 @@ et l'envoyer automatiquement à Net-Entreprises."
     "Le format respecte la norme DSN publiée par GIP-MDS",
     "Les données transmises correspondent exactement à la paie validée"
   ],
-  "category": "Conformité réglementaire",
+  "category": "DSN",
+  "subdomain": "DSN/mensuelle",
   "priority": "must",
   "obligation_level": "contractuelle",
   "source_location": "§3.1.2, page 14",
@@ -244,7 +284,8 @@ et l'envoyer automatiquement à Net-Entreprises."
     "Un accusé de réception est archivé automatiquement",
     "Les erreurs de transmission sont notifiées à l'administrateur paie"
   ],
-  "category": "Intégration",
+  "category": "Intégrations/Interfaces",
+  "subdomain": "DSN/Net-Entreprises",
   "priority": "must",
   "obligation_level": "contractuelle",
   "source_location": "§3.1.2, page 14",
@@ -264,7 +305,8 @@ Exemple 2 — exigence implicite dans un tableau SLA :
     "Les incidents sont documentés avec timestamp début/fin",
     "Un rapport mensuel de disponibilité est fourni au client"
   ],
-  "category": "Disponibilité & résilience",
+  "category": "Autre",
+  "subdomain": "SLA/disponibilité",
   "priority": "must",
   "obligation_level": "contractuelle",
   "source_location": "Annexe SLA, page 42",
@@ -274,7 +316,18 @@ Exemple 2 — exigence implicite dans un tableau SLA :
 
 FORMAT DE SORTIE :
 Retourne UNIQUEMENT un JSON valide (pas de markdown, pas de commentaire) :
-{"requirements": [ {...}, {...} ]}"""
+{"requirements": [ {...}, {...} ]}
+
+Schéma d'un objet exigence (clés attendues) :
+- id (str), title (str), description (str)
+- category (str — un des 9 domaines SIRH listés ci-dessus)
+- subdomain (str ou null, ≤ 80 caractères — sous-thème libre, optionnel)
+- priority (str — must/should/could/wont)
+- obligation_level (str — contractuelle/recommandée/optionnelle)
+- acceptance_criteria (list[str], 2-5 items)
+- source_location (str)
+- depends_on (list[str])
+- notes (str)"""
 
 _EXTRACT_HUMAN = "Cahier des charges :\n\n{cdc_text}"
 
@@ -342,6 +395,13 @@ def _normalise_requirement(
             (c for c in VALID_CATEGORIES if c.lower() == low),
             "Autre",
         )
+    # Sous-domaine métier libre (≤ 80 chars). Optionnel — None par défaut.
+    subdomain_raw = r.get("subdomain")
+    if subdomain_raw is None:
+        subdomain: str | None = None
+    else:
+        sub_clean = str(subdomain_raw).strip()
+        subdomain = sub_clean[:SUBDOMAIN_MAX_CHARS] if sub_clean else None
     ac_raw = r.get("acceptance_criteria") or []
     if not isinstance(ac_raw, list):
         ac_raw = [str(ac_raw)]
@@ -357,6 +417,7 @@ def _normalise_requirement(
         "title": str(r.get("title", "")).strip()[:200],
         "description": str(r.get("description", "")).strip()[:3000],
         "category": cat,
+        "subdomain": subdomain,
         "priority": prio,
         "obligation_level": obl,
         "acceptance_criteria": acceptance_criteria,
@@ -668,11 +729,22 @@ RÈGLE IMPORTANTE : tu ne dois JAMAIS halluciner. Si un critère n'est pas
 explicitement couvert par le contexte, ne l'affirme pas couvert. Mieux vaut
 classer "ambiguous" que surestimer la couverture.
 
+SCORE DE CONFIANCE :
+Tu dois également fournir un score de confiance (`confidence`) entre 0.0 et
+1.0 reflétant à quel point tu es sûr de ton verdict, indépendamment du statut
+choisi :
+- 1.0 : preuves explicites, multiples et concordantes dans le contexte
+- 0.7 : preuves convergentes mais partielles ou indirectes
+- 0.5 : éléments contradictoires, vocabulaire ambigu, contexte limité
+- 0.3 : seules quelques bribes lointaines ; statut posé par défaut
+- 0.0 : aucune base dans le contexte (typiquement statut "missing")
+
 FORMAT DE SORTIE (JSON strict, sans markdown) :
 {
   "status": "covered" | "partial" | "missing" | "ambiguous",
   "verdict": "1 à 4 phrases expliquant ta décision, en citant les critères couverts / non couverts si pertinent.",
-  "evidence": ["Citation courte extraite du contexte", "..."]
+  "evidence": ["Citation courte extraite du contexte", "..."],
+  "confidence": 0.0 à 1.0
 }"""
 
 _VERDICT_HUMAN = """Exigence à évaluer
@@ -692,6 +764,47 @@ Extraits de la documentation produit
 Réponds en JSON strict (voir schéma du système)."""
 
 
+def _clamp_unit(value: Any, default: float = 0.5) -> float:
+    """Clamp ``value`` au segment [0, 1] ; retourne ``default`` si non numérique."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return float(default)
+    if v != v:  # NaN
+        return float(default)
+    if v < 0.0:
+        return 0.0
+    if v > 1.0:
+        return 1.0
+    return v
+
+
+def _compute_retrieval_confidence(sources: list[dict[str, Any]]) -> float:
+    """Confiance retrieval = moyenne des scores RRF top-3, normalisée [0, 1].
+
+    Les scores RRF retournés par ReferentielsOnlyRetriever / HybridRetriever
+    sont déjà bornés (1 / (rrf_k + rank + 1)) — pour rrf_k=60, le top-1 vaut
+    ~0.0164, le top-10 ~0.0143. Pour produire un score [0, 1] stable, on
+    normalise par 2 / (rrf_k + 2) qui correspond au plafond théorique
+    « top-1 sur deux listes fusionnées » côté HyDE+raw.
+
+    Si moins de 3 sources : moyenne des disponibles. Aucune source : 0.0.
+    """
+    if not sources:
+        return 0.0
+    top = sources[:3]
+    raw_scores = [float(s.get("score", 0.0) or 0.0) for s in top]
+    avg = sum(raw_scores) / len(raw_scores)
+    # Plafond théorique : top-1 fusionné sur 2 listes = 2 * 1/(60+1) ≈ 0.0328.
+    # En pratique on prend rrf_k=60 ; on borne avec un facteur sûr.
+    norm = avg / (2.0 / (60 + 2))
+    if norm < 0.0:
+        return 0.0
+    if norm > 1.0:
+        return 1.0
+    return round(norm, 6)
+
+
 async def _judge_requirement(
     requirement: dict[str, Any],
     sources: list[dict[str, Any]],
@@ -699,7 +812,13 @@ async def _judge_requirement(
     llm: ChatOpenAI,
     semaphore: asyncio.Semaphore,
 ) -> dict[str, Any]:
-    """Ask the LLM to classify coverage for one requirement."""
+    """Ask the LLM to classify coverage for one requirement.
+
+    v3.10.0 — extrait également un score de confiance LLM (`llm_confidence`)
+    et le combine avec un score de retrieval (`retrieval_confidence`) pour
+    produire un `confidence` final stocké sur le requirement.
+    """
+    retrieval_conf = _compute_retrieval_confidence(sources)
     async with semaphore:
         if not context.strip():
             return {
@@ -708,6 +827,9 @@ async def _judge_requirement(
                 "verdict": "Aucun extrait pertinent trouvé dans la base indexée.",
                 "evidence": [],
                 "sources": [],
+                "llm_confidence": 0.0,
+                "retrieval_confidence": 0.0,
+                "confidence": 0.0,
             }
         crit = requirement.get("acceptance_criteria") or []
         criteria_block = (
@@ -737,6 +859,7 @@ async def _judge_requirement(
                 status = "ambiguous"
             verdict = str(parsed.get("verdict", "")).strip()
             evidence = [str(e).strip() for e in parsed.get("evidence", []) if e]
+            llm_conf = _clamp_unit(parsed.get("confidence"), default=0.5)
         except Exception as exc:
             logger.warning("Verdict LLM call failed for %s: %s", requirement["id"], exc)
             return {
@@ -745,13 +868,20 @@ async def _judge_requirement(
                 "verdict": f"Erreur pendant l'analyse : {exc}",
                 "evidence": [],
                 "sources": sources,
+                "llm_confidence": 0.0,
+                "retrieval_confidence": retrieval_conf,
+                "confidence": round(0.3 * retrieval_conf, 3),
             }
+        confidence_final = round(0.7 * llm_conf + 0.3 * retrieval_conf, 3)
         return {
             **requirement,
             "status": status,
             "verdict": verdict,
             "evidence": evidence[:5],
             "sources": sources,
+            "llm_confidence": round(llm_conf, 3),
+            "retrieval_confidence": round(retrieval_conf, 3),
+            "confidence": confidence_final,
         }
 
 
@@ -1100,15 +1230,26 @@ async def run_gap_analysis(
                     "verdict": f"Erreur pendant l'analyse : {res}",
                     "evidence": [],
                     "sources": [],
+                    "llm_confidence": 0.0,
+                    "retrieval_confidence": 0.0,
+                    "confidence": 0.0,
                 }
             )
         else:
             analysed.append(res)
 
     # Step 3.5 — Re-pass on ambiguous with a stronger model (GPT-4o)
+    # v3.10.0 : on étend le re-pass aux verdicts à faible confiance finale
+    # (confidence < 0.5), en plus des verdicts ambigus. Le drapeau
+    # `repass_applied` empêche un second passage sur le même requirement.
     if REPASS_ENABLED:
         ambiguous_idx = [
-            i for i, r in enumerate(analysed) if r.get("status") == "ambiguous"
+            i for i, r in enumerate(analysed)
+            if not r.get("repass_applied")
+            and (
+                r.get("status") == "ambiguous"
+                or float(r.get("confidence", 1.0) or 0.0) < 0.5
+            )
         ]
         if ambiguous_idx:
             repass_model = _repass_model()

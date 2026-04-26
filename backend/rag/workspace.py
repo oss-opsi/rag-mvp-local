@@ -11,6 +11,9 @@ Schéma :
   analyses(id, cdc_id, created_at, total, covered, partial, missing, ambiguous,
            coverage_percent, chunks_processed, pipeline_version,
            corpus_fingerprint, report_json)
+  requirement_feedback(id, analysis_id, requirement_id, user_id, vote, comment,
+                       created_at, updated_at)
+    — v3.10.0, vote utilisateur 👍/👎 sur les exigences d'une analyse.
 
 Statut d'un CDC (dérivé) :
   - "brouillon" : aucune analyse
@@ -88,6 +91,24 @@ CREATE TABLE IF NOT EXISTS analyses (
 CREATE INDEX IF NOT EXISTS idx_analyses_cdc ON analyses(cdc_id);
 CREATE INDEX IF NOT EXISTS idx_analyses_cdc_created
     ON analyses(cdc_id, created_at DESC);
+
+-- v3.10.0 — Boucle de feedback sur les exigences d'une analyse.
+CREATE TABLE IF NOT EXISTS requirement_feedback (
+    id              TEXT PRIMARY KEY,
+    analysis_id     TEXT NOT NULL,
+    requirement_id  TEXT NOT NULL,
+    user_id         TEXT NOT NULL,
+    vote            TEXT NOT NULL CHECK(vote IN ('up','down')),
+    comment         TEXT,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
+    UNIQUE(analysis_id, requirement_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_req_feedback_analysis
+    ON requirement_feedback(analysis_id);
+CREATE INDEX IF NOT EXISTS idx_req_feedback_user
+    ON requirement_feedback(analysis_id, user_id);
 """
 
 
@@ -422,3 +443,253 @@ def derive_status(
     if pv != current_pipeline_version or cf != current_corpus_fingerprint:
         return "périmé"
     return "analysé"
+
+
+# ---------------------------------------------------------------------------
+# v3.10.0 — Feedback sur les exigences d'une analyse
+# ---------------------------------------------------------------------------
+
+VALID_VOTES = {"up", "down"}
+COMMENT_MAX_CHARS = 2000
+
+
+def _feedback_id(analysis_id: str, requirement_id: str, user_id: str) -> str:
+    """Identifiant déterministe (≤ 16 chars) pour une ligne de feedback."""
+    raw = f"{analysis_id}|{requirement_id}|{user_id}"
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _user_owns_analysis(conn: sqlite3.Connection, user_id: str, analysis_id: int) -> bool:
+    """Vérifie qu'une analyse appartient à l'un des clients de l'utilisateur."""
+    row = conn.execute(
+        """
+        SELECT 1
+        FROM analyses a
+        JOIN cdcs    ON cdcs.id = a.cdc_id
+        JOIN clients ON clients.id = cdcs.client_id
+        WHERE a.id = ? AND clients.user_id = ?
+        """,
+        (analysis_id, user_id),
+    ).fetchone()
+    return bool(row)
+
+
+def upsert_feedback(
+    analysis_id: str,
+    requirement_id: str,
+    user_id: str,
+    vote: str,
+    comment: Optional[str] = None,
+) -> dict[str, Any]:
+    """INSERT OR REPLACE d'un feedback. Renvoie la ligne enregistrée."""
+    if vote not in VALID_VOTES:
+        raise ValueError(f"vote invalide : '{vote}' (attendu : 'up' ou 'down').")
+    requirement_id = (requirement_id or "").strip()
+    if not requirement_id:
+        raise ValueError("requirement_id est requis.")
+    analysis_id = str(analysis_id or "").strip()
+    if not analysis_id:
+        raise ValueError("analysis_id est requis.")
+    cleaned_comment = (comment or "").strip()
+    if cleaned_comment and len(cleaned_comment) > COMMENT_MAX_CHARS:
+        cleaned_comment = cleaned_comment[:COMMENT_MAX_CHARS]
+    fid = _feedback_id(analysis_id, requirement_id, user_id)
+    now = _now_iso()
+    with _connect() as conn:
+        existing = conn.execute(
+            "SELECT created_at FROM requirement_feedback WHERE id = ?",
+            (fid,),
+        ).fetchone()
+        created_at = existing["created_at"] if existing else now
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO requirement_feedback(
+                id, analysis_id, requirement_id, user_id,
+                vote, comment, created_at, updated_at
+            ) VALUES (?,?,?,?,?,?,?,?)
+            """,
+            (
+                fid,
+                analysis_id,
+                requirement_id,
+                user_id,
+                vote,
+                cleaned_comment or None,
+                created_at,
+                now,
+            ),
+        )
+    return {
+        "id": fid,
+        "analysis_id": analysis_id,
+        "requirement_id": requirement_id,
+        "user_id": user_id,
+        "vote": vote,
+        "comment": cleaned_comment or None,
+        "created_at": created_at,
+        "updated_at": now,
+    }
+
+
+def delete_feedback(
+    analysis_id: str,
+    requirement_id: str,
+    user_id: str,
+) -> bool:
+    """Supprime le feedback de cet utilisateur. Renvoie True si une ligne a été supprimée."""
+    fid = _feedback_id(str(analysis_id), requirement_id, user_id)
+    with _connect() as conn:
+        cur = conn.execute(
+            "DELETE FROM requirement_feedback WHERE id = ?",
+            (fid,),
+        )
+        return cur.rowcount > 0
+
+
+def get_feedback(
+    analysis_id: str,
+    requirement_id: str,
+    user_id: str,
+) -> Optional[dict[str, Any]]:
+    """Renvoie le feedback d'un utilisateur pour un requirement donné, ou None."""
+    fid = _feedback_id(str(analysis_id), requirement_id, user_id)
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT id, analysis_id, requirement_id, user_id, vote, comment,
+                   created_at, updated_at
+            FROM requirement_feedback
+            WHERE id = ?
+            """,
+            (fid,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def list_feedback_for_analysis(analysis_id: str) -> list[dict[str, Any]]:
+    """Tous les feedbacks pour une analyse (toutes user confondus)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, analysis_id, requirement_id, user_id, vote, comment,
+                   created_at, updated_at
+            FROM requirement_feedback
+            WHERE analysis_id = ?
+            ORDER BY updated_at DESC
+            """,
+            (str(analysis_id),),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_feedback_stats(analysis_id: str) -> dict[str, Any]:
+    """Agrégats simples pour le quality dashboard.
+
+    Renvoie :
+      - total_votes
+      - up / down
+      - top_contested : top 5 des requirements avec le plus de votes 'down'
+      - feedback_per_domain : {category: {up: int, down: int}} dérivé du
+        report stocké
+      - coverage_corrected : recalcul de coverage avec ajustements feedback
+        (down sur covered → -1, up sur missing → +1, etc.)
+    """
+    aid = str(analysis_id)
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT requirement_id, vote
+            FROM requirement_feedback
+            WHERE analysis_id = ?
+            """,
+            (aid,),
+        ).fetchall()
+        votes = [(r["requirement_id"], r["vote"]) for r in rows]
+        analysis_row = conn.execute(
+            """
+            SELECT report_json, total, covered, partial, missing, ambiguous
+            FROM analyses
+            WHERE id = ?
+            """,
+            (aid,),
+        ).fetchone()
+
+    total_votes = len(votes)
+    up = sum(1 for _, v in votes if v == "up")
+    down = sum(1 for _, v in votes if v == "down")
+
+    # Top 5 contested = requirements avec le plus de 'down'.
+    down_counts: dict[str, int] = {}
+    for rid, v in votes:
+        if v == "down":
+            down_counts[rid] = down_counts.get(rid, 0) + 1
+    top_contested = [
+        {"requirement_id": rid, "down_votes": cnt}
+        for rid, cnt in sorted(
+            down_counts.items(), key=lambda x: x[1], reverse=True
+        )[:5]
+    ]
+
+    # Lecture du report pour ventilation par domaine + recalcul de coverage.
+    feedback_per_domain: dict[str, dict[str, int]] = {}
+    coverage_corrected: Optional[float] = None
+    if analysis_row:
+        try:
+            report = json.loads(analysis_row["report_json"]) if analysis_row["report_json"] else {}
+        except (TypeError, json.JSONDecodeError):
+            report = {}
+        reqs_by_id = {
+            r.get("id"): r for r in (report.get("requirements") or []) if r.get("id")
+        }
+        for rid, vote in votes:
+            req = reqs_by_id.get(rid)
+            domain = (req or {}).get("category") or "Autre"
+            bucket = feedback_per_domain.setdefault(domain, {"up": 0, "down": 0})
+            bucket[vote] = bucket.get(vote, 0) + 1
+
+        # Recalcul de coverage avec ajustements par feedback.
+        # Règle simple : on ajuste la "valeur de couverture" attribuée à
+        # chaque requirement (covered=1, partial=0.5, autre=0). Un down sur
+        # un covered/partial le ramène à 0 ; un up sur missing/ambiguous le
+        # passe à 1. Si plusieurs votes existent, on agrège (down domine
+        # over up — les retours négatifs comptent davantage).
+        votes_per_req: dict[str, dict[str, int]] = {}
+        for rid, vote in votes:
+            b = votes_per_req.setdefault(rid, {"up": 0, "down": 0})
+            b[vote] += 1
+        total = int(analysis_row["total"] or 0)
+        if total > 0 and reqs_by_id:
+            corrected_sum = 0.0
+            for rid, req in reqs_by_id.items():
+                base = (
+                    1.0 if req.get("status") == "covered"
+                    else 0.5 if req.get("status") == "partial"
+                    else 0.0
+                )
+                vb = votes_per_req.get(rid, {"up": 0, "down": 0})
+                if vb["down"] > 0 and base > 0:
+                    base = 0.0
+                elif vb["up"] > 0 and base < 1.0:
+                    base = 1.0
+                corrected_sum += base
+            coverage_corrected = round(100.0 * corrected_sum / total, 1)
+
+    return {
+        "analysis_id": aid,
+        "total_votes": total_votes,
+        "up": up,
+        "down": down,
+        "top_contested": top_contested,
+        "feedback_per_domain": feedback_per_domain,
+        "coverage_corrected": coverage_corrected,
+    }
+
+
+def user_owns_analysis(user_id: str, analysis_id: str) -> bool:
+    """Vérifie l'appartenance d'une analyse à l'utilisateur (chaîne client)."""
+    try:
+        aid = int(analysis_id)
+    except (TypeError, ValueError):
+        return False
+    with _connect() as conn:
+        return _user_owns_analysis(conn, user_id, aid)
