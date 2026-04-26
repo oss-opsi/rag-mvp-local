@@ -776,13 +776,14 @@ async def admin_set_llm_settings(
 # Admin — Sources publiques (KB partagée knowledge_base) — Lot 1
 # ---------------------------------------------------------------------------
 
-# Registry des connecteurs disponibles. Alimenté au fil des lots
-# (L2 Légifrance, L3 BOSS, L4 DSN-info, L5 Ameli/URSSAF/service-public).
+# Registry des connecteurs disponibles. Alimenté au fil des lots.
+# Lot 2bis : 4 sources pratiques en parallèle (BOSS, DSN-info, URSSAF,
+# service-public). Légifrance reste planifié (Lot 6 — citations sourcées).
 _SOURCES_REGISTRY: dict[str, dict] = {
-    "legifrance": {
-        "label": "Légifrance (API PISTE)",
-        "status": "planned",
-        "domaine": ["paie", "administration", "gta", "absences"],
+    "service_public": {
+        "label": "service-public.fr (employeur — DILA)",
+        "status": "available",
+        "domaine": ["administration", "paie", "absences", "dsn"],
     },
     "boss": {
         "label": "BOSS — Bulletin officiel Sécurité sociale",
@@ -794,22 +795,32 @@ _SOURCES_REGISTRY: dict[str, dict] = {
         "status": "planned",
         "domaine": ["dsn", "paie"],
     },
-    "ameli_employeur": {
-        "label": "Ameli employeur",
-        "status": "planned",
-        "domaine": ["absences", "paie"],
-    },
     "urssaf": {
-        "label": "URSSAF",
+        "label": "URSSAF — site employeur",
         "status": "planned",
         "domaine": ["paie", "dsn"],
     },
-    "service_public": {
-        "label": "service-public.fr (employeur)",
-        "status": "planned",
-        "domaine": ["administration", "absences", "portail"],
+    "legifrance": {
+        "label": "Légifrance (API PISTE) — Lot 6",
+        "status": "paused",
+        "domaine": ["paie", "administration", "gta", "absences"],
     },
 }
+
+# Dernier run par source (mémoire process — sera persisté DB en Lot 2bis suivant)
+_SOURCES_LAST_RUN: dict[str, dict] = {}
+
+
+def _get_connector(source_id: str):
+    """Factory : instancie le connecteur correspondant à l'ID source.
+
+    Renvoie None si aucun connecteur concret n'est encore branché.
+    """
+    if source_id == "service_public":
+        from rag.connectors.service_public import ServicePublicConnector
+        return ServicePublicConnector()
+    # boss / dsn_info / urssaf : à brancher dans les commits suivants du Lot 2bis
+    return None
 
 
 @app.get("/admin/sources/status", tags=["Admin"])
@@ -841,7 +852,12 @@ async def admin_sources_status(_: str = Depends(require_admin)) -> dict:
         "kb_exists": kb_exists,
         "vectors_count": vectors_count,
         "sources": [
-            {"id": sid, **info} for sid, info in _SOURCES_REGISTRY.items()
+            {
+                "id": sid,
+                **info,
+                "last_run": _SOURCES_LAST_RUN.get(sid),
+            }
+            for sid, info in _SOURCES_REGISTRY.items()
         ],
     }
 
@@ -853,10 +869,11 @@ async def admin_sources_refresh(
 ) -> dict:
     """Déclenche un refresh manuel d'un connecteur source.
 
-    À ce stade (Lot 1), la mécanique est en place mais aucun connecteur
-    concret n'est encore branché — ils seront ajoutés aux Lots 2-5
-    (Légifrance, BOSS, DSN-info, Ameli, URSSAF, service-public).
+    Lot 2bis : `service_public` est disponible (ZIP XML DILA).
+    BOSS / DSN-info / URSSAF arrivent dans les commits suivants.
     """
+    import time as _time
+
     if source not in _SOURCES_REGISTRY:
         raise HTTPException(
             status_code=404,
@@ -868,13 +885,31 @@ async def admin_sources_refresh(
         return {
             "source": source,
             "status": info["status"],
-            "message": "Connecteur planifié — sera disponible dans un prochain lot.",
+            "message": "Connecteur planifié ou en pause — pas encore actionnable.",
         }
-    # Quand un connecteur concret sera branché, on instanciera ici
-    # via une factory et on appellera connector.run().
-    raise HTTPException(
-        status_code=501, detail="Exécution non encore implémentée."
-    )
+
+    connector = _get_connector(source)
+    if connector is None:
+        raise HTTPException(
+            status_code=501,
+            detail=f"Connecteur '{source}' déclaré disponible mais factory non branchée.",
+        )
+
+    started = _time.time()
+    try:
+        run_result = connector.run()
+    except Exception as exc:  # défensif — éviter 500 silencieux
+        logger.exception("[%s] refresh failed", source)
+        raise HTTPException(status_code=500, detail=f"Refresh '{source}' a échoué : {exc}")
+    duration = round(_time.time() - started, 2)
+
+    last_run = {
+        "started_at": int(started),
+        "duration_s": duration,
+        **run_result.to_dict(),
+    }
+    _SOURCES_LAST_RUN[source] = last_run
+    return {"source": source, "status": "completed", "result": last_run}
 
 
 # ---------------------------------------------------------------------------
