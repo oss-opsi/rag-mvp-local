@@ -1706,6 +1706,11 @@ async def run_repass_batch(
             continue
         requirements[idx] = value
 
+    # Override par corrections humaines validées (lookup par content_key).
+    # Un verdict humain validé l'emporte sur le re-jugement LLM, même si
+    # l'utilisateur a déclenché un repass après avoir saisi la correction.
+    requirements = _apply_corrections_overrides(requirements, user_id)
+
     report["requirements"] = requirements
     report["summary"] = _summarise(requirements)
     return report
