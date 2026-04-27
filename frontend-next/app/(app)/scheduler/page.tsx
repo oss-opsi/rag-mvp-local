@@ -16,7 +16,9 @@ import {
   RefreshCw,
   Search,
   ShieldCheck,
+  Sparkles,
   Trash2,
+  TrendingUp,
   XCircle,
   Zap,
 } from "lucide-react";
@@ -72,23 +74,23 @@ const STATUS_META: Record<
 > = {
   queued: {
     label: "En file",
-    cls: "bg-muted text-muted-foreground",
+    cls: "border-soft bg-muted/40 text-muted-foreground",
   },
   running: {
     label: "En cours",
-    cls: "bg-info/10 text-info",
+    cls: "border-accent/25 bg-accent-soft text-accent",
   },
   success: {
     label: "Succès",
-    cls: "bg-success/10 text-success",
+    cls: "border-success/25 bg-success-soft text-success",
   },
   error: {
     label: "Erreur",
-    cls: "bg-danger/10 text-danger",
+    cls: "border-danger/25 bg-danger-soft text-danger",
   },
   cancelled: {
     label: "Annulé",
-    cls: "bg-warning/10 text-warning",
+    cls: "border-warning/25 bg-warning-soft text-warning",
   },
 };
 
@@ -172,6 +174,42 @@ function parseProgress(log: string | null): {
     return null;
   }
   return { done, total };
+}
+
+// Bucket des jobs sur N jours pour alimenter les sparklines des metric cards.
+function bucketJobsByDay(
+  jobs: RefreshJob[],
+  days: number,
+  predicate: (j: RefreshJob) => boolean,
+): number[] {
+  const out = new Array<number>(days).fill(0);
+  const now = Date.now();
+  const dayMs = 86_400_000;
+  for (const j of jobs) {
+    if (!predicate(j)) continue;
+    const ref = j.finished_at || j.started_at;
+    if (!ref) continue;
+    const t = Date.parse(ref);
+    if (Number.isNaN(t)) continue;
+    const ageDays = Math.floor((now - t) / dayMs);
+    if (ageDays < 0 || ageDays >= days) continue;
+    out[days - 1 - ageDays] += 1;
+  }
+  return out;
+}
+
+function relativeMinutes(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "—";
+  const diff = t - Date.now();
+  if (diff <= 0) return "imminent";
+  const minutes = Math.round(diff / 60_000);
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} h`;
+  const days = Math.round(hours / 24);
+  return `${days} j`;
 }
 
 // ---------------------------------------------------------------------------
@@ -418,6 +456,13 @@ export default function SchedulerPage() {
 
       <div className="flex-1 overflow-auto">
         <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-5 md:p-6">
+          {/* ----- Hero : metric cards ----- */}
+          <SchedulerMetrics
+            currentJob={currentJob}
+            jobs={jobs}
+            schedules={schedules}
+          />
+
           {/* ----- Section 1 : Job en cours ----- */}
           {currentJob ? (
             <CurrentJobBanner
@@ -427,66 +472,88 @@ export default function SchedulerPage() {
           ) : null}
 
           {/* ----- Section 2 : Planifications ----- */}
-          <section>
-            <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-base font-semibold">
-                Planifications actives
-                {schedules.length > 0 ? (
-                  <span className="ml-2 text-xs font-normal text-muted-foreground tabular-nums">
-                    {schedules.length}
-                  </span>
-                ) : null}
-              </h2>
+          <section className="rounded-2xl border border-soft bg-card shadow-tinted-sm">
+            <div className="flex items-center justify-between border-b border-soft px-5 py-3">
+              <div>
+                <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-accent">
+                  Cron
+                </div>
+                <h2 className="mt-0.5 text-base font-semibold">
+                  Planifications actives
+                  {schedules.length > 0 ? (
+                    <span className="ml-2 text-xs font-normal text-muted-foreground tabular-nums">
+                      ({schedules.length})
+                    </span>
+                  ) : null}
+                </h2>
+              </div>
               <Button size="sm" onClick={() => setCreateOpen(true)}>
                 <Plus className="mr-1.5 h-3.5 w-3.5" />
-                Ajouter une planification
+                Ajouter
               </Button>
             </div>
-            <SchedulesTable
-              schedules={schedules}
-              loading={loadingSchedules}
-              onRun={handleRunSchedule}
-              onToggle={handleToggleSchedule}
-              onEdit={(s) => setEditing(s)}
-              onDelete={handleDeleteSchedule}
-            />
+            <div className="p-5">
+              <SchedulesTable
+                schedules={schedules}
+                loading={loadingSchedules}
+                onRun={handleRunSchedule}
+                onToggle={handleToggleSchedule}
+                onEdit={(s) => setEditing(s)}
+                onDelete={handleDeleteSchedule}
+              />
+            </div>
           </section>
 
           {/* ----- Section 3 : Lancement manuel rapide ----- */}
-          <section className="rounded-lg border border-border bg-background p-5">
-            <h2 className="mb-1 text-base font-semibold">
-              Lancement manuel rapide
+          <section className="rounded-2xl border border-soft bg-card p-5 shadow-tinted-sm">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-accent">
+              Lancement immédiat
+            </div>
+            <h2 className="mt-0.5 text-base font-semibold">
+              Déclencher un refresh ponctuel
             </h2>
-            <p className="mb-3 text-xs text-muted-foreground">
-              Déclenche un refresh ponctuel d&apos;une source publique. Si un
-              job tourne déjà, le nouveau attend en file (FIFO).
+            <p className="mb-4 mt-1 text-xs text-muted-foreground">
+              Si un job tourne déjà, le nouveau attend en file (FIFO).
             </p>
-            <div className="grid gap-2 sm:grid-cols-2 md:grid-cols-4">
+            <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-4">
               {PUBLIC_SOURCES.map((s) => (
-                <Button
+                <button
                   key={s.id}
-                  variant="outline"
+                  type="button"
                   onClick={() => void handleQuickRun(s.id)}
                   disabled={!!currentJob}
+                  className="group flex items-start gap-3 rounded-2xl border border-soft bg-card p-3 text-left transition-all hover:-translate-y-0.5 hover:border-accent/30 hover:shadow-tinted-md disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0 disabled:hover:border-soft disabled:hover:shadow-none"
                 >
-                  <Zap className="mr-1.5 h-3.5 w-3.5" />
-                  Rafraîchir {s.label}
-                </Button>
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent transition-transform group-hover:scale-105">
+                    <Zap className="h-4 w-4" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-sm font-medium">{s.label}</span>
+                    <span className="block text-xs text-muted-foreground">
+                      Refresh ponctuel
+                    </span>
+                  </span>
+                </button>
               ))}
             </div>
           </section>
 
-          {/* ----- Section 4 : Historique ----- */}
-          <section>
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-              <h2 className="text-base font-semibold">
-                Historique des jobs (20 derniers)
-              </h2>
+          {/* ----- Section 4 : Historique en timeline ----- */}
+          <section className="rounded-2xl border border-soft bg-card shadow-tinted-sm">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-soft px-5 py-3">
+              <div>
+                <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-accent">
+                  Activité
+                </div>
+                <h2 className="mt-0.5 text-base font-semibold">
+                  Timeline · 20 derniers jobs
+                </h2>
+              </div>
               <div className="flex items-center gap-2">
                 <select
                   value={filterSource}
                   onChange={(e) => setFilterSource(e.target.value)}
-                  className="h-8 rounded-md border border-border bg-background px-2 text-xs"
+                  className="h-8 rounded-full border border-soft bg-card px-3 text-xs"
                 >
                   <option value="">Toutes sources</option>
                   {PUBLIC_SOURCES.map((s) => (
@@ -501,7 +568,7 @@ export default function SchedulerPage() {
                 <select
                   value={filterStatus}
                   onChange={(e) => setFilterStatus(e.target.value)}
-                  className="h-8 rounded-md border border-border bg-background px-2 text-xs"
+                  className="h-8 rounded-full border border-soft bg-card px-3 text-xs"
                 >
                   <option value="">Tous statuts</option>
                   <option value="queued">En file</option>
@@ -525,25 +592,27 @@ export default function SchedulerPage() {
                 </Button>
               </div>
             </div>
-            <JobsHistoryTable jobs={jobs} loading={loadingJobs} />
+            <JobsTimeline jobs={jobs} loading={loadingJobs} />
           </section>
 
           {/* ----- Section 5 : Maintenance avancée ----- */}
-          <section className="rounded-lg border border-border bg-background p-5">
-            <h2 className="mb-1 text-base font-semibold">
-              Maintenance avancée
+          <section className="rounded-2xl border border-soft bg-card p-5 shadow-tinted-sm">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-accent">
+              Maintenance
+            </div>
+            <h2 className="mt-0.5 text-base font-semibold">
+              Re-embedding · Optimize · Intégrité
             </h2>
-            <p className="mb-4 text-xs text-muted-foreground">
-              Re-embedding complet, optimisation Qdrant, vérification
-              d&apos;intégrité. Toutes les opérations passent par la file
-              FIFO ; un seul job tourne à la fois.
+            <p className="mb-4 mt-1 text-xs text-muted-foreground">
+              Toutes les opérations passent par la file FIFO ; un seul job
+              tourne à la fois.
             </p>
 
             {/* Stats Qdrant */}
-            <div className="mb-5 rounded-md border border-border">
-              <div className="flex items-center justify-between border-b border-border px-3 py-2">
+            <div className="mb-5 overflow-hidden rounded-2xl border border-soft">
+              <div className="flex items-center justify-between border-b border-soft bg-muted/30 px-4 py-2">
                 <div className="flex items-center gap-2 text-sm font-medium">
-                  <Database className="h-3.5 w-3.5" />
+                  <Database className="h-3.5 w-3.5 text-accent" />
                   Stats Qdrant
                 </div>
                 <Button
@@ -712,15 +781,24 @@ function CurrentJobBanner({
     : null;
 
   return (
-    <div className="rounded-lg border border-info/40 bg-info/5 p-4">
+    <div className="rounded-2xl border border-accent/25 bg-accent-soft/50 p-4 shadow-tinted-sm">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-          <Loader2 className="h-4 w-4 animate-spin text-info" />
-          [{sourceLabel(job.source)}] en cours · démarré il y a{" "}
-          {elapsedSince(job.started_at)}
-          {progress
-            ? ` · ${progress.done}/${progress.total} chunks (${pct}%)`
-            : ""}
+        <div className="flex items-center gap-3">
+          <span className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            <span className="absolute -inset-0.5 rounded-xl border border-accent/30 motion-safe:animate-ping" aria-hidden />
+          </span>
+          <div className="text-sm">
+            <div className="font-semibold tracking-tight">
+              {sourceLabel(job.source)} · en cours
+            </div>
+            <div className="text-xs text-muted-foreground">
+              démarré il y a {elapsedSince(job.started_at)}
+              {progress
+                ? ` · ${progress.done}/${progress.total} chunks (${pct}%)`
+                : ""}
+            </div>
+          </div>
         </div>
         <Button
           variant="outline"
@@ -732,14 +810,222 @@ function CurrentJobBanner({
         </Button>
       </div>
       {pct !== null ? (
-        <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-info/15">
+        <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-accent-soft">
           <div
-            className="h-full bg-info transition-all"
+            className="h-full rounded-full bg-accent transition-all"
             style={{ width: `${pct}%` }}
           />
         </div>
       ) : null}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Metric cards (hero) + sparkline
+// ---------------------------------------------------------------------------
+
+function SchedulerMetrics({
+  currentJob,
+  jobs,
+  schedules,
+}: {
+  currentJob: RefreshJob | null;
+  jobs: RefreshJob[];
+  schedules: Schedule[];
+}) {
+  const successCount = jobs.filter((j) => j.status === "success").length;
+  const errorCount = jobs.filter((j) => j.status === "error").length;
+  const totalCompleted = successCount + errorCount;
+  const successRate = totalCompleted
+    ? Math.round((successCount / totalCompleted) * 1000) / 10
+    : null;
+
+  const enabledSchedules = schedules.filter((s) => s.enabled);
+  const nextRunIso = enabledSchedules
+    .map((s) => s.next_run_at)
+    .filter((iso): iso is string => !!iso)
+    .sort()[0];
+
+  const successSpark = bucketJobsByDay(jobs, 7, (j) => j.status === "success");
+  const errorSpark = bucketJobsByDay(jobs, 7, (j) => j.status === "error");
+  const allSpark = bucketJobsByDay(jobs, 7, () => true);
+
+  // sparkline pour "sources actives" : on n'a pas l'historique d'activation,
+  // on reflète juste le nombre courant de schedules par source distincte sur 7j.
+  const distinctSourcesSpark = bucketJobsByDay(jobs, 7, () => true).map((n) =>
+    Math.max(1, Math.min(n, enabledSchedules.length || 1)),
+  );
+
+  return (
+    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <MetricCard
+        icon={Activity}
+        label="Jobs en cours"
+        value={currentJob ? "1" : "0"}
+        sub={currentJob ? sourceLabel(currentJob.source) : "aucun job actif"}
+        tone="accent"
+        spark={allSpark}
+        pulse={!!currentJob}
+      />
+      <MetricCard
+        icon={CheckCircle2}
+        label="Taux succès"
+        value={successRate !== null ? `${successRate}%` : "—"}
+        sub={
+          totalCompleted
+            ? `${successCount}/${totalCompleted} jobs (20 derniers)`
+            : "pas encore d'historique"
+        }
+        tone={
+          successRate === null
+            ? "muted"
+            : successRate >= 95
+            ? "success"
+            : successRate >= 80
+            ? "warning"
+            : "danger"
+        }
+        spark={successSpark}
+      />
+      <MetricCard
+        icon={Database}
+        label="Sources planifiées"
+        value={String(enabledSchedules.length)}
+        sub={
+          enabledSchedules.length === 0
+            ? "aucune planification"
+            : enabledSchedules
+                .slice(0, 3)
+                .map((s) => sourceLabel(s.source))
+                .join(" · ") + (enabledSchedules.length > 3 ? " · …" : "")
+        }
+        tone="violet"
+        spark={distinctSourcesSpark}
+      />
+      <MetricCard
+        icon={Clock}
+        label="Prochain run"
+        value={relativeMinutes(nextRunIso)}
+        sub={
+          nextRunIso
+            ? formatDateTime(nextRunIso)
+            : "aucun run programmé"
+        }
+        tone={nextRunIso ? "warning" : "muted"}
+        spark={errorSpark.length ? errorSpark : allSpark}
+      />
+    </div>
+  );
+}
+
+const TONE_MAP = {
+  accent: {
+    icon: "bg-accent-soft text-accent",
+    stroke: "hsl(var(--accent))",
+  },
+  success: {
+    icon: "bg-success-soft text-success",
+    stroke: "hsl(var(--success))",
+  },
+  warning: {
+    icon: "bg-warning-soft text-warning",
+    stroke: "hsl(var(--warning))",
+  },
+  danger: {
+    icon: "bg-danger-soft text-danger",
+    stroke: "hsl(var(--danger))",
+  },
+  violet: {
+    icon: "bg-violet-soft text-violet",
+    stroke: "hsl(var(--violet))",
+  },
+  muted: {
+    icon: "bg-muted/60 text-muted-foreground",
+    stroke: "hsl(var(--muted-foreground))",
+  },
+} as const;
+
+type MetricTone = keyof typeof TONE_MAP;
+
+function MetricCard({
+  icon: Icon,
+  label,
+  value,
+  sub,
+  tone = "accent",
+  spark,
+  pulse,
+}: {
+  icon: typeof Activity;
+  label: string;
+  value: string;
+  sub: string;
+  tone?: MetricTone;
+  spark: number[];
+  pulse?: boolean;
+}) {
+  const t = TONE_MAP[tone];
+  return (
+    <div className="rounded-2xl border border-soft bg-card p-5 shadow-tinted-sm transition-all hover:-translate-y-0.5 hover:shadow-tinted-md">
+      <div className="flex items-center justify-between">
+        <span
+          className={cn(
+            "relative flex h-9 w-9 items-center justify-center rounded-xl",
+            t.icon,
+          )}
+        >
+          <Icon className="h-4 w-4" />
+          {pulse ? (
+            <span className="absolute -inset-0.5 rounded-xl border border-accent/30 motion-safe:animate-ping" aria-hidden />
+          ) : null}
+        </span>
+        <Sparkline data={spark} stroke={t.stroke} />
+      </div>
+      <div className="mt-4">
+        <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+          {label}
+        </div>
+        <div className="mt-1 text-2xl font-semibold tracking-tight tabular-nums">
+          {value}
+        </div>
+        <div className="mt-1 truncate text-[11px] text-muted-foreground" title={sub}>
+          {sub}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Sparkline({ data, stroke }: { data: number[]; stroke: string }) {
+  const w = 60;
+  const h = 24;
+  if (!data.length) {
+    return (
+      <span className="block h-6 w-[60px] rounded-md bg-muted/30" aria-hidden />
+    );
+  }
+  const max = Math.max(...data, 1);
+  const min = Math.min(...data, 0);
+  const range = max - min || 1;
+  const pts = data
+    .map((v, i) => {
+      const x = (i / Math.max(1, data.length - 1)) * w;
+      const y = h - ((v - min) / range) * h;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+  return (
+    <svg width={w} height={h} className="opacity-80" aria-hidden>
+      <polyline
+        points={pts}
+        fill="none"
+        stroke={stroke}
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }
 
@@ -760,7 +1046,7 @@ function SchedulesTable({
 }) {
   if (loading && schedules.length === 0) {
     return (
-      <div className="flex items-center gap-2 rounded-md border border-border bg-background p-4 text-sm text-muted-foreground">
+      <div className="flex items-center gap-2 rounded-2xl border border-soft bg-card p-4 text-sm text-muted-foreground">
         <Loader2 className="h-3.5 w-3.5 animate-spin" />
         Chargement…
       </div>
@@ -768,16 +1054,15 @@ function SchedulesTable({
   }
   if (schedules.length === 0) {
     return (
-      <div className="rounded-md border border-dashed border-border bg-muted/20 p-6 text-center text-sm text-muted-foreground">
-        Aucune planification. Cliquez sur « Ajouter une planification »
-        pour démarrer.
+      <div className="rounded-2xl border border-dashed border-soft bg-muted/20 p-6 text-center text-sm text-muted-foreground">
+        Aucune planification. Cliquez sur « Ajouter » pour démarrer.
       </div>
     );
   }
   return (
-    <div className="overflow-x-auto rounded-md border border-border">
+    <div className="overflow-x-auto rounded-2xl border border-soft">
       <table className="w-full text-sm">
-        <thead className="bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground">
+        <thead className="bg-muted/30 text-[11px] uppercase tracking-wide text-muted-foreground">
           <tr>
             <th className="px-3 py-2 text-left font-medium">Label</th>
             <th className="px-3 py-2 text-left font-medium">Source</th>
@@ -789,7 +1074,7 @@ function SchedulesTable({
         </thead>
         <tbody>
           {schedules.map((s) => (
-            <tr key={s.id} className="border-t border-border">
+            <tr key={s.id} className="border-t border-soft transition-colors hover:bg-accent-soft/30">
               <td className="px-3 py-2">
                 <div className="flex items-center gap-2">
                   <CalendarClock className="h-3.5 w-3.5 text-muted-foreground" />
@@ -892,7 +1177,7 @@ function SchedulesTable({
   );
 }
 
-function JobsHistoryTable({
+function JobsTimeline({
   jobs,
   loading,
 }: {
@@ -903,7 +1188,7 @@ function JobsHistoryTable({
 
   if (loading && jobs.length === 0) {
     return (
-      <div className="flex items-center gap-2 rounded-md border border-border bg-background p-4 text-sm text-muted-foreground">
+      <div className="flex items-center gap-2 px-5 py-6 text-sm text-muted-foreground">
         <Loader2 className="h-3.5 w-3.5 animate-spin" />
         Chargement…
       </div>
@@ -911,77 +1196,29 @@ function JobsHistoryTable({
   }
   if (jobs.length === 0) {
     return (
-      <div className="rounded-md border border-dashed border-border bg-muted/20 p-6 text-center text-sm text-muted-foreground">
+      <div className="m-5 rounded-2xl border border-dashed border-soft bg-muted/20 p-6 text-center text-sm text-muted-foreground">
         Aucun job pour ces filtres.
       </div>
     );
   }
   return (
     <>
-      <div className="overflow-x-auto rounded-md border border-border">
-        <table className="w-full text-sm">
-          <thead className="bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground">
-            <tr>
-              <th className="px-3 py-2 text-left font-medium">Date début</th>
-              <th className="px-3 py-2 text-left font-medium">Source</th>
-              <th className="px-3 py-2 text-left font-medium">Trigger</th>
-              <th className="px-3 py-2 text-right font-medium">Durée</th>
-              <th className="px-3 py-2 text-right font-medium">Pages</th>
-              <th className="px-3 py-2 text-right font-medium">Chunks</th>
-              <th className="px-3 py-2 text-left font-medium">Statut</th>
-              <th className="px-3 py-2 text-right font-medium" />
-            </tr>
-          </thead>
-          <tbody>
-            {jobs.map((j) => {
-              const meta = STATUS_META[j.status as RefreshJobStatus] || {
-                label: j.status,
-                cls: "bg-muted text-muted-foreground",
-              };
-              return (
-                <tr key={j.id} className="border-t border-border">
-                  <td className="px-3 py-2 text-xs text-muted-foreground">
-                    {j.started_at ? formatDateTime(j.started_at) : "—"}
-                  </td>
-                  <td className="px-3 py-2">{sourceLabel(j.source)}</td>
-                  <td className="px-3 py-2 text-xs text-muted-foreground">
-                    {j.trigger}
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums">
-                    {j.duration_s !== null ? `${j.duration_s.toFixed(1)}s` : "—"}
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums">
-                    {j.pages_fetched ?? "—"}
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums">
-                    {j.chunks_indexed ?? "—"}
-                  </td>
-                  <td className="px-3 py-2">
-                    <span
-                      className={cn(
-                        "inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs",
-                        meta.cls,
-                      )}
-                    >
-                      <StatusIcon status={j.status as RefreshJobStatus} />
-                      {meta.label}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2 text-right">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setOpenJob(j)}
-                      title="Détail"
-                    >
-                      <Search className="h-3.5 w-3.5" />
-                    </Button>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+      <div className="px-5 py-5">
+        <div className="relative">
+          <div
+            className="absolute left-[15px] top-2 h-[calc(100%-1rem)] w-px bg-soft"
+            aria-hidden
+          />
+          <ul className="space-y-4">
+            {jobs.map((j) => (
+              <JobsTimelineItem
+                key={j.id}
+                job={j}
+                onOpen={() => setOpenJob(j)}
+              />
+            ))}
+          </ul>
+        </div>
       </div>
       <JobDetailDialog
         job={openJob}
@@ -989,6 +1226,97 @@ function JobsHistoryTable({
         onClose={() => setOpenJob(null)}
       />
     </>
+  );
+}
+
+function JobsTimelineItem({
+  job,
+  onOpen,
+}: {
+  job: RefreshJob;
+  onOpen: () => void;
+}) {
+  const meta = STATUS_META[job.status as RefreshJobStatus] || {
+    label: job.status,
+    cls: "border-soft bg-muted/40 text-muted-foreground",
+  };
+  const dotColor: Record<RefreshJobStatus, string> = {
+    queued: "bg-muted-foreground/60",
+    running: "bg-accent",
+    success: "bg-success",
+    error: "bg-danger",
+    cancelled: "bg-warning",
+  };
+  const status = job.status as RefreshJobStatus;
+  const isRunning = status === "running";
+
+  const metrics: string[] = [];
+  if (job.duration_s !== null) metrics.push(`${job.duration_s.toFixed(1)} s`);
+  if (job.pages_fetched !== null && job.pages_fetched !== undefined) {
+    metrics.push(`${job.pages_fetched} pages`);
+  }
+  if (job.chunks_indexed !== null && job.chunks_indexed !== undefined) {
+    metrics.push(`${job.chunks_indexed} chunks`);
+  }
+
+  return (
+    <li className="relative flex items-start gap-3 pl-1">
+      <span
+        className="relative z-10 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-card shadow-tinted-sm"
+        style={{ boxShadow: `0 0 0 2px hsl(var(--border-soft))` }}
+      >
+        <span
+          className={cn(
+            "h-2.5 w-2.5 rounded-full",
+            dotColor[status],
+            isRunning && "motion-safe:animate-ping absolute",
+          )}
+        />
+        {isRunning ? (
+          <span className={cn("h-2.5 w-2.5 rounded-full", dotColor[status])} />
+        ) : null}
+      </span>
+      <button
+        type="button"
+        onClick={onOpen}
+        className="group min-w-0 flex-1 rounded-2xl border border-transparent px-3 py-2 text-left transition-all hover:-translate-y-0.5 hover:border-soft hover:bg-card hover:shadow-tinted-sm"
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
+            {job.started_at ? formatDateTime(job.started_at) : "—"}
+          </span>
+          <span className="text-[13.5px] font-medium tracking-tight">
+            {sourceLabel(job.source)}
+          </span>
+          <span
+            className={cn(
+              "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium",
+              meta.cls,
+            )}
+          >
+            <StatusIcon status={status} />
+            {meta.label}
+          </span>
+          {job.trigger ? (
+            <span className="rounded-full border border-soft bg-muted/40 px-2 py-0.5 text-[10px] text-muted-foreground">
+              {job.trigger}
+            </span>
+          ) : null}
+        </div>
+        <div className="mt-1 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+          {metrics.length ? metrics.join(" · ") : "—"}
+          {job.error_message ? (
+            <span className="truncate text-danger" title={job.error_message}>
+              · {job.error_message}
+            </span>
+          ) : null}
+          <span className="ml-auto inline-flex items-center gap-1 text-[11px] text-muted-foreground transition-colors group-hover:text-accent">
+            <Search className="h-3 w-3" />
+            Détail
+          </span>
+        </div>
+      </button>
+    </li>
   );
 }
 
@@ -1106,7 +1434,7 @@ function QdrantStatsTable({
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-xs">
-        <thead className="bg-muted/30 text-[10px] uppercase tracking-wide text-muted-foreground">
+        <thead className="bg-muted/20 text-[10px] uppercase tracking-wide text-muted-foreground">
           <tr>
             <th className="px-3 py-1.5 text-left font-medium">Collection</th>
             <th className="px-3 py-1.5 text-right font-medium">Points</th>
@@ -1117,7 +1445,7 @@ function QdrantStatsTable({
         </thead>
         <tbody>
           {stats.map((s) => (
-            <tr key={s.name} className="border-t border-border">
+            <tr key={s.name} className="border-t border-soft">
               <td className="px-3 py-1.5 font-mono">{s.name}</td>
               <td className="px-3 py-1.5 text-right tabular-nums">
                 {s.points ?? "—"}
@@ -1129,7 +1457,13 @@ function QdrantStatsTable({
                 {s.indexed_vectors ?? "—"}
               </td>
               <td className="px-3 py-1.5 text-muted-foreground">
-                {s.error ? `erreur : ${s.error}` : s.status || "—"}
+                {s.error ? (
+                  <span className="inline-flex items-center gap-1 rounded-full border border-danger/25 bg-danger-soft px-2 py-0.5 text-[10px] font-medium text-danger">
+                    erreur : {s.error}
+                  </span>
+                ) : (
+                  s.status || "—"
+                )}
               </td>
             </tr>
           ))}
