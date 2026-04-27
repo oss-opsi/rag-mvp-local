@@ -10,7 +10,6 @@ import {
   Upload,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -218,20 +217,22 @@ export default function DocumentsPage() {
       {/* ──────────── Context panel (gauche) ──────────── */}
       <ContextPanel>
         <div className="flex h-full flex-col">
-          <div className="border-b border-border px-4 py-3">
-            <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          <div className="border-b border-soft px-4 py-3">
+            <h2 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
               Collections (1)
             </h2>
           </div>
           <div className="flex flex-1 flex-col gap-5 overflow-y-auto p-4">
             {/* Carte client active */}
-            <div className="flex items-center gap-3 rounded-md border border-accent/40 bg-accent/5 p-3">
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent text-sm font-semibold text-accent-foreground">
+            <div className="flex items-center gap-3 rounded-2xl border border-accent/25 bg-accent-soft/50 p-3 shadow-tinted-sm">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-accent to-violet text-sm font-semibold text-white shadow-tinted-sm">
                 {initial}
               </div>
               <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-semibold">{username}</p>
-                <p className="text-xs text-muted-foreground tabular-nums">
+                <p className="truncate text-sm font-semibold tracking-tight">
+                  {username}
+                </p>
+                <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
                   {totalDocs} docs · {totalChunks} chunks
                 </p>
               </div>
@@ -239,7 +240,7 @@ export default function DocumentsPage() {
 
             {/* Infos pipeline */}
             <div>
-              <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
                 Infos pipeline
               </h3>
               <PipelineInfoCard />
@@ -247,12 +248,14 @@ export default function DocumentsPage() {
 
             {/* Indexation en cours */}
             {hasActive ? (
-              <div className="rounded-md border border-warning/30 bg-warning/5 p-3 text-xs text-muted-foreground">
-                <div className="flex items-center gap-2 font-medium text-foreground">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin text-warning" />
+              <div className="rounded-2xl border border-warning/25 bg-warning-soft/60 p-3 text-xs text-muted-foreground shadow-tinted-sm">
+                <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                  <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-warning-soft text-warning">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  </span>
                   Indexation en cours
                 </div>
-                <p className="mt-1">
+                <p className="mt-1.5">
                   Vous pouvez continuer à utiliser l&apos;application — le
                   résultat s&apos;affichera ici automatiquement.
                 </p>
@@ -355,7 +358,10 @@ export default function DocumentsPage() {
       <div className="flex-1 overflow-auto">
         <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-4 py-5 md:p-6">
           <div>
-            <h2 className="text-xl font-semibold tracking-tight">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-accent">
+              Indexation
+            </div>
+            <h2 className="mt-0.5 text-xl font-semibold tracking-tight">
               Ajouter des documents
             </h2>
             <p className="mt-1 text-sm text-muted-foreground">
@@ -375,8 +381,8 @@ export default function DocumentsPage() {
 
           {/* Jobs actifs / récents */}
           {visibleJobs.length > 0 ? (
-            <section>
-              <h3 className="mb-3 text-sm font-semibold">
+            <section className="rounded-2xl border border-soft bg-card p-5 shadow-tinted-sm">
+              <h3 className="mb-3 text-sm font-semibold tracking-tight">
                 Indexations{hasActive ? " en cours" : " récentes"}
               </h3>
               <div className="flex flex-col gap-2">
@@ -390,11 +396,11 @@ export default function DocumentsPage() {
           {/* Documents indexés — grille */}
           <section>
             <div className="mb-3 flex items-baseline justify-between">
-              <h3 className="text-sm font-semibold">
+              <h3 className="text-sm font-semibold tracking-tight">
                 Documents indexés
                 {docs.length > 0 ? (
                   <span className="ml-2 text-xs font-normal text-muted-foreground tabular-nums">
-                    {docs.length}
+                    ({docs.length})
                   </span>
                 ) : null}
               </h3>
@@ -405,7 +411,7 @@ export default function DocumentsPage() {
                 Chargement...
               </div>
             ) : docs.length === 0 ? (
-              <div className="rounded-md border border-dashed border-border bg-muted/20 p-8 text-center">
+              <div className="rounded-2xl border border-dashed border-soft bg-muted/20 p-8 text-center">
                 <p className="text-sm text-muted-foreground">
                   Aucun document indexé pour l&apos;instant. Déposez un fichier
                   ci-dessus pour démarrer.
@@ -454,43 +460,67 @@ function JobRow({ job }: { job: IngestionJob }) {
   const ss = String(sec % 60).padStart(2, "0");
   const elapsedLabel = `${mm}:${ss}`;
 
+  const pillBase =
+    "inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-medium";
   const badge = (() => {
     switch (job.status) {
       case "queued":
         return (
-          <Badge variant="secondary" className="gap-1">
+          <span
+            className={cn(
+              pillBase,
+              "border-soft bg-muted/40 text-muted-foreground",
+            )}
+          >
             <Clock className="h-3 w-3" />
             En file
-          </Badge>
+          </span>
         );
       case "running":
         return (
-          <Badge variant="warning" className="gap-1">
+          <span
+            className={cn(
+              pillBase,
+              "border-accent/25 bg-accent-soft text-accent",
+            )}
+          >
             <Loader2 className="h-3 w-3 animate-spin" />
             Indexation · {elapsedLabel}
-          </Badge>
+          </span>
         );
       case "done":
         return (
-          <Badge variant="success" className="gap-1">
+          <span
+            className={cn(
+              pillBase,
+              "border-success/25 bg-success-soft text-success",
+            )}
+          >
             <CheckCircle2 className="h-3 w-3" />
             Terminé · {job.chunk_count ?? 0} fragments
-          </Badge>
+          </span>
         );
       case "error":
         return (
-          <Badge variant="destructive" className="gap-1">
+          <span
+            className={cn(
+              pillBase,
+              "border-danger/25 bg-danger-soft text-danger",
+            )}
+          >
             <AlertCircle className="h-3 w-3" />
             Erreur
-          </Badge>
+          </span>
         );
     }
   })();
 
   return (
-    <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-background px-4 py-2.5">
+    <div className="flex items-center justify-between gap-3 rounded-2xl border border-soft bg-card px-4 py-2.5 shadow-tinted-sm transition-colors hover:border-accent/20">
       <div className="min-w-0 flex-1">
-        <div className="truncate text-sm font-medium">{job.filename}</div>
+        <div className="truncate text-sm font-medium tracking-tight">
+          {job.filename}
+        </div>
         {job.status === "error" && job.error ? (
           <div className="mt-0.5 truncate text-xs text-danger">{job.error}</div>
         ) : job.status === "running" ? (

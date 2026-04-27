@@ -39,10 +39,12 @@ export function UploadDropzone({
   return (
     <div
       className={cn(
-        "flex flex-col items-center justify-center gap-3 rounded-lg border-2 border-dashed border-border p-10 text-center transition-colors",
-        dragOver && !disabled ? "border-accent bg-accent/5" : "bg-muted/30",
+        "group relative flex flex-col items-center justify-center gap-4 overflow-hidden rounded-2xl border-2 border-dashed p-10 text-center transition-all",
+        dragOver && !disabled
+          ? "border-accent bg-accent-soft/60 shadow-tinted-md"
+          : "border-soft bg-gradient-to-b from-card to-surface-2 hover:border-accent/30 hover:shadow-tinted-sm",
         disabled && "opacity-60",
-        className
+        className,
       )}
       onDragOver={(e) => {
         e.preventDefault();
@@ -60,10 +62,18 @@ export function UploadDropzone({
         }
       }}
     >
-      <Upload className="h-6 w-6 text-muted-foreground" />
+      <span
+        className={cn(
+          "flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-accent to-violet text-white shadow-tinted-md transition-transform",
+          dragOver && !disabled ? "scale-110" : "group-hover:scale-105",
+        )}
+        aria-hidden
+      >
+        <Upload className="h-6 w-6" />
+      </span>
       <div>
-        <div className="text-sm font-medium">{title}</div>
-        <div className="text-xs text-muted-foreground">{hint}</div>
+        <div className="text-base font-semibold tracking-tight">{title}</div>
+        <div className="mt-0.5 text-xs text-muted-foreground">{hint}</div>
       </div>
       <Button
         type="button"

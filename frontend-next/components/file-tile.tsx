@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Trash2 } from "lucide-react";
+import { CheckCircle2, Trash2 } from "lucide-react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -17,9 +17,8 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 /**
- * Tuile d'un document indexé, façon mockup Section 7 :
- * [icone type] | nom tronqué | « X chunks · indexé »
- * + bouton de suppression dans un coin.
+ * Tuile v4 d'un document indexé : card rounded-2xl avec ombre tintée, icône
+ * de type colorée en chip soft, statut « indexé » en pastille avec border.
  */
 export function FileTile({
   filename,
@@ -32,18 +31,23 @@ export function FileTile({
 }) {
   const ext = getExt(filename);
   return (
-    <div className="group relative flex items-start gap-3 rounded-md border border-border bg-background p-3 transition-colors hover:border-accent/40">
+    <div className="group relative flex items-start gap-3 rounded-2xl border border-soft bg-card p-3.5 shadow-tinted-sm transition-all hover:-translate-y-0.5 hover:border-accent/30 hover:shadow-tinted-md">
       <FileIcon ext={ext} />
       <div className="min-w-0 flex-1">
         <p
-          className="break-words text-sm font-medium leading-snug line-clamp-2"
+          className="break-words text-sm font-semibold leading-snug tracking-tight line-clamp-2"
           title={filename}
         >
           {filename}
         </p>
-        <p className="mt-1 text-xs text-muted-foreground tabular-nums">
-          {chunks} chunks · <span className="text-success">indexé</span>
-        </p>
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+          <span className="tabular-nums">{chunks} chunks</span>
+          <span className="h-1 w-1 rounded-full bg-border" aria-hidden />
+          <span className="inline-flex items-center gap-1 rounded-full border border-success/25 bg-success-soft px-2 py-0.5 text-[11px] font-medium text-success">
+            <CheckCircle2 className="h-3 w-3" />
+            Indexé
+          </span>
+        </div>
       </div>
       {onDelete ? (
         <AlertDialog>
@@ -92,20 +96,21 @@ function getExt(filename: string): string {
 }
 
 const ICON_STYLES: Record<string, string> = {
-  PDF: "bg-danger/10 text-danger border-danger/20",
-  DOC: "bg-accent/10 text-accent border-accent/20",
-  TXT: "bg-muted text-muted-foreground border-border",
-  MD: "bg-muted text-muted-foreground border-border",
+  PDF: "bg-gradient-to-br from-danger-soft to-warning-soft text-danger",
+  DOC: "bg-gradient-to-br from-accent-soft to-violet-soft text-accent",
+  TXT: "bg-muted/60 text-muted-foreground",
+  MD: "bg-muted/60 text-muted-foreground",
 };
 
 function FileIcon({ ext }: { ext: string }) {
-  const style = ICON_STYLES[ext] ?? "bg-muted text-muted-foreground border-border";
+  const style = ICON_STYLES[ext] ?? "bg-muted/60 text-muted-foreground";
   return (
     <div
       className={cn(
-        "flex h-11 w-11 shrink-0 items-center justify-center rounded-md border text-[10px] font-bold tracking-wider",
+        "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-[10px] font-bold tracking-wider",
         style,
       )}
+      aria-hidden
     >
       {ext}
     </div>
