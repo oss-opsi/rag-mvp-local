@@ -211,7 +211,7 @@ export default function ReferentielsPage() {
               Méthodologie interne
             </div>
             <h1 className="mt-0.5 text-xl font-semibold tracking-tight">
-              Référentiels Opsidium
+              Référentiels produit
             </h1>
             <p className="mt-1 text-sm text-muted-foreground">
               Documents méthodologiques utilisés à l&apos;analyse des cahiers des
