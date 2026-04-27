@@ -3,7 +3,7 @@
 import * as React from "react";
 import { ThumbsUp, ThumbsDown } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { SourceCard } from "@/components/chat/source-card";
+import { SourcesPanel } from "@/components/chat/sources-panel";
 import { MarkdownContent } from "@/components/chat/markdown-content";
 import { api } from "@/lib/api-client";
 import { useToast } from "@/components/ui/use-toast";
@@ -11,20 +11,26 @@ import type { ChatMessage, MessageFeedback } from "@/lib/types";
 
 function TypingDots() {
   return (
-    <div
-      className="flex items-center gap-1.5 py-1"
-      role="status"
-      aria-label="Rédaction de la réponse en cours"
-    >
-      <span className="inline-block h-2 w-2 rounded-full bg-muted-foreground/70 [animation:typing-bounce_1.2s_ease-in-out_infinite]" />
-      <span
-        className="inline-block h-2 w-2 rounded-full bg-muted-foreground/70 [animation:typing-bounce_1.2s_ease-in-out_infinite]"
-        style={{ animationDelay: "0.15s" }}
-      />
-      <span
-        className="inline-block h-2 w-2 rounded-full bg-muted-foreground/70 [animation:typing-bounce_1.2s_ease-in-out_infinite]"
-        style={{ animationDelay: "0.3s" }}
-      />
+    <div role="status" aria-label="Rédaction de la réponse en cours">
+      <div className="flex items-center gap-1.5 py-1">
+        <span className="inline-block h-1.5 w-1.5 rounded-full bg-accent [animation:typing-bounce_1.2s_ease-in-out_infinite]" />
+        <span
+          className="inline-block h-1.5 w-1.5 rounded-full bg-accent [animation:typing-bounce_1.2s_ease-in-out_infinite]"
+          style={{ animationDelay: "0.15s" }}
+        />
+        <span
+          className="inline-block h-1.5 w-1.5 rounded-full bg-accent [animation:typing-bounce_1.2s_ease-in-out_infinite]"
+          style={{ animationDelay: "0.3s" }}
+        />
+        <span className="ml-2 text-[12px] text-muted-foreground">
+          Tell me rédige sa réponse…
+        </span>
+      </div>
+      <div className="mt-3 space-y-2" aria-hidden="true">
+        <div className="skeleton-line h-3 w-[92%]" />
+        <div className="skeleton-line h-3 w-[78%]" />
+        <div className="skeleton-line h-3 w-[60%]" />
+      </div>
     </div>
   );
 }
@@ -78,8 +84,8 @@ function FeedbackButtons({
         aria-label="Réponse utile"
         title="Réponse utile"
         className={cn(
-          "flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-background hover:text-foreground",
-          isUp && "bg-background text-success",
+          "flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground transition-all hover:bg-success-soft hover:text-success",
+          isUp && "border border-success/25 bg-success-soft text-success",
         )}
       >
         <ThumbsUp className="h-3.5 w-3.5" />
@@ -91,8 +97,8 @@ function FeedbackButtons({
         aria-label="Réponse à améliorer"
         title="Réponse à améliorer"
         className={cn(
-          "flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-background hover:text-foreground",
-          isDown && "bg-background text-danger",
+          "flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground transition-all hover:bg-danger-soft hover:text-danger",
+          isDown && "border border-danger/25 bg-danger-soft text-danger",
         )}
       >
         <ThumbsDown className="h-3.5 w-3.5" />
@@ -118,10 +124,10 @@ export function MessageBubble({
     >
       <div
         className={cn(
-          "flex min-w-0 max-w-[80%] flex-col gap-2 rounded-lg px-4 py-3 text-sm",
+          "flex min-w-0 max-w-[80%] flex-col gap-2 px-4 py-3 text-sm",
           isUser
-            ? "bg-accent text-accent-foreground"
-            : "bg-muted text-foreground"
+            ? "rounded-2xl rounded-br-md bg-gradient-to-br from-accent to-accent-hover text-accent-foreground shadow-user-bubble"
+            : "rounded-2xl rounded-bl-md border border-soft bg-gradient-to-br from-card to-accent-soft/40 text-foreground shadow-tinted-sm",
         )}
       >
         {isUser ? (
@@ -143,11 +149,7 @@ export function MessageBubble({
           </div>
         )}
         {!isUser && message.sources && message.sources.length > 0 ? (
-          <div className="mt-2 grid gap-2 sm:grid-cols-2">
-            {message.sources.map((s, i) => (
-              <SourceCard key={i} source={s} index={i} />
-            ))}
-          </div>
+          <SourcesPanel sources={message.sources} />
         ) : null}
         {/* Boutons de feedback : visibles seulement sur les réponses
             assistant terminées (avec id retourné par le backend). */}

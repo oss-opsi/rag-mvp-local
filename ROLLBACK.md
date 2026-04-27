@@ -1,11 +1,30 @@
 # Procédure de rollback — Tell me
 
-## Tag de référence
+## Tags de référence
 
 **`v3.9.0-stable`** — commit `b1bd582`
 État stable de Tell me au 26 avril 2026, avant les chantiers v4 (sources publiques + bibliothèque + référentiel).
 
 URL GitHub : https://github.com/oss-opsi/rag-mvp-local/releases/tag/v3.9.0-stable
+
+**`ui-pre-modern-v1`** — commit `f3b1c35` (tag local sur la VM, non poussé sur GitHub tant que pas d'auth git)
+État de `main` avant la refonte UI moderne (chantier `feat/ui-modern-v4`). Inclut le PR #2 (KB partagée + retrieval hybride). Sert de point de retour ciblé pour rollback de la refonte UI uniquement, sans perdre les améliorations backend.
+
+**`v4.4.0-lot2bis-stable`** — commit `74d84d3`
+État stable consolidé du 27 avril 2026 : intègre l'ensemble de la branche `feat/lot2bis-sources-pratiques` (21 commits qui n'avaient jamais été mergés dans `main`) + le scaffold UI v4 (page `/mockup`) + les tokens design (soft variants, ombres tintées, shimmer skeleton). Validé fonctionnellement avant la refonte UI moderne v4 page-par-page. Contient :
+- 9 pages : login, documents, chat, analyse, ragas, **scheduler**, **referentiels**, settings, users + /mockup
+- chat enrichi : toggle Recherche approfondie, sections privé/public, mémoire 5 tours, pastilles sources repliables, demande de clarification
+- analyse-cdc v3.10/v3.11 : confiance, feedback, dashboard qualité, re-pass batch, export CSV
+- connecteurs sources publiques : BOSS, DSN-info, URSSAF, Légifrance, service-public.fr
+- scheduler : cron + jobs + maintenance + notifications
+- referentiels : admin Opsidium, PDF/DOCX/xlsx, analyse CDC
+
+Rollback rapide :
+```bash
+git fetch --tags
+git checkout v4.4.0-lot2bis-stable
+docker compose up -d --build
+```
 
 ## Que contient ce tag
 
@@ -87,6 +106,25 @@ Pour limiter le risque :
 2. **Tag intermédiaire** à chaque étape clé : `v3.9.1-cleanup`, `v3.10.0-legifrance`, `v3.11.0-boss`, etc.
 3. **Tests manuels** avant merge sur `main` (au minimum : login, upload, chat, analyse CDC sur un CDC connu)
 4. **Rollback en 1 commande** : `git checkout v3.9.0-stable && docker compose up -d --build`
+
+## Rollback ciblé de la refonte UI
+
+La refonte UI moderne (`feat/ui-modern-v4`) est livrée en **commits granulaires, un par page** (chat, documents, login, settings, users, ragas). Trois niveaux de rollback :
+
+```bash
+# (a) Rollback complet de la refonte UI (garde les améliorations backend récentes) :
+git checkout ui-pre-modern-v1
+docker compose up -d --build frontend
+
+# (b) Revert d'une seule page (par exemple si /chat pose problème mais le reste va) :
+git log --oneline main..feat/ui-modern-v4   # repérer le commit ciblé
+git revert <sha>
+docker compose up -d --build frontend
+
+# (c) Rollback total (UI + backend) vers l'état stable d'avril :
+git checkout v3.9.0-stable
+docker compose up -d --build
+```
 
 ## Contact / responsable
 

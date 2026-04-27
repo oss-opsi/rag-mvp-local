@@ -23,3 +23,13 @@ PyJWT>=2.8.0
 cryptography>=42.0.0
 # v4.4 additions
 openpyxl>=3.1.0
+xlrd>=2.0.1  # legacy .xls support pour les référentiels Opsidium
+# Lot 2bis additions — connecteurs sources publiques (BOSS, DSN-info, URSSAF, service-public)
+httpx[http2]>=0.27.0
+beautifulsoup4>=4.12.0
+lxml>=5.0.0
+# curl_cffi : impersonation TLS Chrome pour passer Cloudflare (URSSAF)
+curl_cffi>=0.7
+# Page Admin Planificateur — déclenchement cron des refresh sources publiques
+APScheduler>=3.10
+croniter>=2.0

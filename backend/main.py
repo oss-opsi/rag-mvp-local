@@ -34,6 +34,10 @@ History endpoints (require auth):
 Evaluation endpoint (require auth):
   POST /evaluate         — RAGAS evaluation (CSV upload)
 
+Workspace v3.11.0 endpoints (require auth):
+  POST /workspace/analyses/{id}/repass            — enqueue a batch re-pass
+  GET  /workspace/analyses/{id}/feedback/export   — CSV export of feedback dataset
+
 System:
   GET  /health           — status + all indexed collections
 """
@@ -84,6 +88,7 @@ from rag.gap_analysis import (
     PIPELINE_VERSION as GAP_PIPELINE_VERSION,
     corpus_fingerprint as gap_corpus_fingerprint,
     run_gap_analysis,
+    run_repass_batch,
 )
 from rag import workspace, ingestion_jobs, gap_analysis_jobs
 from rag.config import (
@@ -91,7 +96,6 @@ from rag.config import (
     CONVERSATIONS_DB_PATH,
     DATA_DIR,
     QDRANT_URL,
-    USERS_DB_PATH,
 )
 from rag.history import ConversationDB
 from rag.ingest import (
@@ -102,7 +106,6 @@ from rag.ingest import (
     ingest_file,
     load_bm25_corpus,
     reset_collection,
-    sanitize_collection_name,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -117,6 +120,11 @@ Path(BM25_DIR).mkdir(parents=True, exist_ok=True)
 workspace.init_db()
 ingestion_jobs.init_db()
 gap_analysis_jobs.init_db()
+
+# Page Admin Planificateur (cf. backend/rag/scheduler/) — tables SQLite
+# créées au démarrage. APScheduler est armé via le startup event plus bas.
+from rag.scheduler import init_scheduler_db as _init_scheduler_db
+_init_scheduler_db()
 
 
 def _cleanup_mismatched_embedding_collections() -> None:
@@ -366,7 +374,101 @@ async def _run_gap_analysis_for_job(
     return {"analysis_id": analysis_id, "report": report}
 
 
-gap_analysis_jobs.configure(run_callable=_run_gap_analysis_for_job)
+async def _run_repass_batch_for_job(
+    *,
+    analysis_id: int,
+    user_id: str,
+    openai_api_key: str,
+    requirement_ids: list[str],
+    force: bool,
+) -> dict:
+    """Callable injectée dans gap_analysis_jobs : exécute un re-pass batch
+    et persiste une NOUVELLE ligne ``analyses`` (l'ancienne reste, on garde
+    l'historique). Retourne {analysis_id, report}.
+    """
+    if not openai_api_key:
+        raise ValueError("Clé API OpenAI manquante.")
+    analysis = workspace.get_analysis_for_user(user_id, analysis_id)
+    if not analysis:
+        raise ValueError("Analyse introuvable.")
+    report = analysis.get("report") or {}
+    if not report.get("requirements"):
+        raise ValueError("Rapport vide ou non disponible.")
+
+    # Si le caller n'a fourni aucun requirement_id, on sélectionne
+    # automatiquement les exigences "à re-passer" : confidence < 0.5 OU
+    # vote 'down' du user courant.
+    target_ids: list[str] = list(requirement_ids or [])
+    if not target_ids:
+        down_voted = workspace.list_user_down_voted_requirements(
+            user_id, str(analysis_id)
+        )
+        for r in report.get("requirements") or []:
+            rid = str(r.get("id") or "")
+            if not rid:
+                continue
+            low_conf = float(r.get("confidence", 1.0) or 0.0) < 0.5
+            if low_conf or rid in down_voted:
+                target_ids.append(rid)
+
+    if not target_ids:
+        # Rien à re-passer : on persiste tel quel pour matérialiser le job
+        # (cohérence côté UI : un job done sans changement).
+        new_analysis_id = workspace.save_analysis_with_metadata(
+            cdc_id=analysis["cdc_id"],
+            report=report,
+            pipeline_version=GAP_PIPELINE_VERSION,
+            corpus_fingerprint=analysis.get("corpus_fingerprint") or "",
+        )
+        report["analysis_id"] = new_analysis_id
+        report["cdc_id"] = analysis["cdc_id"]
+        report["repass_batch_meta"] = {
+            "source_analysis_id": int(analysis_id),
+            "requirement_ids": [],
+            "force": bool(force),
+            "model": "n/a",
+            "skipped": True,
+            "reason": "Aucune exigence à re-passer (filtres vides).",
+        }
+        return {"analysis_id": new_analysis_id, "report": report}
+
+    new_report = await run_repass_batch(
+        report=report,
+        requirement_ids=target_ids,
+        user_id=user_id,
+        openai_api_key=openai_api_key,
+        force=force,
+    )
+
+    # Trace metadata du re-pass batch (audit côté report).
+    new_report["repass_batch_meta"] = {
+        "source_analysis_id": int(analysis_id),
+        "requirement_ids": target_ids,
+        "force": bool(force),
+        "model": _repass_model_name(),
+    }
+
+    new_analysis_id = workspace.save_analysis_with_metadata(
+        cdc_id=analysis["cdc_id"],
+        report=new_report,
+        pipeline_version=GAP_PIPELINE_VERSION,
+        corpus_fingerprint=analysis.get("corpus_fingerprint") or "",
+    )
+    new_report["analysis_id"] = new_analysis_id
+    new_report["cdc_id"] = analysis["cdc_id"]
+    return {"analysis_id": new_analysis_id, "report": new_report}
+
+
+def _repass_model_name() -> str:
+    """Retourne le modèle re-pass effectivement configuré (admin setting)."""
+    from rag.gap_analysis import _repass_model
+    return _repass_model()
+
+
+gap_analysis_jobs.configure(
+    run_callable=_run_gap_analysis_for_job,
+    run_repass_callable=_run_repass_batch_for_job,
+)
 
 
 @app.on_event("startup")
@@ -386,6 +488,27 @@ def _bootstrap_first_admin() -> None:
         ensure_first_admin()
     except Exception as exc:  # pragma: no cover - best effort
         logging.getLogger(__name__).warning("first-admin bootstrap failed: %s", exc)
+
+
+@app.on_event("startup")
+def _start_admin_scheduler() -> None:
+    """Démarre APScheduler et arme les planifications enabled au boot."""
+    try:
+        from rag.scheduler import get_scheduler_manager
+        get_scheduler_manager().start()
+    except Exception as exc:  # pragma: no cover - best effort
+        logging.getLogger(__name__).warning(
+            "Page Admin Planificateur — démarrage APScheduler échoué : %s", exc,
+        )
+
+
+@app.on_event("shutdown")
+def _stop_admin_scheduler() -> None:
+    try:
+        from rag.scheduler import get_scheduler_manager
+        get_scheduler_manager().shutdown()
+    except Exception:  # pragma: no cover
+        pass
 
 
 @app.on_event("startup")
@@ -485,6 +608,9 @@ class QueryRequest(BaseModel):
     openai_api_key: str
     k: int = 5
     rerank: bool = False
+    # Optionnel : si fourni, les 5 derniers tours de la conversation sont
+    # injectés dans le prompt LLM pour donner du contexte conversationnel.
+    conversation_id: str | None = None
 
 
 class SourceItem(BaseModel):
@@ -493,6 +619,11 @@ class SourceItem(BaseModel):
     page: Any
     score: float
     rerank_score: float | None = None
+    # Origine de la source : 'private' (documents de l'utilisateur) ou 'kb'
+    # (collection publique partagée). Permet au front de regrouper les
+    # citations par section dans la réponse en deux parties.
+    scope: str | None = None
+    url_canonique: str | None = None
 
 
 class QueryResponse(BaseModel):
@@ -776,40 +907,59 @@ async def admin_set_llm_settings(
 # Admin — Sources publiques (KB partagée knowledge_base) — Lot 1
 # ---------------------------------------------------------------------------
 
-# Registry des connecteurs disponibles. Alimenté au fil des lots
-# (L2 Légifrance, L3 BOSS, L4 DSN-info, L5 Ameli/URSSAF/service-public).
+# Registry des connecteurs disponibles. Alimenté au fil des lots.
+# Lot 2bis : 4 sources pratiques en parallèle (BOSS, DSN-info, URSSAF,
+# service-public). Légifrance reste planifié (Lot 6 — citations sourcées).
 _SOURCES_REGISTRY: dict[str, dict] = {
-    "legifrance": {
-        "label": "Légifrance (API PISTE)",
-        "status": "planned",
-        "domaine": ["paie", "administration", "gta", "absences"],
+    "service_public": {
+        "label": "service-public.fr (employeur — DILA)",
+        "status": "available",
+        "domaine": ["administration", "paie", "absences", "dsn"],
     },
     "boss": {
         "label": "BOSS — Bulletin officiel Sécurité sociale",
-        "status": "planned",
+        "status": "available",
         "domaine": ["paie", "dsn"],
     },
     "dsn_info": {
         "label": "DSN-info — net-entreprises",
-        "status": "planned",
+        "status": "available",
         "domaine": ["dsn", "paie"],
     },
-    "ameli_employeur": {
-        "label": "Ameli employeur",
-        "status": "planned",
-        "domaine": ["absences", "paie"],
-    },
     "urssaf": {
-        "label": "URSSAF",
-        "status": "planned",
+        "label": "URSSAF — site employeur",
+        "status": "available",
         "domaine": ["paie", "dsn"],
     },
-    "service_public": {
-        "label": "service-public.fr (employeur)",
-        "status": "planned",
-        "domaine": ["administration", "absences", "portail"],
+    "legifrance": {
+        "label": "Légifrance (API PISTE) — Lot 6",
+        "status": "paused",
+        "domaine": ["paie", "administration", "gta", "absences"],
     },
 }
+
+# Dernier run par source (mémoire process — sera persisté DB en Lot 2bis suivant)
+_SOURCES_LAST_RUN: dict[str, dict] = {}
+
+
+def _get_connector(source_id: str):
+    """Factory : instancie le connecteur correspondant à l'ID source.
+
+    Renvoie None si aucun connecteur concret n'est encore branché.
+    """
+    if source_id == "service_public":
+        from rag.connectors.service_public import ServicePublicConnector
+        return ServicePublicConnector()
+    if source_id == "boss":
+        from rag.connectors.boss import BossConnector
+        return BossConnector()
+    if source_id == "dsn_info":
+        from rag.connectors.dsn_info import DsnInfoConnector
+        return DsnInfoConnector()
+    if source_id == "urssaf":
+        from rag.connectors.urssaf import UrssafConnector
+        return UrssafConnector()
+    return None
 
 
 @app.get("/admin/sources/status", tags=["Admin"])
@@ -841,22 +991,96 @@ async def admin_sources_status(_: str = Depends(require_admin)) -> dict:
         "kb_exists": kb_exists,
         "vectors_count": vectors_count,
         "sources": [
-            {"id": sid, **info} for sid, info in _SOURCES_REGISTRY.items()
+            {
+                "id": sid,
+                **info,
+                "last_run": _SOURCES_LAST_RUN.get(sid),
+            }
+            for sid, info in _SOURCES_REGISTRY.items()
         ],
     }
+
+
+def _purge_source_from_kb(source: str) -> int:
+    """Supprime tous les vecteurs d'une source dans la collection KB partagée.
+
+    Filtre Qdrant sur la métadonnée `metadata.source == <source>`.
+    Renvoie le nombre de points supprimés (estimé à partir du compte avant/après).
+    """
+    from qdrant_client.http import models as qmodels
+    from rag.config import KNOWLEDGE_BASE_COLLECTION
+    from rag.ingest import get_qdrant_client
+
+    client = get_qdrant_client(QDRANT_URL)
+    existing = {c.name for c in client.get_collections().collections}
+    if KNOWLEDGE_BASE_COLLECTION not in existing:
+        return 0
+
+    before = int(
+        getattr(client.get_collection(KNOWLEDGE_BASE_COLLECTION), "points_count", 0) or 0
+    )
+
+    # Le QdrantVectorStore (langchain) stocke les métadonnées sous la clé "metadata"
+    flt = qmodels.Filter(
+        must=[
+            qmodels.FieldCondition(
+                key="metadata.source",
+                match=qmodels.MatchValue(value=source),
+            )
+        ]
+    )
+    client.delete(
+        collection_name=KNOWLEDGE_BASE_COLLECTION,
+        points_selector=qmodels.FilterSelector(filter=flt),
+        wait=True,
+    )
+    after = int(
+        getattr(client.get_collection(KNOWLEDGE_BASE_COLLECTION), "points_count", 0) or 0
+    )
+    deleted = max(0, before - after)
+    logger.info("[%s] Purge KB : %d points supprimés (avant=%d, après=%d)", source, deleted, before, after)
+    return deleted
+
+
+@app.post("/admin/sources/purge", tags=["Admin"])
+async def admin_sources_purge(
+    source: str,
+    _: str = Depends(require_admin),
+) -> dict:
+    """Supprime les vecteurs d'une source dans la KB partagée.
+
+    Utile pour vider une source avant un refresh (évite les doublons), ou pour
+    retirer une source qui ne doit plus apparaître dans les réponses.
+    """
+    if source not in _SOURCES_REGISTRY:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Source inconnue : '{source}'.",
+        )
+    try:
+        deleted = _purge_source_from_kb(source)
+    except Exception as exc:
+        logger.exception("[%s] purge failed", source)
+        raise HTTPException(status_code=500, detail=f"Purge '{source}' a échoué : {exc}")
+    return {"source": source, "deleted": deleted}
 
 
 @app.post("/admin/sources/refresh", tags=["Admin"])
 async def admin_sources_refresh(
     source: str,
+    purge_first: bool = True,
     _: str = Depends(require_admin),
 ) -> dict:
     """Déclenche un refresh manuel d'un connecteur source.
 
-    À ce stade (Lot 1), la mécanique est en place mais aucun connecteur
-    concret n'est encore branché — ils seront ajoutés aux Lots 2-5
-    (Légifrance, BOSS, DSN-info, Ameli, URSSAF, service-public).
+    Par défaut, purge d'abord les vecteurs existants de cette source dans la KB
+    (évite les doublons). Mettre `purge_first=false` pour un upsert additif.
+
+    Lot 2bis : `service_public`, `boss`, `dsn_info` et `urssaf` sont disponibles.
+    Légifrance reste en pause (Lot 6 — citations sourcées).
     """
+    import time as _time
+
     if source not in _SOURCES_REGISTRY:
         raise HTTPException(
             status_code=404,
@@ -868,13 +1092,167 @@ async def admin_sources_refresh(
         return {
             "source": source,
             "status": info["status"],
-            "message": "Connecteur planifié — sera disponible dans un prochain lot.",
+            "message": "Connecteur planifié ou en pause — pas encore actionnable.",
         }
-    # Quand un connecteur concret sera branché, on instanciera ici
-    # via une factory et on appellera connector.run().
-    raise HTTPException(
-        status_code=501, detail="Exécution non encore implémentée."
+
+    connector = _get_connector(source)
+    if connector is None:
+        raise HTTPException(
+            status_code=501,
+            detail=f"Connecteur '{source}' déclaré disponible mais factory non branchée.",
+        )
+
+    started = _time.time()
+    purged = 0
+    if purge_first:
+        try:
+            purged = _purge_source_from_kb(source)
+        except Exception as exc:
+            logger.exception("[%s] purge avant refresh échouée", source)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Purge avant refresh '{source}' a échoué : {exc}",
+            )
+    try:
+        run_result = connector.run()
+    except Exception as exc:  # défensif — éviter 500 silencieux
+        logger.exception("[%s] refresh failed", source)
+        raise HTTPException(status_code=500, detail=f"Refresh '{source}' a échoué : {exc}")
+    duration = round(_time.time() - started, 2)
+
+    last_run = {
+        "started_at": int(started),
+        "duration_s": duration,
+        "purged": purged,
+        **run_result.to_dict(),
+    }
+    _SOURCES_LAST_RUN[source] = last_run
+    return {"source": source, "status": "completed", "result": last_run}
+
+
+# ---------------------------------------------------------------------------
+# Référentiels Opsidium (méthodologie interne) — admin only
+# ---------------------------------------------------------------------------
+# Documents internes (PDF/DOCX) qui alimentent UNIQUEMENT le pipeline
+# d'analyse CDC client (gap-analysis). Ils ne sont pas exposés au chat
+# « Tell me ». Collection Qdrant dédiée : referentiels_opsidium.
+
+
+@app.get("/admin/referentiels/info", tags=["Admin"])
+async def admin_referentiels_info(_: str = Depends(require_admin)) -> dict:
+    """Résumé de la collection des référentiels Opsidium."""
+    from rag.referentiels import get_referentiels_info
+    return get_referentiels_info()
+
+
+@app.get("/admin/referentiels/list", tags=["Admin"])
+async def admin_referentiels_list(_: str = Depends(require_admin)) -> dict:
+    """Liste les référentiels indexés (groupés par fichier source)."""
+    from rag.referentiels import list_referentiels
+    return {"documents": list_referentiels()}
+
+
+@app.post(
+    "/admin/referentiels/upload",
+    tags=["Admin"],
+    status_code=201,
+)
+async def admin_referentiels_upload(
+    file: UploadFile = File(
+        ...,
+        description="Référentiel méthodologie Opsidium (PDF, DOCX, XLSX, XLS)",
+    ),
+    _: str = Depends(require_admin),
+) -> dict:
+    """Indexe un référentiel méthodologie interne.
+
+    Le fichier est découpé puis indexé dans la collection partagée
+    `referentiels_opsidium`. Cette collection est interrogée UNIQUEMENT
+    par le pipeline d'analyse CDC client (gap-analysis), jamais par le
+    chat « Tell me ».
+
+    Si un référentiel du même nom existe déjà, ses anciens chunks sont
+    supprimés avant la réindexation (mise à jour atomique).
+    """
+    from rag.referentiels import (
+        SUPPORTED_REFERENTIEL_EXTENSIONS,
+        delete_referentiel,
+        ingest_referentiel,
     )
+    import pathlib
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Nom de fichier manquant.")
+
+    ext = pathlib.Path(file.filename).suffix.lower()
+    if ext not in SUPPORTED_REFERENTIEL_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Format non supporté pour un référentiel : '{ext}'. "
+                f"Formats acceptés : {', '.join(sorted(SUPPORTED_REFERENTIEL_EXTENSIONS))}."
+            ),
+        )
+
+    # Persist upload to a temp file
+    with tempfile.NamedTemporaryFile(
+        delete=False, suffix=ext, prefix="rag_referentiel_"
+    ) as tmp:
+        content = await file.read()
+        tmp.write(content)
+        tmp_path = tmp.name
+
+    try:
+        # Mise à jour atomique : on supprime d'abord les chunks existants
+        # de ce même fichier source (s'il a déjà été indexé auparavant).
+        try:
+            delete_referentiel(file.filename)
+        except Exception:
+            logger.exception(
+                "[referentiels] purge avant réindexation échouée pour '%s'",
+                file.filename,
+            )
+
+        # Indexation synchrone (volumétrie attendue faible : méthodo interne).
+        result = ingest_referentiel(tmp_path, file.filename)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.exception("[referentiels] upload failed for '%s'", file.filename)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Indexation du référentiel échouée : {exc}",
+        )
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+    return {
+        "source": result["source"],
+        "chunks": result["chunks"],
+        "chunker_version": result["chunker_version"],
+    }
+
+
+@app.delete("/admin/referentiels/{source:path}", tags=["Admin"])
+async def admin_referentiels_delete(
+    source: str,
+    _: str = Depends(require_admin),
+) -> dict:
+    """Supprime un référentiel indexé (filtre Qdrant `metadata.source`)."""
+    from rag.referentiels import delete_referentiel
+    if not source.strip():
+        raise HTTPException(status_code=400, detail="Nom de source vide.")
+    try:
+        return delete_referentiel(source)
+    except Exception as exc:
+        logger.exception("[referentiels] delete failed for '%s'", source)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Suppression du référentiel échouée : {exc}",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -953,6 +1331,20 @@ async def health() -> dict:
         "qdrant_url": QDRANT_URL,
         "indexed_vectors": collections,
     }
+
+
+@app.get("/maintenance-status", tags=["Système"])
+async def maintenance_status() -> dict:
+    """Renvoie le flag chat_paused (no auth required).
+
+    Utilisé par le frontend pour afficher un bandeau « Maintenance en cours »
+    sur la page chat sans avoir à exposer toute la table app_settings.
+    """
+    try:
+        from rag.scheduler import db as _scheduler_db
+        return {"chat_paused": _scheduler_db.is_chat_paused()}
+    except Exception:
+        return {"chat_paused": False}
 
 
 # ---------------------------------------------------------------------------
@@ -1108,6 +1500,39 @@ async def delete_collection(user_id: str = Depends(get_current_user)) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Query helpers
+# ---------------------------------------------------------------------------
+
+
+def _load_conversation_history(
+    conversation_id: str | None, user_id: str
+) -> list[dict] | None:
+    """Charge les messages d'une conversation pour injection dans le prompt LLM.
+
+    Retourne ``None`` si aucun ``conversation_id`` n'est fourni (premier
+    message d'une nouvelle conversation, comportement historique).
+
+    Vérifie l'appartenance de la conversation à l'utilisateur ; si la
+    conversation n'existe pas ou n'appartient pas à l'utilisateur, on
+    retourne une liste vide (pas d'erreur — on dégrade gracieusement,
+    le retrieval seul suffit à répondre).
+    """
+    if not conversation_id:
+        return None
+    try:
+        db = get_conv_db()
+        convs = db.list_conversations(user_id)
+        if not any(c["id"] == conversation_id for c in convs):
+            return []
+        # get_messages renvoie l'historique complet (ordre chronologique).
+        # La sélection des 5 derniers tours est faite dans rag.chain.
+        return db.get_messages(conversation_id, user_id=user_id)
+    except Exception as exc:  # noqa: BLE001 — non-bloquant
+        logger.warning("Impossible de charger l'historique conversationnel : %s", exc)
+        return []
+
+
+# ---------------------------------------------------------------------------
 # Query (non-streaming)
 # ---------------------------------------------------------------------------
 
@@ -1121,6 +1546,21 @@ async def query(
     Répond à une question en recherchant dans les documents indexés (RAG hybride).
     Non-streaming.
     """
+    # Page Admin Planificateur : pause chat pendant maintenance.
+    try:
+        from rag.scheduler import db as _scheduler_db
+        if _scheduler_db.is_chat_paused():
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Maintenance en cours, chat indisponible le temps du "
+                    "rafraîchissement des sources publiques."
+                ),
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        pass
     # Resolve OpenAI key: prefer request.openai_api_key, else use stored key
     effective_key = (request.openai_api_key or "").strip()
     if not effective_key and user_id != "guest":
@@ -1141,6 +1581,8 @@ async def query(
             detail="Aucun document indexé pour cet utilisateur. Veuillez d'abord indexer vos documents.",
         )
 
+    history = _load_conversation_history(request.conversation_id, user_id)
+
     try:
         result = answer_question(
             question=request.question,
@@ -1149,6 +1591,7 @@ async def query(
             k=request.k,
             rerank=request.rerank,
             user_id=user_id,
+            history=history,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -1163,6 +1606,8 @@ async def query(
             page=s["page"],
             score=s["score"],
             rerank_score=s.get("rerank_score"),
+            scope=s.get("scope"),
+            url_canonique=s.get("url_canonique"),
         )
         for s in result["sources"]
     ]
@@ -1188,6 +1633,25 @@ async def query_stream(
       data: [SOURCES]{json}\\n\\n
       data: [DONE]\\n\\n
     """
+    # Page Admin Planificateur : si le flag chat_paused est positionné par
+    # une planification "pause_chat_during_refresh=True", on bloque le chat
+    # pendant la maintenance.
+    try:
+        from rag.scheduler import db as _scheduler_db
+        if _scheduler_db.is_chat_paused():
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Maintenance en cours, chat indisponible le temps du "
+                    "rafraîchissement des sources publiques."
+                ),
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        # Si la table n'existe pas encore (premier boot), on ne bloque pas.
+        pass
+
     effective_key = (request.openai_api_key or "").strip()
     if not effective_key and user_id != "guest":
         effective_key = get_user_api_key(user_id)
@@ -1207,6 +1671,8 @@ async def query_stream(
             detail="Aucun document indexé pour cet utilisateur. Veuillez d'abord indexer vos documents.",
         )
 
+    history = _load_conversation_history(request.conversation_id, user_id)
+
     try:
         token_gen, sources = stream_answer(
             question=request.question,
@@ -1215,6 +1681,7 @@ async def query_stream(
             k=request.k,
             rerank=request.rerank,
             user_id=user_id,
+            history=history,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -1234,6 +1701,8 @@ async def query_stream(
                 "page": s["page"],
                 "score": s["score"],
                 "rerank_score": s.get("rerank_score"),
+                "scope": s.get("scope"),
+                "url_canonique": s.get("url_canonique"),
             }
             for s in sources
         ]
@@ -1895,6 +2364,636 @@ def get_analysis_job(
     if not job:
         raise HTTPException(status_code=404, detail="Job d'analyse introuvable.")
     return job
+
+
+# ---------------------------------------------------------------------------
+# Workspace — Feedback sur exigences (v3.10.0)
+# ---------------------------------------------------------------------------
+
+
+class RequirementFeedbackRequest(BaseModel):
+    vote: str  # "up" ou "down"
+    comment: str | None = None
+
+
+def _ensure_analysis_owned(user_id: str, analysis_id: str) -> None:
+    """Vérifie l'appartenance d'une analyse — 404 sinon."""
+    if not workspace.user_owns_analysis(user_id, analysis_id):
+        raise HTTPException(
+            status_code=404,
+            detail="Analyse introuvable ou accès refusé.",
+        )
+
+
+@app.post(
+    "/workspace/analyses/{analysis_id}/requirements/{requirement_id}/feedback",
+    tags=["Workspace"],
+)
+def workspace_post_requirement_feedback(
+    analysis_id: str,
+    requirement_id: str,
+    req: RequirementFeedbackRequest,
+    user_id: str = Depends(get_current_user),
+) -> dict:
+    """Enregistre (ou met à jour) un feedback 👍/👎 sur une exigence."""
+    _ensure_analysis_owned(user_id, analysis_id)
+    try:
+        return workspace.upsert_feedback(
+            analysis_id=analysis_id,
+            requirement_id=requirement_id,
+            user_id=user_id,
+            vote=req.vote,
+            comment=req.comment,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.delete(
+    "/workspace/analyses/{analysis_id}/requirements/{requirement_id}/feedback",
+    tags=["Workspace"],
+)
+def workspace_delete_requirement_feedback(
+    analysis_id: str,
+    requirement_id: str,
+    user_id: str = Depends(get_current_user),
+) -> dict:
+    """Supprime le feedback de l'utilisateur sur une exigence."""
+    _ensure_analysis_owned(user_id, analysis_id)
+    removed = workspace.delete_feedback(
+        analysis_id=analysis_id,
+        requirement_id=requirement_id,
+        user_id=user_id,
+    )
+    return {"removed": removed}
+
+
+@app.get(
+    "/workspace/analyses/{analysis_id}/feedback",
+    tags=["Workspace"],
+)
+def workspace_list_requirement_feedback(
+    analysis_id: str,
+    user_id: str = Depends(get_current_user),
+) -> dict:
+    """Liste tous les feedbacks de l'analyse (pour l'utilisateur courant)."""
+    _ensure_analysis_owned(user_id, analysis_id)
+    items = [
+        f for f in workspace.list_feedback_for_analysis(analysis_id)
+        if f.get("user_id") == user_id
+    ]
+    return {"analysis_id": analysis_id, "feedback": items}
+
+
+@app.get(
+    "/workspace/analyses/{analysis_id}/quality-dashboard",
+    tags=["Workspace"],
+)
+def workspace_quality_dashboard(
+    analysis_id: str,
+    user_id: str = Depends(get_current_user),
+) -> dict:
+    """Stats agrégées pour le dashboard qualité d'une analyse."""
+    _ensure_analysis_owned(user_id, analysis_id)
+    return workspace.get_feedback_stats(analysis_id)
+
+
+# ---------------------------------------------------------------------------
+# Workspace — Corrections humaines validées (v4)
+# ---------------------------------------------------------------------------
+
+
+class RequirementCorrectionRequest(BaseModel):
+    verdict: str  # "covered", "partial" ou "missing"
+    answer: str
+    notes: str | None = None
+    # Métadonnées de l'exigence pour calculer la content_key.
+    category: str | None = None
+    subdomain: str | None = None
+    title: str | None = None
+
+
+@app.put(
+    "/workspace/analyses/{analysis_id}/requirements/{requirement_id}/correction",
+    tags=["Workspace"],
+)
+def workspace_put_requirement_correction(
+    analysis_id: str,
+    requirement_id: str,
+    req: RequirementCorrectionRequest,
+    user_id: str = Depends(get_current_user),
+) -> dict:
+    """Crée ou met à jour la correction validée pour une exigence."""
+    _ensure_analysis_owned(user_id, analysis_id)
+    content_key = workspace.compute_content_key(
+        category=req.category,
+        subdomain=req.subdomain,
+        title=req.title,
+    )
+    try:
+        return workspace.upsert_correction(
+            analysis_id=analysis_id,
+            requirement_id=requirement_id,
+            user_id=user_id,
+            content_key=content_key,
+            verdict=req.verdict,
+            answer=req.answer,
+            notes=req.notes,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.delete(
+    "/workspace/analyses/{analysis_id}/requirements/{requirement_id}/correction",
+    tags=["Workspace"],
+)
+def workspace_delete_requirement_correction(
+    analysis_id: str,
+    requirement_id: str,
+    user_id: str = Depends(get_current_user),
+) -> dict:
+    _ensure_analysis_owned(user_id, analysis_id)
+    removed = workspace.delete_correction(
+        analysis_id=analysis_id,
+        requirement_id=requirement_id,
+        user_id=user_id,
+    )
+    return {"removed": removed}
+
+
+@app.get(
+    "/workspace/analyses/{analysis_id}/corrections",
+    tags=["Workspace"],
+)
+def workspace_list_requirement_corrections(
+    analysis_id: str,
+    user_id: str = Depends(get_current_user),
+) -> dict:
+    _ensure_analysis_owned(user_id, analysis_id)
+    items = workspace.list_corrections_for_analysis(analysis_id, user_id)
+    return {"analysis_id": analysis_id, "corrections": items}
+
+
+# ---------------------------------------------------------------------------
+# Workspace — v3.11.0 : re-pass batch + export CSV feedback
+# ---------------------------------------------------------------------------
+
+
+class RepassBatchRequest(BaseModel):
+    """Body pour POST /workspace/analyses/{analysis_id}/repass."""
+    requirement_ids: Optional[list[str]] = None
+    openai_api_key: Optional[str] = None
+    force: bool = False
+
+
+@app.post(
+    "/workspace/analyses/{analysis_id}/repass",
+    tags=["Workspace"],
+    status_code=202,
+)
+def workspace_repass_analysis(
+    analysis_id: str,
+    req: RepassBatchRequest,
+    user_id: str = Depends(get_current_user),
+) -> dict:
+    """Lance un re-pass GPT-4o ciblé sur les exigences listées (ou auto-
+    sélectionnées si la liste est vide : confidence < 0.5 OU vote 'down').
+
+    Le job tourne en arrière-plan dans la même file que les analyses
+    complètes (un seul worker → sérialisation naturelle). Le client doit
+    poller ``/analysis-jobs/{job_id}`` jusqu'à status ``done`` ou ``error``.
+
+    Compatibilité : un user sans feedback obtient le comportement strict
+    v3.10 sur les exigences traitées (pas de few-shot, pas de boost) — le
+    re-pass se contente d'appeler le modèle re-pass sur les exigences
+    ciblées avec les chunks déjà retournés.
+    """
+    try:
+        aid = int(analysis_id)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="analysis_id invalide.")
+
+    analysis = workspace.get_analysis_for_user(user_id, aid)
+    if not analysis:
+        raise HTTPException(
+            status_code=404, detail="Analyse introuvable ou accès refusé."
+        )
+
+    effective_key = (req.openai_api_key or "").strip()
+    if not effective_key and user_id != "guest":
+        effective_key = get_user_api_key(user_id)
+    if not effective_key:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "La clé API OpenAI est requise (saisissez-la ou enregistrez-la "
+                "dans vos paramètres)."
+            ),
+        )
+
+    requirement_ids = [str(r) for r in (req.requirement_ids or []) if str(r).strip()]
+    try:
+        job = gap_analysis_jobs.enqueue_repass_batch(
+            user_id=user_id,
+            cdc_id=int(analysis["cdc_id"]),
+            analysis_id=aid,
+            requirement_ids=requirement_ids,
+            openai_api_key=effective_key,
+            force=bool(req.force),
+        )
+    except Exception as exc:
+        logger.exception("Re-pass batch enqueue failed for analysis %s", aid)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Impossible d'enfiler le re-pass : {exc}",
+        )
+    return job
+
+
+@app.get(
+    "/workspace/analyses/{analysis_id}/feedback/export",
+    tags=["Workspace"],
+)
+def workspace_export_feedback_csv(
+    analysis_id: str,
+    user_id: str = Depends(get_current_user),
+) -> StreamingResponse:
+    """Export CSV (UTF-8 BOM, séparateur ';') du dataset feedback de l'analyse.
+
+    Une ligne par exigence (avec ou sans feedback). Compatible Excel France.
+    """
+    _ensure_analysis_owned(user_id, analysis_id)
+    aid = str(analysis_id)
+    filename = f"feedback_{aid}.csv"
+    iterator = workspace.export_feedback_csv(aid)
+    headers = {
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "Cache-Control": "no-cache",
+    }
+    return StreamingResponse(
+        iterator,
+        media_type="text/csv; charset=utf-8",
+        headers=headers,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Page Admin Planificateur (cron + jobs + maintenance + notifications)
+# ---------------------------------------------------------------------------
+# Tous les endpoints réservés à l'admin via require_admin. Le runner FIFO
+# garantit qu'un seul job tourne à la fois (sérialisation au niveau
+# process backend). Cf. rag/scheduler/.
+
+from rag.scheduler import db as scheduler_db  # noqa: E402
+from rag.scheduler import maintenance as scheduler_maintenance  # noqa: E402
+from rag.scheduler.manager import (  # noqa: E402
+    _next_run_iso as _scheduler_next_run_iso,
+    _validate_cron as _scheduler_validate_cron,
+    get_scheduler_manager as _get_scheduler_manager,
+)
+
+
+class ScheduleCreateRequest(BaseModel):
+    source: str
+    cron_expression: str
+    label: Optional[str] = None
+    pause_chat_during_refresh: bool = False
+    enabled: bool = True
+
+
+class ScheduleUpdateRequest(BaseModel):
+    cron_expression: Optional[str] = None
+    label: Optional[str] = None
+    pause_chat_during_refresh: Optional[bool] = None
+    enabled: Optional[bool] = None
+
+
+def _enrich_schedule(sched: dict) -> dict:
+    """Ajoute next_run_at calculé live à partir de l'expression cron."""
+    out = dict(sched)
+    nxt = _scheduler_next_run_iso(out.get("cron_expression") or "")
+    if nxt:
+        out["next_run_at"] = nxt
+    return out
+
+
+@app.get("/admin/schedules", tags=["Admin Planificateur"])
+def admin_list_schedules(_: str = Depends(require_admin)) -> dict:
+    """Liste toutes les planifications, avec next_run_at calculé live."""
+    schedules = [_enrich_schedule(s) for s in scheduler_db.list_schedules()]
+    return {"schedules": schedules}
+
+
+@app.post(
+    "/admin/schedules",
+    tags=["Admin Planificateur"],
+    status_code=201,
+)
+def admin_create_schedule(
+    req: ScheduleCreateRequest,
+    user_id: str = Depends(require_admin),
+) -> dict:
+    """Crée une nouvelle planification cron pour une source."""
+    if req.source not in scheduler_db.VALID_SOURCES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Source inconnue : '{req.source}'. "
+                f"Attendu : {', '.join(scheduler_db.VALID_SOURCES)}."
+            ),
+        )
+    try:
+        _scheduler_validate_cron(req.cron_expression)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    try:
+        sched = _get_scheduler_manager().add_schedule(
+            source=req.source,
+            cron_expression=req.cron_expression,
+            enabled=req.enabled,
+            pause_chat_during_refresh=req.pause_chat_during_refresh,
+            label=req.label,
+            created_by=user_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return _enrich_schedule(sched)
+
+
+@app.put("/admin/schedules/{schedule_id}", tags=["Admin Planificateur"])
+def admin_update_schedule(
+    schedule_id: int,
+    req: ScheduleUpdateRequest,
+    _: str = Depends(require_admin),
+) -> dict:
+    if req.cron_expression is not None:
+        try:
+            _scheduler_validate_cron(req.cron_expression)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+    sched = _get_scheduler_manager().update_schedule(
+        schedule_id,
+        cron_expression=req.cron_expression,
+        enabled=req.enabled,
+        pause_chat_during_refresh=req.pause_chat_during_refresh,
+        label=req.label,
+    )
+    if sched is None:
+        raise HTTPException(status_code=404, detail="Planification introuvable.")
+    return _enrich_schedule(sched)
+
+
+@app.delete("/admin/schedules/{schedule_id}", tags=["Admin Planificateur"])
+def admin_delete_schedule(
+    schedule_id: int,
+    _: str = Depends(require_admin),
+) -> dict:
+    deleted = _get_scheduler_manager().delete_schedule(schedule_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Planification introuvable.")
+    return {"deleted": True, "schedule_id": schedule_id}
+
+
+@app.post(
+    "/admin/schedules/{schedule_id}/run-now",
+    tags=["Admin Planificateur"],
+    status_code=202,
+)
+def admin_schedule_run_now(
+    schedule_id: int,
+    _: str = Depends(require_admin),
+) -> dict:
+    """Déclenche manuellement une planification (queue si un job tourne déjà)."""
+    sched = scheduler_db.get_schedule(schedule_id)
+    if sched is None:
+        raise HTTPException(status_code=404, detail="Planification introuvable.")
+    job = _get_scheduler_manager().trigger_now(
+        source=sched["source"],
+        schedule_id=schedule_id,
+        pause_chat=bool(sched.get("pause_chat_during_refresh")),
+    )
+    return job
+
+
+@app.post(
+    "/admin/sources/{source}/run-now",
+    tags=["Admin Planificateur"],
+    status_code=202,
+)
+def admin_source_run_now(
+    source: str,
+    _: str = Depends(require_admin),
+) -> dict:
+    """Lance un refresh one-shot (sans planification associée)."""
+    if source not in scheduler_db.PUBLIC_SOURCES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Source inconnue : '{source}'. "
+                f"Attendu : {', '.join(scheduler_db.PUBLIC_SOURCES)}."
+            ),
+        )
+    job = _get_scheduler_manager().trigger_now(source=source)
+    return job
+
+
+@app.get("/admin/jobs", tags=["Admin Planificateur"])
+def admin_list_jobs(
+    source: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = Query(20, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    _: str = Depends(require_admin),
+) -> dict:
+    """Liste paginée des jobs (les plus récents en premier)."""
+    statuses: Optional[list[str]] = None
+    if status:
+        statuses = [s.strip() for s in status.split(",") if s.strip()]
+    jobs = scheduler_db.list_jobs(
+        source=source, status=statuses, limit=limit, offset=offset,
+    )
+    return {"jobs": jobs}
+
+
+@app.get("/admin/jobs/current", tags=["Admin Planificateur"])
+def admin_get_current_job(_: str = Depends(require_admin)) -> dict:
+    """Renvoie le job en cours d'exécution (status='running'), s'il y en a un."""
+    job = scheduler_db.get_running_job()
+    return {"job": job}
+
+
+@app.get("/admin/jobs/{job_id}", tags=["Admin Planificateur"])
+def admin_get_job(
+    job_id: int,
+    _: str = Depends(require_admin),
+) -> dict:
+    job = scheduler_db.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job introuvable.")
+    return job
+
+
+@app.post("/admin/jobs/{job_id}/cancel", tags=["Admin Planificateur"])
+def admin_cancel_job(
+    job_id: int,
+    _: str = Depends(require_admin),
+) -> dict:
+    """Annule un job ``queued`` (immédiat) ou demande l'arrêt d'un ``running``.
+
+    Pour un job running : positionne le flag stop_requested. Le runner le
+    vérifie entre 2 batches du connecteur et termine en ``cancelled``.
+    """
+    job = scheduler_db.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job introuvable.")
+    if job["status"] == "queued":
+        scheduler_db.update_job(
+            job_id,
+            status="cancelled",
+            finished_at=scheduler_db._now_iso(),
+            error_message="Annulé avant démarrage.",
+        )
+        return {"cancelled": True, "job_id": job_id, "was": "queued"}
+    if job["status"] == "running":
+        scheduler_db.update_job(job_id, stop_requested=True)
+        return {"cancel_requested": True, "job_id": job_id, "was": "running"}
+    return {"noop": True, "job_id": job_id, "status": job["status"]}
+
+
+# ---------------------------------------------------------------------------
+# Page Admin — Maintenance Qdrant (re-embed, optimize, integrity, stats)
+# ---------------------------------------------------------------------------
+
+
+@app.post(
+    "/admin/maintenance/reembed/{source}",
+    tags=["Admin Maintenance"],
+    status_code=202,
+)
+def admin_maintenance_reembed_source(
+    source: str,
+    _: str = Depends(require_admin),
+) -> dict:
+    """Lance un job de re-embedding complet d'une source publique."""
+    if source not in scheduler_db.PUBLIC_SOURCES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Source inconnue : '{source}'. "
+                f"Attendu : {', '.join(scheduler_db.PUBLIC_SOURCES)}."
+            ),
+        )
+    job = _get_scheduler_manager().trigger_now(source=f"reembed_{source}")
+    return job
+
+
+@app.post(
+    "/admin/maintenance/reembed-all",
+    tags=["Admin Maintenance"],
+    status_code=202,
+)
+def admin_maintenance_reembed_all(
+    _: str = Depends(require_admin),
+) -> dict:
+    """Re-embedding complet des 4 sources publiques (très long)."""
+    job = _get_scheduler_manager().trigger_now(source="reembed_all")
+    return job
+
+
+@app.post(
+    "/admin/maintenance/optimize/{collection}",
+    tags=["Admin Maintenance"],
+    status_code=202,
+)
+def admin_maintenance_optimize(
+    collection: str,
+    _: str = Depends(require_admin),
+) -> dict:
+    """Force un optimize d'une collection Qdrant (compactage segments)."""
+    if not collection or "/" in collection or " " in collection:
+        raise HTTPException(status_code=400, detail="Nom de collection invalide.")
+    job = _get_scheduler_manager().trigger_now(
+        source="optimize_qdrant",
+        optimize_target=collection,
+    )
+    return job
+
+
+@app.post(
+    "/admin/maintenance/integrity-check",
+    tags=["Admin Maintenance"],
+    status_code=202,
+)
+def admin_maintenance_integrity_check(
+    _: str = Depends(require_admin),
+) -> dict:
+    """Lance un job de vérification d'intégrité des collections."""
+    job = _get_scheduler_manager().trigger_now(source="integrity_check")
+    return job
+
+
+@app.get(
+    "/admin/maintenance/qdrant-stats",
+    tags=["Admin Maintenance"],
+)
+def admin_maintenance_qdrant_stats(
+    _: str = Depends(require_admin),
+) -> dict:
+    """Stats live de toutes les collections Qdrant (lecture seule)."""
+    return scheduler_maintenance.get_qdrant_stats()
+
+
+# ---------------------------------------------------------------------------
+# Notifications internes (Page Admin Planificateur)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/notifications/unread", tags=["Notifications"])
+def notifications_unread(
+    user_id: str = Depends(get_current_user),
+) -> dict:
+    """Liste les notifications non-lues de l'utilisateur courant."""
+    items = scheduler_db.list_notifications(user_id, unread_only=True, limit=20)
+    count = scheduler_db.count_unread_notifications(user_id)
+    return {"unread_count": count, "items": items}
+
+
+@app.get("/notifications", tags=["Notifications"])
+def notifications_list(
+    limit: int = Query(20, ge=1, le=100),
+    user_id: str = Depends(get_current_user),
+) -> dict:
+    """Les N dernières notifications de l'utilisateur (lues + non lues)."""
+    items = scheduler_db.list_notifications(user_id, unread_only=False, limit=limit)
+    return {"items": items}
+
+
+@app.post("/notifications/{notification_id}/read", tags=["Notifications"])
+def notifications_mark_read(
+    notification_id: int,
+    user_id: str = Depends(get_current_user),
+) -> dict:
+    ok = scheduler_db.mark_notification_read(notification_id, user_id)
+    return {"ok": ok}
+
+
+@app.post("/notifications/read-all", tags=["Notifications"])
+def notifications_mark_all_read(
+    user_id: str = Depends(get_current_user),
+) -> dict:
+    n = scheduler_db.mark_all_notifications_read(user_id)
+    return {"marked": n}
+
+
+@app.delete("/notifications/{notification_id}", tags=["Notifications"])
+def notifications_delete(
+    notification_id: int,
+    user_id: str = Depends(get_current_user),
+) -> dict:
+    """Supprime définitivement une notification."""
+    ok = scheduler_db.delete_notification(notification_id, user_id)
+    return {"removed": ok}
 
 
 # ---------------------------------------------------------------------------

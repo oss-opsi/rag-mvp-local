@@ -13,7 +13,6 @@ import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -226,13 +225,25 @@ export default function UsersPage() {
 
       <div className="flex-1 overflow-auto">
         <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-4 py-5 md:p-6">
+          <div>
+            <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-accent">
+              Comptes & accès
+            </div>
+            <h1 className="mt-0.5 text-xl font-semibold tracking-tight">
+              Utilisateurs
+            </h1>
+          </div>
           {/* ── Top row : Mon mot de passe + Créer un utilisateur ── */}
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             {/* Mon mot de passe */}
-            <section className="rounded-xl border border-border bg-card p-5 shadow-sm">
+            <section className="rounded-2xl border border-soft bg-card p-5 shadow-tinted-sm">
               <div className="mb-4 flex items-center gap-2">
-                <KeyRound className="h-5 w-5 text-accent" />
-                <h2 className="text-base font-semibold">Mon mot de passe</h2>
+                <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-accent-soft text-accent">
+                  <KeyRound className="h-4 w-4" />
+                </span>
+                <h2 className="text-base font-semibold tracking-tight">
+                  Mon mot de passe
+                </h2>
               </div>
               <form onSubmit={handleChangePassword} className="space-y-3">
                 <div className="space-y-1.5">
@@ -287,23 +298,22 @@ export default function UsersPage() {
             {/* Créer un utilisateur (admin) */}
             <section
               className={cn(
-                "rounded-xl border border-border bg-card p-5 shadow-sm",
+                "rounded-2xl border border-soft bg-card p-5 shadow-tinted-sm",
                 !isAdmin && "opacity-60",
               )}
             >
               <div className="mb-4 flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
-                  <UserPlus className="h-5 w-5 text-accent" />
-                  <h2 className="text-base font-semibold">
+                  <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-violet-soft text-violet">
+                    <UserPlus className="h-4 w-4" />
+                  </span>
+                  <h2 className="text-base font-semibold tracking-tight">
                     Créer un utilisateur
                   </h2>
                 </div>
-                <Badge
-                  variant="outline"
-                  className="border-accent/30 bg-accent/10 text-accent"
-                >
+                <span className="inline-flex items-center gap-1 rounded-full border border-accent/25 bg-accent-soft px-2.5 py-0.5 text-[11px] font-medium text-accent">
                   Admin
-                </Badge>
+                </span>
               </div>
               {!isAdmin ? (
                 <p className="text-sm text-muted-foreground">
@@ -373,7 +383,7 @@ export default function UsersPage() {
                         }))
                       }
                       disabled={creating}
-                      className="flex h-9 w-full rounded-md border border-border bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+                      className="flex h-9 w-full rounded-md border border-soft bg-card px-3 py-1 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
                     >
                       <option value="user">Utilisateur</option>
                       <option value="admin">Administrateur</option>
@@ -396,15 +406,18 @@ export default function UsersPage() {
 
           {/* ── Liste des utilisateurs (admin only) ── */}
           {isAdmin ? (
-            <section className="rounded-xl border border-border bg-card shadow-sm">
-              <div className="flex items-center justify-between border-b border-border px-5 py-4">
-                <div className="flex items-center gap-2">
-                  <UsersIcon className="h-5 w-5 text-accent" />
-                  <h2 className="text-base font-semibold">
+            <section className="rounded-2xl border border-soft bg-card shadow-tinted-sm">
+              <div className="flex items-center justify-between border-b border-soft px-5 py-3">
+                <div>
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-accent">
+                    Admin
+                  </div>
+                  <h2 className="mt-0.5 flex items-center gap-2 text-base font-semibold tracking-tight">
+                    <UsersIcon className="h-4 w-4 text-accent" />
                     Tous les utilisateurs
                     {users.length > 0 ? (
-                      <span className="ml-2 text-xs font-normal text-muted-foreground tabular-nums">
-                        {users.length}
+                      <span className="text-xs font-normal text-muted-foreground tabular-nums">
+                        ({users.length})
                       </span>
                     ) : null}
                   </h2>
@@ -431,7 +444,7 @@ export default function UsersPage() {
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
-                    <thead className="bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
+                    <thead className="bg-muted/30 text-[11px] uppercase tracking-wide text-muted-foreground">
                       <tr>
                         <th className="px-5 py-2.5 text-left font-medium">
                           Utilisateur
@@ -453,16 +466,28 @@ export default function UsersPage() {
                         return (
                           <tr
                             key={u.username}
-                            className="border-t border-border hover:bg-muted/30"
+                            className="border-t border-soft transition-colors hover:bg-accent-soft/30"
                           >
                             <td className="px-5 py-3">
                               <div className="flex items-center gap-3">
-                                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-muted text-xs font-medium">
+                                <span
+                                  className={cn(
+                                    "flex h-9 w-9 items-center justify-center rounded-xl text-xs font-semibold text-white shadow-tinted-sm",
+                                    u.role === "admin"
+                                      ? "bg-gradient-to-br from-accent to-violet"
+                                      : "bg-gradient-to-br from-muted-foreground/70 to-muted-foreground",
+                                  )}
+                                >
                                   {initialsOf(u.name || u.username)}
                                 </span>
                                 <div>
-                                  <div className="font-medium text-foreground">
+                                  <div className="font-semibold text-foreground tracking-tight">
                                     {u.name || u.username}
+                                    {isSelf ? (
+                                      <span className="ml-2 rounded-full border border-soft bg-muted/40 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+                                        vous
+                                      </span>
+                                    ) : null}
                                   </div>
                                   <div className="text-xs text-muted-foreground">
                                     {u.username}
@@ -475,12 +500,14 @@ export default function UsersPage() {
                             </td>
                             <td className="px-5 py-3">
                               {u.role === "admin" ? (
-                                <Badge className="border-accent/30 bg-accent/10 text-accent hover:bg-accent/15">
-                                  <Shield className="mr-1 h-3 w-3" />
-                                  admin
-                                </Badge>
+                                <span className="inline-flex items-center gap-1 rounded-full border border-accent/25 bg-accent-soft px-2.5 py-0.5 text-[11px] font-medium text-accent">
+                                  <Shield className="h-3 w-3" />
+                                  Admin
+                                </span>
                               ) : (
-                                <Badge variant="secondary">user</Badge>
+                                <span className="inline-flex items-center gap-1 rounded-full border border-soft bg-muted/40 px-2.5 py-0.5 text-[11px] font-medium text-muted-foreground">
+                                  Utilisateur
+                                </span>
                               )}
                             </td>
                             <td className="px-5 py-3 text-right">

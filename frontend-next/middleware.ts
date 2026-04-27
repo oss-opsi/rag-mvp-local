@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const PUBLIC_PATHS = ["/login"];
+const PUBLIC_PATHS = ["/login", "/mockup"];
 const PUBLIC_API = ["/api/auth/login"];
 
 export function middleware(req: NextRequest) {

@@ -114,7 +114,7 @@ export function ContextPanelProvider({
           aria-hidden={desktopCollapsed ? true : undefined}
           className={cn(
             // Mobile : drawer à gauche, par-dessus le contenu (mais sous la barre mobile)
-            "absolute inset-y-0 left-0 z-40 flex w-[280px] max-w-[85vw] shrink-0 flex-col overflow-y-auto border-r border-border bg-background transition-transform duration-200",
+            "absolute inset-y-0 left-0 z-40 flex w-[280px] max-w-[85vw] shrink-0 flex-col overflow-y-auto border-r border-soft bg-background transition-transform duration-200",
             mobileOpen ? "translate-x-0" : "-translate-x-full",
             // Desktop : panneau dans le flux, position relative
             "md:static md:z-auto md:translate-x-0 md:transition-[width,border] md:duration-200 md:overflow-hidden",
@@ -135,7 +135,7 @@ export function ContextPanelProvider({
                   : "Rétracter le panneau latéral"
               }
               title={desktopCollapsed ? "Déplier" : "Rétracter"}
-              className="absolute left-0 top-3 z-20 hidden h-8 w-6 items-center justify-center rounded-r-md border border-l-0 border-border bg-background text-muted-foreground shadow-sm hover:bg-muted hover:text-foreground md:inline-flex"
+              className="absolute left-0 top-3 z-20 hidden h-8 w-6 items-center justify-center rounded-r-md border border-l-0 border-soft bg-card text-muted-foreground shadow-tinted-sm hover:bg-accent-soft hover:text-accent md:inline-flex"
             >
               {desktopCollapsed ? (
                 <PanelLeftOpen className="h-3.5 w-3.5" />

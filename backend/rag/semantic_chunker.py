@@ -217,7 +217,6 @@ def _breakpoints(
 
     breaks: list[int] = []
     cum_chars = 0
-    last_break = 0
     for i, d in enumerate(distances):
         cum_chars += len(sentences[i])
         if cum_chars < CHUNK_MIN_CHARS:
@@ -226,12 +225,10 @@ def _breakpoints(
             # i is the index of the LAST sentence of the current chunk;
             # the next chunk starts at i+1
             breaks.append(i + 1)
-            last_break = i + 1
             cum_chars = 0
         if cum_chars >= CHUNK_MAX_CHARS:
             # Force cut even on a flat segment
             breaks.append(i + 1)
-            last_break = i + 1
             cum_chars = 0
     return breaks
 
@@ -256,29 +253,6 @@ def _assemble_chunks(
         start = max(0, a - overlap) if chunks else a
         chunks.append(" ".join(sentences[start:b]).strip())
     return [c for c in chunks if c]
-
-
-def semantic_chunk_block(
-    block: StructuralBlock,
-    embed_fn,
-) -> list[str]:
-    """Chunk a single structural block into semantically coherent pieces."""
-    sentences = split_sentences(block.text)
-    if not sentences:
-        return []
-    if len(sentences) <= 2 or len(block.text) <= CHUNK_TARGET_CHARS // 2:
-        # Short block → keep whole
-        return [block.text.strip()]
-
-    try:
-        vecs = _window_embeddings(sentences, embed_fn, SEMANTIC_SENTENCE_WINDOW)
-        distances = _distances(vecs)
-        breaks = _breakpoints(distances, sentences, SEMANTIC_BREAK_PERCENTILE)
-    except Exception as exc:
-        logger.warning("Semantic chunking failed, falling back to size split: %s", exc)
-        return _size_split(block.text)
-
-    return _assemble_chunks(sentences, breaks, CHUNK_SENTENCE_OVERLAP)
 
 
 def _size_split(text: str) -> list[str]:

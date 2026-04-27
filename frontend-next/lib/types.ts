@@ -16,12 +16,6 @@ export type AdminUser = {
 
 export type ApiKeyInfo = { has_key: boolean; masked?: string; reason?: string };
 
-export type Health = {
-  status: string;
-  qdrant_url: string;
-  indexed_vectors: Record<string, number>;
-};
-
 export type DocumentInfo = {
   source: string;
   chunks: number;
@@ -79,6 +73,10 @@ export type QuerySource = {
   page?: number | string;
   score?: number;
   rerank_score?: number;
+  // 'private' = documents ingérés par l'utilisateur,
+  // 'kb'      = sources publiques métier (collection partagée).
+  scope?: "private" | "kb" | string | null;
+  url_canonique?: string | null;
 };
 
 export type QueryResponse = {
@@ -167,13 +165,60 @@ export type Requirement = {
   title: string;
   category: string;
   description: string;
-  criteria?: string[];
+  acceptance_criteria?: string[] | null;
   status: RequirementStatus;
   verdict: string;
   evidence: string[];
   sources: RequirementSource[];
   hyde_used?: boolean;
   repass_used?: boolean;
+  confidence?: number | null;
+  llm_confidence?: number | null;
+  retrieval_confidence?: number | null;
+  subdomain?: string | null;
+  repass_applied?: boolean;
+  repass_model?: string | null;
+  repass_reason?: string | null;
+  enrichment_used?: {
+    few_shot_count: number;
+    boosted_sources: string[];
+  } | null;
+};
+
+export type RequirementFeedback = {
+  id?: string;
+  analysis_id?: string;
+  requirement_id: string;
+  user_id?: string;
+  vote: "up" | "down";
+  comment: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type RequirementCorrectionVerdict = "covered" | "partial" | "missing";
+
+export type RequirementCorrection = {
+  id?: string;
+  analysis_id?: string;
+  requirement_id: string;
+  user_id?: string;
+  content_key?: string;
+  verdict: RequirementCorrectionVerdict;
+  answer: string;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type QualityDashboard = {
+  analysis_id: string;
+  total_votes: number;
+  up: number;
+  down: number;
+  top_contested: { requirement_id: string; down_votes: number }[];
+  feedback_per_domain: Record<string, { up: number; down: number }>;
+  coverage_corrected: number | null;
 };
 
 export type AnalysisSummary = {
@@ -225,4 +270,77 @@ export type CdcDetail = {
   pipeline_version: string;
   corpus_fingerprint?: string;
   analysis: AnalysisRow | null;
+};
+
+// ---------------------------------------------------------------------------
+// Page Admin Planificateur — types
+// ---------------------------------------------------------------------------
+
+export type SchedulerSource =
+  | "boss"
+  | "urssaf"
+  | "dsn_info"
+  | "service_public"
+  | "reembed_boss"
+  | "reembed_urssaf"
+  | "reembed_dsn_info"
+  | "reembed_service_public"
+  | "reembed_all"
+  | "optimize_qdrant"
+  | "integrity_check";
+
+export type Schedule = {
+  id: number;
+  source: SchedulerSource | string;
+  cron_expression: string;
+  enabled: boolean;
+  pause_chat_during_refresh: boolean;
+  label: string | null;
+  last_run_at: string | null;
+  next_run_at: string | null;
+  created_at: string;
+  created_by: string | null;
+};
+
+export type RefreshJobStatus =
+  | "queued"
+  | "running"
+  | "success"
+  | "error"
+  | "cancelled";
+
+export type RefreshJob = {
+  id: number;
+  schedule_id: number | null;
+  source: SchedulerSource | string;
+  trigger: "cron" | "manual";
+  status: RefreshJobStatus;
+  started_at: string | null;
+  finished_at: string | null;
+  duration_s: number | null;
+  pages_fetched: number | null;
+  chunks_indexed: number | null;
+  error_message: string | null;
+  log_excerpt: string | null;
+  stop_requested?: boolean;
+  created_at: string;
+};
+
+export type AppNotification = {
+  id: number;
+  user: string;
+  level: "info" | "warn" | "error";
+  title: string;
+  body: string | null;
+  created_at: string;
+  read_at: string | null;
+};
+
+export type QdrantCollectionStat = {
+  name: string;
+  points?: number;
+  segments?: number;
+  status?: string;
+  indexed_vectors?: number;
+  error?: string;
 };

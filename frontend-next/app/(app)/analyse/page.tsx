@@ -1,12 +1,12 @@
 "use client";
 
 import * as React from "react";
-import { Loader2, Play, Upload } from "lucide-react";
+import { ChevronLeft, Loader2, Play, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { UploadDropzone } from "@/components/upload-dropzone";
 import { ContextPanel } from "@/components/context-panel";
+import { NotificationsBell } from "@/components/notifications-bell";
 import { useToast } from "@/components/ui/use-toast";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api-client";
@@ -244,23 +244,30 @@ export default function AnalysePage() {
       const ref = { jobId, cdcId, cancelled: false };
       pollingRef.current = ref;
       const POLL_INTERVAL_MS = 3000;
+      const MAX_CONSECUTIVE_ERRORS = 5; // tolérer les coupures réseau passagères
+      let consecutiveErrors = 0;
       while (!ref.cancelled) {
         try {
           const job = await api.analysisJob(jobId);
           if (ref.cancelled) return;
+          consecutiveErrors = 0;
           if (job.status === "done" || job.status === "error") {
             await finishAnalyseFromJob(job);
             return;
           }
         } catch (err) {
-          const msg =
-            err instanceof Error ? err.message : "Erreur de polling";
-          toast({
-            title: "Erreur",
-            description: msg,
-            variant: "destructive",
-          });
-          return;
+          consecutiveErrors += 1;
+          if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+            const msg =
+              err instanceof Error ? err.message : "Erreur de polling";
+            toast({
+              title: "Suivi de l'analyse interrompu",
+              description: `${msg} (${MAX_CONSECUTIVE_ERRORS} échecs consécutifs). L'analyse continue en arrière-plan — rafraîchissez la page pour reprendre le suivi.`,
+              variant: "destructive",
+            });
+            return;
+          }
+          // Erreur transitoire : on backoff puis on réessaye au tour suivant.
         }
         await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
       }
@@ -295,13 +302,28 @@ export default function AnalysePage() {
     }
   };
 
-  // À la sélection d'un CDC, reprendre un éventuel job actif (queued/running)
-  // pour ce CDC. Permet de retrouver l'analyse en cours après un refresh ou
-  // une navigation.
+  // Le bouton "Réanalyser" doit refléter l'état RÉEL du batch côté backend,
+  // pas juste un state local. On poll les jobs queued/running pour ce CDC
+  // toutes les 5s :
+  //   - si un job actif est trouvé et qu'on n'est pas déjà en train de le
+  //     suivre, on lance pollAnalysisJob (gros poll qui rafraîchira aussi
+  //     le rapport quand le job se termine) ;
+  //   - sinon analysing repasse à false → bouton réactif.
+  //
+  // Couvre : reprise après refresh/navigation, libération automatique du
+  // bouton si le job se termine côté backend pendant que l'utilisateur est
+  // sur la page, ré-action si l'utilisateur lance une analyse depuis un
+  // autre onglet.
   React.useEffect(() => {
-    if (selectedCdcId === null) return;
+    if (selectedCdcId === null) {
+      setAnalysing(false);
+      return;
+    }
     let cancelled = false;
-    (async () => {
+    let trackingJobId: number | null = null;
+    const STATUS_POLL_MS = 5000;
+
+    const tick = async () => {
       try {
         const jobs = await api.analysisJobs({
           statusFilter: "queued,running",
@@ -310,23 +332,33 @@ export default function AnalysePage() {
         if (cancelled) return;
         if (jobs.length > 0) {
           const job = jobs[0]!;
-          setAnalysing(true);
-          toast({
-            title: "Analyse en cours",
-            description: "Reprise du suivi de l'analyse en arrière-plan.",
-          });
-          await pollAnalysisJob(job.id, selectedCdcId);
-          if (!cancelled) setAnalysing(false);
+          if (!analysing) setAnalysing(true);
+          if (trackingJobId !== job.id) {
+            trackingJobId = job.id;
+            // Lance le polling fin (3s) qui finira par rafraîchir le rapport
+            // à done/error. On ne bloque pas le tick : pollAnalysisJob tourne
+            // en parallèle.
+            void pollAnalysisJob(job.id, selectedCdcId).finally(() => {
+              trackingJobId = null;
+            });
+          }
+        } else {
+          if (analysing) setAnalysing(false);
         }
       } catch {
         // silencieux : pas bloquant
       }
-    })();
+    };
+
+    void tick();
+    const interval = window.setInterval(() => void tick(), STATUS_POLL_MS);
     return () => {
       cancelled = true;
+      window.clearInterval(interval);
       if (pollingRef.current) pollingRef.current.cancelled = true;
     };
-  }, [selectedCdcId, pollAnalysisJob, toast]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCdcId, pollAnalysisJob]);
 
   // Context panel: clients list
   const contextPanelContent = (
@@ -360,7 +392,7 @@ export default function AnalysePage() {
       <>
         {contextPanelContent}
         <div className="flex h-full flex-col">
-          <header className="flex h-14 shrink-0 items-center border-b border-border px-4 md:px-6">
+          <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-soft px-4 md:px-6">
             <div className="text-sm font-semibold">
               Analyse
               <span className="mx-1.5 text-muted-foreground">—</span>
@@ -368,6 +400,7 @@ export default function AnalysePage() {
                 Aucun client sélectionné
               </span>
             </div>
+            <NotificationsBell />
           </header>
           <div className="flex flex-1 items-center justify-center p-6 md:p-10">
             <div className="max-w-md text-center">
@@ -391,7 +424,7 @@ export default function AnalysePage() {
       <>
         {contextPanelContent}
         <div className="flex h-full flex-col">
-        <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-4 md:px-6">
+        <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-soft px-4 md:px-6">
           <div className="min-w-0 flex-1 truncate text-sm font-semibold">
             Analyse
             <span className="mx-1.5 text-muted-foreground">—</span>
@@ -400,11 +433,14 @@ export default function AnalysePage() {
                 "Client"}
             </span>
           </div>
-          <PipelineBadges
-            version={currentState?.pipelineVersion}
-            compact
-            className="hidden md:flex"
-          />
+          <div className="flex items-center gap-2">
+            <PipelineBadges
+              version={currentState?.pipelineVersion}
+              compact
+              className="hidden md:flex"
+            />
+            <NotificationsBell />
+          </div>
         </header>
 
         <div className="flex-1 overflow-auto p-4 md:p-6">
@@ -438,7 +474,7 @@ export default function AnalysePage() {
                 </h2>
                 <label
                   className={cn(
-                    "inline-flex cursor-pointer items-center gap-2 rounded-md border border-border bg-background px-3 py-1.5 text-sm hover:bg-muted",
+                    "inline-flex cursor-pointer items-center gap-2 rounded-md border border-soft bg-background px-3 py-1.5 text-sm hover:bg-muted",
                     uploading && "pointer-events-none opacity-60"
                   )}
                 >
@@ -456,32 +492,27 @@ export default function AnalysePage() {
                   />
                 </label>
               </div>
-              <ScrollArea className="rounded-md border border-border">
-                <ul>
-                  {currentCdcs.map((c) => (
-                    <li
-                      key={c.id}
-                      className="flex h-11 items-center justify-between gap-3 border-b border-border px-4 last:border-b-0"
+              <ul className="grid gap-2">
+                {currentCdcs.map((c) => (
+                  <li key={c.id}>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedCdcId(c.id)}
+                      className="group flex w-full min-w-0 items-center gap-3 rounded-2xl border border-soft bg-card px-4 py-3 text-left shadow-tinted-sm transition-all hover:-translate-y-0.5 hover:border-accent/30 hover:shadow-tinted-md"
                     >
-                      <button
-                        type="button"
-                        onClick={() => setSelectedCdcId(c.id)}
-                        className="flex min-w-0 flex-1 items-center gap-3 text-left"
-                      >
-                        <span className="truncate text-sm font-medium">
-                          {c.filename}
-                        </span>
-                        <StatusPill status={c.status} />
-                        {typeof c.coverage_percent === "number" ? (
-                          <Badge variant="secondary" className="tabular-nums">
-                            {c.coverage_percent.toFixed(0)}%
-                          </Badge>
-                        ) : null}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </ScrollArea>
+                      <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                        {c.filename}
+                      </span>
+                      <StatusPill status={c.status} />
+                      {typeof c.coverage_percent === "number" ? (
+                        <Badge variant="secondary" className="tabular-nums">
+                          {c.coverage_percent.toFixed(0)}%
+                        </Badge>
+                      ) : null}
+                    </button>
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
         </div>
@@ -520,15 +551,34 @@ export default function AnalysePage() {
       <>
         {contextPanelContent}
         <div className="flex h-full flex-col">
-          <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-4 md:px-6">
-            <div className="min-w-0 flex-1 truncate text-sm font-semibold">
-              Analyse
-              <span className="mx-1.5 text-muted-foreground">—</span>
-              <span className="font-normal text-muted-foreground">
-                {cdcDetail.cdc.filename}
-              </span>
+          <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-soft px-4 md:px-6">
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setSelectedCdcId(null);
+                  setCdcDetail(null);
+                  setReport(null);
+                }}
+                aria-label="Retour à la liste des CDCs"
+                className="h-8 shrink-0 px-2 text-muted-foreground hover:text-foreground"
+              >
+                <ChevronLeft className="h-4 w-4" />
+                <span className="ml-1 hidden md:inline">CDCs</span>
+              </Button>
+              <div className="min-w-0 truncate text-sm font-semibold">
+                Analyse
+                <span className="mx-1.5 text-muted-foreground">—</span>
+                <span className="font-normal text-muted-foreground">
+                  {cdcDetail.cdc.filename}
+                </span>
+              </div>
             </div>
-            <StatusPill status={cdcDetail.status} />
+            <div className="flex items-center gap-2">
+              <StatusPill status={cdcDetail.status} />
+              <NotificationsBell />
+            </div>
           </header>
           <div className="flex flex-1 items-center justify-center p-6 md:p-10">
             <div className="max-w-md text-center">
@@ -561,12 +611,23 @@ export default function AnalysePage() {
       {contextPanelContent}
       <CdcReport
         cdcId={selectedCdcId}
+        analysisId={report.analysis_id ?? cdcDetail.analysis?.id ?? null}
         filename={report.filename}
         summary={report.summary}
         requirements={report.requirements}
         pipelineVersion={report.pipeline_version || currentState?.pipelineVersion}
+        onBack={() => {
+          setSelectedCdcId(null);
+          setCdcDetail(null);
+          setReport(null);
+        }}
         onReanalyse={() => handleAnalyse(true)}
         onDelete={handleDeleteCdc}
+        onRefresh={async () => {
+          if (selectedCdcId !== null) {
+            await reloadCdcDetail(selectedCdcId);
+          }
+        }}
         reanalysing={analysing}
       />
     </>
@@ -637,16 +698,42 @@ function buildReportFromDetail(detail: CdcDetail): Report | null {
 
 function StatusPill({ status }: { status: string }) {
   const map: Record<string, { label: string; cls: string }> = {
-    pending: { label: "En attente", cls: "bg-muted text-muted-foreground" },
-    uploaded: { label: "Importé", cls: "bg-muted text-muted-foreground" },
-    parsing: { label: "Parsing", cls: "bg-warning/10 text-warning" },
-    analysing: { label: "Analyse", cls: "bg-warning/10 text-warning" },
-    analyzed: { label: "Analysé", cls: "bg-success/10 text-success" },
-    error: { label: "Erreur", cls: "bg-danger/10 text-danger" },
+    pending: {
+      label: "En attente",
+      cls: "border-soft bg-muted/40 text-muted-foreground",
+    },
+    uploaded: {
+      label: "Importé",
+      cls: "border-soft bg-muted/40 text-muted-foreground",
+    },
+    parsing: {
+      label: "Parsing",
+      cls: "border-warning/25 bg-warning-soft text-warning",
+    },
+    analysing: {
+      label: "Analyse",
+      cls: "border-warning/25 bg-warning-soft text-warning",
+    },
+    analyzed: {
+      label: "Analysé",
+      cls: "border-success/25 bg-success-soft text-success",
+    },
+    error: {
+      label: "Erreur",
+      cls: "border-danger/25 bg-danger-soft text-danger",
+    },
   };
-  const m = map[status] || { label: status, cls: "bg-muted text-muted-foreground" };
+  const m = map[status] || {
+    label: status,
+    cls: "border-soft bg-muted/40 text-muted-foreground",
+  };
   return (
-    <span className={cn("rounded px-2 py-0.5 text-xs font-medium", m.cls)}>
+    <span
+      className={cn(
+        "inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-medium",
+        m.cls,
+      )}
+    >
       {m.label}
     </span>
   );

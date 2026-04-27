@@ -1,7 +1,18 @@
 "use client";
 
 import * as React from "react";
-import { Plus, Trash2, Pencil, Loader2 } from "lucide-react";
+import {
+  Plus,
+  Trash2,
+  Pencil,
+  Loader2,
+  MessageCircle,
+  Calculator,
+  Calendar,
+  BookOpen,
+  Users,
+  ArrowRight,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -26,6 +37,8 @@ import {
 import { MessageBubble } from "@/components/chat/message-bubble";
 import { Composer } from "@/components/chat/composer";
 import { ContextPanel } from "@/components/context-panel";
+import { MaintenanceBanner } from "@/components/maintenance-banner";
+import { NotificationsBell } from "@/components/notifications-bell";
 import { useToast } from "@/components/ui/use-toast";
 import { api } from "@/lib/api-client";
 import { cn, formatDateTime } from "@/lib/utils";
@@ -35,6 +48,78 @@ import type {
   ConversationDetail,
   QuerySource,
 } from "@/lib/types";
+
+const SUGGESTIONS: {
+  icon: typeof Calculator;
+  title: string;
+  sub: string;
+  prompt: string;
+}[] = [
+  {
+    icon: Calculator,
+    title: "Calculer la prime d'ancienneté",
+    sub: "CCN66 — barème par tranches",
+    prompt:
+      "Comment calculer la prime d'ancienneté en CCN66 et quel est le barème par tranches ?",
+  },
+  {
+    icon: Calendar,
+    title: "Durée du congé maternité",
+    sub: "Cas standard et prolongations",
+    prompt:
+      "Quelle est la durée du congé maternité dans le cas standard et quelles sont les prolongations possibles ?",
+  },
+  {
+    icon: BookOpen,
+    title: "DSN événementielle vs mensuelle",
+    sub: "Différences et délais légaux",
+    prompt:
+      "Quelle est la différence entre DSN événementielle et DSN mensuelle, et quels sont les délais légaux ?",
+  },
+  {
+    icon: Users,
+    title: "Bulletin cadre forfait jours",
+    sub: "Mentions obligatoires et exceptions",
+    prompt:
+      "Quelles sont les mentions obligatoires sur le bulletin de paie d'un cadre au forfait jours ?",
+  },
+];
+
+function EmptyState({ onPick }: { onPick: (prompt: string) => void }) {
+  return (
+    <div className="px-4 py-8 text-center md:py-12">
+      <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-accent to-violet text-white shadow-tinted-md">
+        <MessageCircle className="h-8 w-8" />
+      </div>
+      <h2 className="text-2xl font-semibold tracking-tight">
+        Que voulez-vous savoir aujourd'hui&nbsp;?
+      </h2>
+      <p className="mx-auto mt-2 max-w-xl text-sm text-muted-foreground">
+        Posez votre question en langage naturel — Tell me cherche dans vos
+        documents indexés et les sources publiques activées.
+      </p>
+      <div className="mx-auto mt-8 grid max-w-3xl gap-3 text-left sm:grid-cols-2">
+        {SUGGESTIONS.map((s) => (
+          <button
+            key={s.title}
+            type="button"
+            onClick={() => onPick(s.prompt)}
+            className="group flex items-start gap-3 rounded-2xl border border-soft bg-card p-4 text-left transition-all hover:-translate-y-0.5 hover:border-accent/30 hover:shadow-tinted-md"
+          >
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent">
+              <s.icon className="h-4 w-4" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-[13px] font-medium">{s.title}</div>
+              <div className="text-xs text-muted-foreground">{s.sub}</div>
+            </div>
+            <ArrowRight className="h-4 w-4 shrink-0 text-muted-foreground transition-all group-hover:translate-x-0.5 group-hover:text-accent" />
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export default function ChatPage() {
   const { toast } = useToast();
@@ -47,6 +132,27 @@ export default function ChatPage() {
   const [streamSources, setStreamSources] = React.useState<QuerySource[]>([]);
   const [loadingList, setLoadingList] = React.useState(true);
   const [loadingDetail, setLoadingDetail] = React.useState(false);
+  const [deepSearch, setDeepSearch] = React.useState<boolean>(false);
+  const [deepSearchActive, setDeepSearchActive] = React.useState(false);
+
+  // Hydrate deepSearch from localStorage once at mount.
+  React.useEffect(() => {
+    try {
+      const v = window.localStorage.getItem("tellme.deepSearch");
+      if (v === "true") setDeepSearch(true);
+    } catch {
+      // ignore (SSR / privacy mode)
+    }
+  }, []);
+
+  const handleDeepSearchChange = React.useCallback((v: boolean) => {
+    setDeepSearch(v);
+    try {
+      window.localStorage.setItem("tellme.deepSearch", v ? "true" : "false");
+    } catch {
+      // ignore
+    }
+  }, []);
   const abortRef = React.useRef<AbortController | null>(null);
   const scrollRef = React.useRef<HTMLDivElement | null>(null);
 
@@ -181,6 +287,7 @@ export default function ChatPage() {
     setStreaming(true);
     setStreamText("");
     setStreamSources([]);
+    setDeepSearchActive(deepSearch);
 
     // Fire and forget: persist user message
     if (convId !== null) {
@@ -196,7 +303,7 @@ export default function ChatPage() {
     let sources: QuerySource[] = [];
 
     try {
-      const res = await api.queryStream(question, 10, true, controller.signal);
+      const res = await api.queryStream(question, 10, deepSearch, controller.signal, convId);
       if (!res.body) throw new Error("Pas de flux disponible");
 
       const reader = res.body.getReader();
@@ -291,6 +398,7 @@ export default function ChatPage() {
       setStreaming(false);
       setStreamText("");
       setStreamSources([]);
+      setDeepSearchActive(false);
       abortRef.current = null;
     }
   };
@@ -299,10 +407,18 @@ export default function ChatPage() {
 
   return (
     <div className="flex h-full flex-col">
+      <MaintenanceBanner />
       <ContextPanel>
         <div className="flex h-full flex-col">
-          <div className="flex items-center justify-between border-b border-border px-4 py-3">
-            <h2 className="text-sm font-semibold">Conversations</h2>
+          <div className="flex items-center justify-between border-b border-soft px-4 py-3">
+            <div>
+              <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+                Historique
+              </div>
+              <h2 className="mt-0.5 text-sm font-semibold tracking-tight">
+                Conversations
+              </h2>
+            </div>
             <Button
               size="icon"
               variant="ghost"
@@ -320,7 +436,7 @@ export default function ChatPage() {
                 Aucune conversation.
               </div>
             ) : (
-              <ul className="py-1">
+              <ul className="flex flex-col gap-1 p-2">
                 {conversations.map((c) => {
                   const active = c.id === selectedId;
                   return (
@@ -329,16 +445,25 @@ export default function ChatPage() {
                         type="button"
                         onClick={() => setSelectedId(c.id)}
                         className={cn(
-                          "flex w-full flex-col gap-0.5 border-l-2 px-3 py-2 text-left text-sm transition-colors",
+                          "group relative flex w-full flex-col gap-0.5 rounded-xl px-3 py-2 text-left text-sm transition-all",
                           active
-                            ? "border-l-accent bg-muted"
-                            : "border-l-transparent hover:bg-muted/50"
+                            ? "bg-accent-soft text-accent shadow-tinted-sm"
+                            : "text-muted-foreground hover:bg-card hover:text-foreground hover:shadow-tinted-sm",
                         )}
                       >
+                        {active ? (
+                          <span
+                            className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-accent"
+                            aria-hidden
+                          />
+                        ) : null}
                         <span className="truncate font-medium">
                           {c.title || "Sans titre"}
                         </span>
-                        <span className="text-[10px] text-muted-foreground">
+                        <span className={cn(
+                          "text-[10px]",
+                          active ? "text-accent/70" : "text-muted-foreground",
+                        )}>
                           {formatDateTime(c.updated_at)} · {c.message_count} msg
                         </span>
                       </button>
@@ -350,7 +475,7 @@ export default function ChatPage() {
           </ScrollArea>
         </div>
       </ContextPanel>
-      <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-4 md:px-6">
+      <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-soft px-4 md:px-6">
         <div className="min-w-0 flex-1 truncate text-sm font-semibold">
           Chat
           <span className="mx-1.5 text-muted-foreground">—</span>
@@ -359,47 +484,50 @@ export default function ChatPage() {
               (selectedId ? "Conversation" : "Nouvelle conversation")}
           </span>
         </div>
-        {selectedId !== null ? (
-          <div className="flex items-center gap-2">
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label="Renommer"
-              onClick={() => {
-                setRenameValue(detail?.title || "");
-                setRenameOpen(true);
-              }}
-            >
-              <Pencil className="h-4 w-4" />
-            </Button>
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
-                <Button variant="ghost" size="icon" aria-label="Supprimer">
-                  <Trash2 className="h-4 w-4" />
-                </Button>
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Supprimer la conversation ?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    Cette action est irréversible.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>Annuler</AlertDialogCancel>
-                  <AlertDialogAction
-                    onClick={() =>
-                      selectedId !== null && void handleDelete(selectedId)
-                    }
-                    className="bg-danger text-danger-foreground hover:bg-danger/90"
-                  >
-                    Supprimer
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
-          </div>
-        ) : null}
+        <div className="flex items-center gap-2">
+          {selectedId !== null ? (
+            <>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Renommer"
+                onClick={() => {
+                  setRenameValue(detail?.title || "");
+                  setRenameOpen(true);
+                }}
+              >
+                <Pencil className="h-4 w-4" />
+              </Button>
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button variant="ghost" size="icon" aria-label="Supprimer">
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Supprimer la conversation ?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      Cette action est irréversible.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Annuler</AlertDialogCancel>
+                    <AlertDialogAction
+                      onClick={() =>
+                        selectedId !== null && void handleDelete(selectedId)
+                      }
+                      className="bg-danger text-danger-foreground hover:bg-danger/90"
+                    >
+                      Supprimer
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </>
+          ) : null}
+          <NotificationsBell />
+        </div>
       </header>
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto overflow-x-hidden">
@@ -410,9 +538,7 @@ export default function ChatPage() {
               Chargement...
             </div>
           ) : messagesToRender.length === 0 && !streaming ? (
-            <div className="py-12 text-center text-sm text-muted-foreground">
-              Posez votre première question pour démarrer.
-            </div>
+            <EmptyState onPick={(p) => setInput(p)} />
           ) : (
             messagesToRender.map((m, i) => (
               <MessageBubble key={i} message={m} />
@@ -420,14 +546,22 @@ export default function ChatPage() {
           )}
 
           {streaming ? (
-            <MessageBubble
-              message={{
-                role: "assistant",
-                content: streamText,
-                sources: streamSources,
-              }}
-              streaming
-            />
+            <>
+              {deepSearchActive && !streamText ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Recherche approfondie en cours…
+                </div>
+              ) : null}
+              <MessageBubble
+                message={{
+                  role: "assistant",
+                  content: streamText,
+                  sources: streamSources,
+                }}
+                streaming
+              />
+            </>
           ) : null}
         </div>
       </div>
@@ -439,6 +573,8 @@ export default function ChatPage() {
         onStop={handleStop}
         streaming={streaming}
         disabled={streaming}
+        deepSearch={deepSearch}
+        onDeepSearchChange={handleDeepSearchChange}
       />
 
       <Dialog open={renameOpen} onOpenChange={setRenameOpen}>

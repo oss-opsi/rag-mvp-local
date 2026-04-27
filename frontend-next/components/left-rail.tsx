@@ -4,6 +4,8 @@ import * as React from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
+  BookMarked,
+  CalendarClock,
   LayoutGrid,
   MessageCircle,
   FileSearch,
@@ -36,17 +38,23 @@ type NavItem = {
   icon: React.ComponentType<{ className?: string }>;
 };
 
-// Tell me v4.3 — ordre validé : Indexation → Chat → Analyse → RAGAS
+// Tell me v4.5 — accueil = Chat. Indexation et RAGAS sont en admin.
 const PRIMARY_NAV: NavItem[] = [
-  { href: "/documents", label: "Indexation", icon: LayoutGrid },
   { href: "/chat", label: "Chat", icon: MessageCircle },
   { href: "/analyse", label: "Analyse d'écarts", icon: FileSearch },
-  { href: "/ragas", label: "RAGAS", icon: LineChart },
 ];
 
 const SECONDARY_NAV: NavItem[] = [
   { href: "/users", label: "Utilisateurs", icon: Users },
   { href: "/settings", label: "Paramètres", icon: Settings },
+];
+
+// Admin-only — injecté conditionnellement dans la nav secondaire.
+const ADMIN_NAV: NavItem[] = [
+  { href: "/documents", label: "Indexation", icon: LayoutGrid },
+  { href: "/referentiels", label: "Référentiels", icon: BookMarked },
+  { href: "/ragas", label: "RAGAS", icon: LineChart },
+  { href: "/scheduler", label: "Planificateur", icon: CalendarClock },
 ];
 
 /**
@@ -56,8 +64,17 @@ const SECONDARY_NAV: NavItem[] = [
  */
 export function LeftRail() {
   return (
-    <aside className="hidden h-full w-[80px] shrink-0 flex-col items-center border-r border-border bg-background md:flex">
-      <LeftRailContent />
+    <aside
+      className="relative hidden h-full w-[80px] shrink-0 flex-col items-center border-r border-soft bg-gradient-to-b from-accent-soft/60 via-surface-2 to-surface-2 md:flex"
+    >
+      {/* Halo très doux en haut, façon hero du mockup */}
+      <div
+        className="pointer-events-none absolute inset-x-0 top-0 h-40 bg-[radial-gradient(ellipse_at_top,_hsl(var(--accent)/0.12),_transparent_70%)]"
+        aria-hidden
+      />
+      <div className="relative z-10 flex h-full w-full flex-col items-center">
+        <LeftRailContent />
+      </div>
     </aside>
   );
 }
@@ -70,6 +87,8 @@ export function LeftRailContent({
   const pathname = usePathname();
   const router = useRouter();
   const { user } = useAppShell();
+  const isAdmin = user?.role === "admin";
+  const secondaryNav = isAdmin ? [...ADMIN_NAV, ...SECONDARY_NAV] : SECONDARY_NAV;
 
   const handleLogout = async () => {
     try {
@@ -89,9 +108,9 @@ export function LeftRailContent({
     <TooltipProvider delayDuration={200}>
       <div className="flex h-full w-full flex-col items-center">
         {/* Logo Ω */}
-        <div className="flex h-16 w-full items-center justify-center border-b border-border">
+        <div className="flex h-16 w-full items-center justify-center border-b border-soft">
           <Link
-            href="/documents"
+            href="/chat"
             onClick={onNavigate}
             aria-label="Tell me — Accueil"
             className="rounded-xl outline-none ring-offset-background transition-transform hover:scale-105 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
@@ -113,10 +132,10 @@ export function LeftRailContent({
                     aria-label={item.label}
                     onClick={onNavigate}
                     className={cn(
-                      "relative flex h-11 w-11 items-center justify-center rounded-lg text-muted-foreground transition-colors",
+                      "relative flex h-11 w-11 items-center justify-center rounded-xl text-muted-foreground transition-all",
                       active
-                        ? "bg-accent/10 text-accent"
-                        : "hover:bg-muted hover:text-foreground"
+                        ? "bg-accent-soft text-accent shadow-tinted-sm"
+                        : "hover:bg-card/80 hover:text-foreground hover:shadow-tinted-sm",
                     )}
                   >
                     {active ? (
@@ -131,10 +150,10 @@ export function LeftRailContent({
           })}
 
           {/* Séparateur */}
-          <div className="my-2 h-px w-8 bg-border" aria-hidden />
+          <div className="my-2 h-px w-8 bg-[hsl(var(--border-soft))]" aria-hidden />
 
           {/* Navigation secondaire */}
-          {SECONDARY_NAV.map((item) => {
+          {secondaryNav.map((item) => {
             const Icon = item.icon;
             const active = isActive(item.href);
             return (
@@ -145,10 +164,10 @@ export function LeftRailContent({
                     aria-label={item.label}
                     onClick={onNavigate}
                     className={cn(
-                      "relative flex h-11 w-11 items-center justify-center rounded-lg text-muted-foreground transition-colors",
+                      "relative flex h-11 w-11 items-center justify-center rounded-xl text-muted-foreground transition-all",
                       active
-                        ? "bg-accent/10 text-accent"
-                        : "hover:bg-muted hover:text-foreground"
+                        ? "bg-accent-soft text-accent shadow-tinted-sm"
+                        : "hover:bg-card/80 hover:text-foreground hover:shadow-tinted-sm",
                     )}
                   >
                     {active ? (

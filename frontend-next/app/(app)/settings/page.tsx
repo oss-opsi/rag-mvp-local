@@ -23,6 +23,8 @@ import { ContextPanel } from "@/components/context-panel";
 import { useAppShell } from "@/components/app-shell-context";
 import { useToast } from "@/components/ui/use-toast";
 import { LlmModelsCard } from "@/components/llm-models-card";
+import { NotificationsBell } from "@/components/notifications-bell";
+import { PublicSourcesCard } from "@/components/public-sources-card";
 import { api } from "@/lib/api-client";
 import type { ApiKeyInfo } from "@/lib/types";
 
@@ -97,40 +99,53 @@ export default function SettingsPage() {
     <div className="flex h-full flex-col">
       <ContextPanel>
         <div className="flex h-full flex-col">
-          <div className="border-b border-border px-4 py-3">
-            <h2 className="text-sm font-semibold">Paramètres</h2>
+          <div className="border-b border-soft px-4 py-3">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+              Sections
+            </div>
+            <h2 className="mt-0.5 text-sm font-semibold tracking-tight">
+              Paramètres
+            </h2>
           </div>
-          <nav className="flex flex-col py-2 text-sm">
+          <nav className="flex flex-col gap-1 p-3 text-sm">
             <a
               href="#compte"
-              className="px-4 py-2 text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+              className="rounded-xl px-3 py-2 text-muted-foreground transition-colors hover:bg-accent-soft/50 hover:text-accent"
             >
               Compte
             </a>
             <a
               href="#api-key"
-              className="px-4 py-2 text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+              className="rounded-xl px-3 py-2 text-muted-foreground transition-colors hover:bg-accent-soft/50 hover:text-accent"
             >
               Clé API OpenAI
             </a>
             <a
               href="#pipeline"
-              className="px-4 py-2 text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+              className="rounded-xl px-3 py-2 text-muted-foreground transition-colors hover:bg-accent-soft/50 hover:text-accent"
             >
               Pipeline
             </a>
             {isAdmin ? (
-              <a
-                href="#llm-models"
-                className="px-4 py-2 text-muted-foreground hover:bg-muted/50 hover:text-foreground"
-              >
-                Modèles LLM
-              </a>
+              <>
+                <a
+                  href="#llm-models"
+                  className="rounded-xl px-3 py-2 text-muted-foreground transition-colors hover:bg-accent-soft/50 hover:text-accent"
+                >
+                  Modèles LLM
+                </a>
+                <a
+                  href="#sources-publiques"
+                  className="rounded-xl px-3 py-2 text-muted-foreground transition-colors hover:bg-accent-soft/50 hover:text-accent"
+                >
+                  Sources publiques
+                </a>
+              </>
             ) : null}
           </nav>
         </div>
       </ContextPanel>
-      <header className="flex h-14 shrink-0 items-center border-b border-border px-4 md:px-6">
+      <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-soft px-4 md:px-6">
         <div className="text-sm font-semibold">
           Paramètres
           {user?.name ? (
@@ -142,15 +157,25 @@ export default function SettingsPage() {
             </>
           ) : null}
         </div>
+        <NotificationsBell />
       </header>
 
       <div className="flex-1 overflow-auto">
         <div className="mx-auto flex max-w-2xl flex-col gap-6 px-4 py-5 md:p-6">
+          <div>
+            <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-accent">
+              Configuration
+            </div>
+            <h1 className="mt-0.5 text-xl font-semibold tracking-tight">
+              Paramètres
+            </h1>
+          </div>
+
           <section
             id="compte"
-            className="rounded-lg border border-border bg-background p-5"
+            className="rounded-2xl border border-soft bg-card p-5 shadow-tinted-sm"
           >
-            <h2 className="mb-3 text-lg font-semibold">Compte</h2>
+            <h2 className="mb-3 text-lg font-semibold tracking-tight">Compte</h2>
             <div className="mb-4 grid grid-cols-[120px_1fr] gap-2 text-sm">
               <div className="text-muted-foreground">Nom</div>
               <div className="font-medium">{user?.name || "—"}</div>
@@ -166,9 +191,11 @@ export default function SettingsPage() {
 
           <section
             id="api-key"
-            className="rounded-lg border border-border bg-background p-5"
+            className="rounded-2xl border border-soft bg-card p-5 shadow-tinted-sm"
           >
-            <h2 className="mb-3 text-lg font-semibold">Clé API OpenAI</h2>
+            <h2 className="mb-3 text-lg font-semibold tracking-tight">
+              Clé API OpenAI
+            </h2>
             <p className="mb-4 text-sm text-muted-foreground">
               Cette clé est utilisée pour les appels OpenAI (génération et
               ré-analyse). Elle est chiffrée côté serveur.
@@ -180,7 +207,7 @@ export default function SettingsPage() {
               </div>
             ) : keyInfo?.has_key && !editing ? (
               <div className="flex flex-wrap items-center gap-3">
-                <code className="rounded bg-muted px-2 py-1 font-mono text-xs">
+                <code className="rounded-md border border-soft bg-muted/40 px-2 py-1 font-mono text-xs">
                   {keyInfo.masked || "••••••••"}
                 </code>
                 <Button
@@ -254,29 +281,61 @@ export default function SettingsPage() {
 
           <section
             id="pipeline"
-            className="rounded-lg border border-border bg-background p-5"
+            className="rounded-2xl border border-soft bg-card p-5 shadow-tinted-sm"
           >
-            <h2 className="mb-3 text-lg font-semibold">Pipeline</h2>
+            <h2 className="mb-3 text-lg font-semibold tracking-tight">
+              Pipeline
+            </h2>
             <p className="mb-3 text-sm text-muted-foreground">
-              Le pipeline d'analyse combine HyDE, un re-pass sur les exigences
-              ambiguës, le modèle d'embedding bge-m3, le reranker v2-m3, et un
-              chunker sémantique version 2. Les modèles LLM utilisés sont
-              configurables par un administrateur.
+              Le pipeline d&apos;analyse combine HyDE, un re-pass sur les
+              exigences ambiguës, le modèle d&apos;embedding bge-m3, le reranker
+              v2-m3, et un chunker sémantique version 2. Les modèles LLM
+              utilisés sont configurables par un administrateur.
             </p>
             <PipelineBadges />
           </section>
 
           {isAdmin ? (
-            <section
-              id="llm-models"
-              className="rounded-lg border border-border bg-background p-5"
-            >
-              <h2 className="mb-1 text-lg font-semibold">Modèles LLM</h2>
-              <p className="mb-4 text-xs text-muted-foreground">
-                Réservé aux administrateurs.
-              </p>
-              <LlmModelsCard />
-            </section>
+            <>
+              <section
+                id="llm-models"
+                className="rounded-2xl border border-soft bg-card p-5 shadow-tinted-sm"
+              >
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <h2 className="text-lg font-semibold tracking-tight">
+                    Modèles LLM
+                  </h2>
+                  <span className="inline-flex items-center gap-1 rounded-full border border-accent/25 bg-accent-soft px-2.5 py-0.5 text-[11px] font-medium text-accent">
+                    Admin
+                  </span>
+                </div>
+                <p className="mb-4 text-xs text-muted-foreground">
+                  Choix des modèles utilisés par le chat, l&apos;analyse et le
+                  re-pass.
+                </p>
+                <LlmModelsCard />
+              </section>
+
+              <section
+                id="sources-publiques"
+                className="rounded-2xl border border-soft bg-card p-5 shadow-tinted-sm"
+              >
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <h2 className="text-lg font-semibold tracking-tight">
+                    Sources publiques
+                  </h2>
+                  <span className="inline-flex items-center gap-1 rounded-full border border-accent/25 bg-accent-soft px-2.5 py-0.5 text-[11px] font-medium text-accent">
+                    Admin
+                  </span>
+                </div>
+                <p className="mb-4 text-xs text-muted-foreground">
+                  Connecteurs vers les bases publiques (BOSS, DSN-info, URSSAF,
+                  service-public.fr). Le bouton Rafraîchir supprime les vecteurs
+                  existants de la source puis ré-indexe les fiches à jour.
+                </p>
+                <PublicSourcesCard />
+              </section>
+            </>
           ) : null}
         </div>
       </div>

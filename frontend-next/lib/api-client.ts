@@ -1,6 +1,7 @@
 import type {
   AdminUser,
   AnalysisJob,
+  AppNotification,
   ApiKeyInfo,
   Client,
   ClientCdcsResponse,
@@ -9,7 +10,14 @@ import type {
   Conversation,
   ConversationDetail,
   IngestionJob,
+  QdrantCollectionStat,
+  QualityDashboard,
   QueryResponse,
+  RefreshJob,
+  RequirementCorrection,
+  RequirementCorrectionVerdict,
+  RequirementFeedback,
+  Schedule,
   UploadResponse,
   User,
 } from "./types";
@@ -29,11 +37,6 @@ export type RagasPerQuestion = {
   answer_relevancy: number;
   context_precision: number;
   context_recall: number;
-};
-
-export type RagasResult = {
-  per_question: RagasPerQuestion[];
-  aggregate: RagasMetrics;
 };
 
 export type LlmSettings = {
@@ -147,12 +150,19 @@ export const api = {
   async query(
     question: string,
     k = 10,
-    rerank = true
+    rerank = false,
+    conversationId?: string | number | null
   ): Promise<QueryResponse> {
     const res = await fetch("/api/query", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question, openai_api_key: "", k, rerank }),
+      body: JSON.stringify({
+        question,
+        openai_api_key: "",
+        k,
+        rerank,
+        conversation_id: conversationId != null ? String(conversationId) : null,
+      }),
     });
     return handle<QueryResponse>(res);
   },
@@ -163,13 +173,20 @@ export const api = {
   async queryStream(
     question: string,
     k = 6,
-    rerank = true,
-    signal?: AbortSignal
+    rerank = false,
+    signal?: AbortSignal,
+    conversationId?: string | number | null
   ): Promise<Response> {
     const res = await fetch("/api/query/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question, openai_api_key: "", k, rerank }),
+      body: JSON.stringify({
+        question,
+        openai_api_key: "",
+        k,
+        rerank,
+        conversation_id: conversationId != null ? String(conversationId) : null,
+      }),
       signal,
     });
     if (!res.ok) {
@@ -334,6 +351,175 @@ export const api = {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   },
 
+  async getAnalysisFeedback(
+    analysisId: number | string,
+  ): Promise<RequirementFeedback[]> {
+    const res = await fetch(
+      `/api/workspace/analyses/${encodeURIComponent(String(analysisId))}/feedback`,
+    );
+    const data = await handle<{ analysis_id: string; feedback: RequirementFeedback[] }>(
+      res,
+    );
+    return data.feedback || [];
+  },
+
+  async submitFeedback(
+    analysisId: number | string,
+    requirementId: string,
+    vote: "up" | "down",
+    comment?: string | null,
+  ): Promise<RequirementFeedback> {
+    const res = await fetch(
+      `/api/workspace/analyses/${encodeURIComponent(
+        String(analysisId),
+      )}/requirements/${encodeURIComponent(requirementId)}/feedback`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ vote, comment: comment ?? null }),
+      },
+    );
+    return handle<RequirementFeedback>(res);
+  },
+
+  async deleteFeedback(
+    analysisId: number | string,
+    requirementId: string,
+  ): Promise<void> {
+    const res = await fetch(
+      `/api/workspace/analyses/${encodeURIComponent(
+        String(analysisId),
+      )}/requirements/${encodeURIComponent(requirementId)}/feedback`,
+      { method: "DELETE" },
+    );
+    await handle(res);
+  },
+
+  async getAnalysisCorrections(
+    analysisId: number | string,
+  ): Promise<RequirementCorrection[]> {
+    const res = await fetch(
+      `/api/workspace/analyses/${encodeURIComponent(
+        String(analysisId),
+      )}/corrections`,
+    );
+    const data = await handle<{
+      analysis_id: string;
+      corrections: RequirementCorrection[];
+    }>(res);
+    return data.corrections || [];
+  },
+
+  async submitCorrection(
+    analysisId: number | string,
+    requirementId: string,
+    payload: {
+      verdict: RequirementCorrectionVerdict;
+      answer: string;
+      notes?: string | null;
+      category?: string | null;
+      subdomain?: string | null;
+      title?: string | null;
+    },
+  ): Promise<RequirementCorrection> {
+    const res = await fetch(
+      `/api/workspace/analyses/${encodeURIComponent(
+        String(analysisId),
+      )}/requirements/${encodeURIComponent(requirementId)}/correction`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          verdict: payload.verdict,
+          answer: payload.answer,
+          notes: payload.notes ?? null,
+          category: payload.category ?? null,
+          subdomain: payload.subdomain ?? null,
+          title: payload.title ?? null,
+        }),
+      },
+    );
+    return handle<RequirementCorrection>(res);
+  },
+
+  async deleteCorrection(
+    analysisId: number | string,
+    requirementId: string,
+  ): Promise<void> {
+    const res = await fetch(
+      `/api/workspace/analyses/${encodeURIComponent(
+        String(analysisId),
+      )}/requirements/${encodeURIComponent(requirementId)}/correction`,
+      { method: "DELETE" },
+    );
+    await handle(res);
+  },
+
+  async getQualityDashboard(
+    analysisId: number | string,
+  ): Promise<QualityDashboard> {
+    const res = await fetch(
+      `/api/workspace/analyses/${encodeURIComponent(
+        String(analysisId),
+      )}/quality-dashboard`,
+    );
+    return handle<QualityDashboard>(res);
+  },
+
+  async repassAnalysis(
+    analysisId: number | string,
+    options?: { requirementIds?: string[]; force?: boolean },
+  ): Promise<AnalysisJob> {
+    const body: Record<string, unknown> = {};
+    if (options?.requirementIds && options.requirementIds.length > 0) {
+      body.requirement_ids = options.requirementIds;
+    }
+    if (options?.force) body.force = true;
+    const res = await fetch(
+      `/api/workspace/analyses/${encodeURIComponent(
+        String(analysisId),
+      )}/repass`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    );
+    return handle<AnalysisJob>(res);
+  },
+
+  /**
+   * Déclenche le téléchargement du CSV feedback (UTF-8 BOM, séparateur ';').
+   */
+  async exportFeedbackCsv(analysisId: number | string): Promise<void> {
+    const url = `/api/workspace/analyses/${encodeURIComponent(
+      String(analysisId),
+    )}/feedback/export`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      let detail = `Erreur ${res.status}`;
+      try {
+        const j = (await res.json()) as { detail?: string };
+        if (j.detail) detail = j.detail;
+      } catch {
+        // ignore
+      }
+      throw new Error(detail);
+    }
+    const blob = await res.blob();
+    const disposition = res.headers.get("content-disposition") || "";
+    const match = disposition.match(/filename="([^"]+)"/);
+    const filename = match ? match[1] : `feedback_${analysisId}.csv`;
+    const objUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = objUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(objUrl), 1000);
+  },
+
   async analysisJob(id: number): Promise<AnalysisJob> {
     const res = await fetch(`/api/analysis-jobs/${id}`);
     return handle<AnalysisJob>(res);
@@ -458,5 +644,181 @@ export const api = {
     return handle<{ per_question: RagasPerQuestion[]; aggregate: RagasMetrics }>(
       res,
     );
+  },
+
+  // -------------------------------------------------------------------
+  // Page Admin Planificateur
+  // -------------------------------------------------------------------
+
+  async listSchedules(): Promise<Schedule[]> {
+    const res = await fetch("/api/admin/schedules");
+    const data = await handle<{ schedules: Schedule[] }>(res);
+    return data.schedules || [];
+  },
+
+  async createSchedule(input: {
+    source: string;
+    cron_expression: string;
+    label?: string | null;
+    pause_chat_during_refresh?: boolean;
+    enabled?: boolean;
+  }): Promise<Schedule> {
+    const res = await fetch("/api/admin/schedules", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        source: input.source,
+        cron_expression: input.cron_expression,
+        label: input.label ?? null,
+        pause_chat_during_refresh: !!input.pause_chat_during_refresh,
+        enabled: input.enabled !== false,
+      }),
+    });
+    return handle<Schedule>(res);
+  },
+
+  async updateSchedule(
+    id: number,
+    input: {
+      cron_expression?: string;
+      label?: string | null;
+      pause_chat_during_refresh?: boolean;
+      enabled?: boolean;
+    },
+  ): Promise<Schedule> {
+    const res = await fetch(`/api/admin/schedules/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    return handle<Schedule>(res);
+  },
+
+  async deleteSchedule(id: number): Promise<unknown> {
+    const res = await fetch(`/api/admin/schedules/${id}`, { method: "DELETE" });
+    return handle(res);
+  },
+
+  async runScheduleNow(id: number): Promise<RefreshJob> {
+    const res = await fetch(`/api/admin/schedules/${id}/run-now`, {
+      method: "POST",
+    });
+    return handle<RefreshJob>(res);
+  },
+
+  async runSourceNow(source: string): Promise<RefreshJob> {
+    const res = await fetch(
+      `/api/admin/sources/${encodeURIComponent(source)}/run-now`,
+      { method: "POST" },
+    );
+    return handle<RefreshJob>(res);
+  },
+
+  async listJobs(opts?: {
+    source?: string;
+    status?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<RefreshJob[]> {
+    const params = new URLSearchParams();
+    if (opts?.source) params.set("source", opts.source);
+    if (opts?.status) params.set("status", opts.status);
+    if (opts?.limit !== undefined) params.set("limit", String(opts.limit));
+    if (opts?.offset !== undefined) params.set("offset", String(opts.offset));
+    const qs = params.toString();
+    const res = await fetch(`/api/admin/jobs${qs ? `?${qs}` : ""}`);
+    const data = await handle<{ jobs: RefreshJob[] }>(res);
+    return data.jobs || [];
+  },
+
+  async getCurrentJob(): Promise<RefreshJob | null> {
+    const res = await fetch("/api/admin/jobs/current");
+    const data = await handle<{ job: RefreshJob | null }>(res);
+    return data.job ?? null;
+  },
+
+  async getJob(id: number): Promise<RefreshJob> {
+    const res = await fetch(`/api/admin/jobs/${id}`);
+    return handle<RefreshJob>(res);
+  },
+
+  async cancelJob(id: number): Promise<unknown> {
+    const res = await fetch(`/api/admin/jobs/${id}/cancel`, { method: "POST" });
+    return handle(res);
+  },
+
+  // -------------------------------------------------------------------
+  // Maintenance avancée
+  // -------------------------------------------------------------------
+
+  async maintenanceReembedSource(source: string): Promise<RefreshJob> {
+    const res = await fetch(
+      `/api/admin/maintenance/reembed/${encodeURIComponent(source)}`,
+      { method: "POST" },
+    );
+    return handle<RefreshJob>(res);
+  },
+
+  async maintenanceReembedAll(): Promise<RefreshJob> {
+    const res = await fetch("/api/admin/maintenance/reembed-all", {
+      method: "POST",
+    });
+    return handle<RefreshJob>(res);
+  },
+
+  async maintenanceOptimize(collection: string): Promise<RefreshJob> {
+    const res = await fetch(
+      `/api/admin/maintenance/optimize/${encodeURIComponent(collection)}`,
+      { method: "POST" },
+    );
+    return handle<RefreshJob>(res);
+  },
+
+  async maintenanceIntegrityCheck(): Promise<RefreshJob> {
+    const res = await fetch("/api/admin/maintenance/integrity-check", {
+      method: "POST",
+    });
+    return handle<RefreshJob>(res);
+  },
+
+  async maintenanceQdrantStats(): Promise<{
+    collections: QdrantCollectionStat[];
+    error?: string;
+  }> {
+    const res = await fetch("/api/admin/maintenance/qdrant-stats");
+    return handle<{ collections: QdrantCollectionStat[]; error?: string }>(res);
+  },
+
+  // -------------------------------------------------------------------
+  // Notifications
+  // -------------------------------------------------------------------
+
+  async listUnreadNotifications(): Promise<{
+    unread_count: number;
+    items: AppNotification[];
+  }> {
+    const res = await fetch("/api/notifications/unread");
+    return handle<{ unread_count: number; items: AppNotification[] }>(res);
+  },
+
+  async listNotifications(limit = 20): Promise<AppNotification[]> {
+    const res = await fetch(`/api/notifications?limit=${limit}`);
+    const data = await handle<{ items: AppNotification[] }>(res);
+    return data.items || [];
+  },
+
+  async markNotificationRead(id: number): Promise<unknown> {
+    const res = await fetch(`/api/notifications/${id}/read`, { method: "POST" });
+    return handle(res);
+  },
+
+  async markAllNotificationsRead(): Promise<unknown> {
+    const res = await fetch("/api/notifications/read-all", { method: "POST" });
+    return handle(res);
+  },
+
+  async deleteNotification(id: number): Promise<unknown> {
+    const res = await fetch(`/api/notifications/${id}`, { method: "DELETE" });
+    return handle(res);
   },
 };

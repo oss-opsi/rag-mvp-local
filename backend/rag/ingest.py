@@ -17,7 +17,6 @@ import logging
 import os
 import pickle
 import re
-import uuid
 from pathlib import Path
 from typing import Any
 
@@ -47,7 +46,7 @@ from .semantic_chunker import (
 logger = logging.getLogger(__name__)
 
 # Supported file extensions
-SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".txt", ".md"}
+SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".txt", ".md", ".xlsx", ".xls"}
 
 # ---------------------------------------------------------------------------
 # Shared singletons (lazy initialisation)
@@ -86,13 +85,45 @@ def _collection_for_user(user_id: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+EMBED_BATCH_SIZE: int = int(os.getenv("EMBED_BATCH_SIZE", "8"))
+EMBED_MAX_SEQ_LENGTH: int = int(os.getenv("EMBED_MAX_SEQ_LENGTH", "4096"))
+
+
 def get_embeddings() -> HuggingFaceEmbeddings:
+    """Singleton bge-m3 hardé pour usage CPU.
+
+    - batch_size petit (défaut 8) pour éviter les pics mémoire CPU.
+    - max_seq_length limité à 4096 tokens (au lieu des 8192 max bge-m3) pour
+      éviter qu'un chunk pathologique (HTML mal nettoyé, page d'erreur, longue
+      chaîne sans espace) ne fasse exploser le tokenizer ou la passe forward.
+    - show_progress_bar et convert_to_numpy ne sont PAS passés via encode_kwargs
+      car langchain_huggingface les passe déjà en interne à
+      SentenceTransformer.encode() — un doublon provoque
+      "got multiple values for keyword argument".
+    """
     global _embeddings
     if _embeddings is None:
         _embeddings = HuggingFaceEmbeddings(
             model_name=EMBEDDING_MODEL,
-            encode_kwargs={"normalize_embeddings": True},
+            encode_kwargs={
+                "normalize_embeddings": True,
+                "batch_size": EMBED_BATCH_SIZE,
+            },
         )
+        # SentenceTransformer expose max_seq_length sur l'instance interne.
+        # On le réduit à 4096 pour borner le coût de l'embedding par chunk.
+        try:
+            _embeddings._client.max_seq_length = EMBED_MAX_SEQ_LENGTH
+            logger.info(
+                "Embeddings bge-m3 prêts (batch_size=%d, max_seq_length=%d)",
+                EMBED_BATCH_SIZE,
+                EMBED_MAX_SEQ_LENGTH,
+            )
+        except Exception as exc:  # pragma: no cover — défensif
+            logger.warning(
+                "Impossible de fixer max_seq_length sur le SentenceTransformer: %s",
+                exc,
+            )
     return _embeddings
 
 
@@ -140,7 +171,6 @@ def load_bm25_corpus(user_id: str = "default") -> list[dict[str, Any]]:
     Load and return the BM25 corpus for the given user.
     Loads from disk on first call; subsequent calls use in-memory cache.
     """
-    global _bm25_corpora
     if user_id in _bm25_corpora:
         return _bm25_corpora[user_id]
 
@@ -175,7 +205,6 @@ def save_bm25_corpus(user_id: str = "default") -> None:
 
 def reset_bm25_corpus(user_id: str = "default") -> None:
     """Clear in-memory and on-disk BM25 corpus for a user."""
-    global _bm25_corpora
     _bm25_corpora[user_id] = []
     pkl_path = bm25_file(user_id)
     if Path(pkl_path).exists():
@@ -187,7 +216,57 @@ def reset_bm25_corpus(user_id: str = "default") -> None:
 # ---------------------------------------------------------------------------
 
 
-def _load_documents(file_path: str, ext: str):
+def _load_excel_document(file_path: str, ext: str, source_name: str):
+    """Extrait le texte d'un classeur Excel (xlsx/xls) en concaténant les lignes.
+
+    Pour chaque feuille, émet un en-tête `## Feuille : {nom}` puis chaque ligne
+    sous forme `cell1 | cell2 | ...` (cellules vides ignorées). Retourne un
+    Document unique : le chunker sémantique le découpera ensuite par taille.
+    """
+    from langchain.schema import Document
+
+    parts: list[str] = []
+    if ext == ".xlsx":
+        from openpyxl import load_workbook
+
+        wb = load_workbook(file_path, data_only=True, read_only=True)
+        try:
+            for sheet_name in wb.sheetnames:
+                ws = wb[sheet_name]
+                parts.append(f"## Feuille : {sheet_name}")
+                for row in ws.iter_rows(values_only=True):
+                    cells = [
+                        str(c).strip()
+                        for c in row
+                        if c is not None and str(c).strip()
+                    ]
+                    if cells:
+                        parts.append(" | ".join(cells))
+        finally:
+            wb.close()
+    elif ext == ".xls":
+        import xlrd
+
+        wb = xlrd.open_workbook(file_path)
+        for sheet in wb.sheets():
+            parts.append(f"## Feuille : {sheet.name}")
+            for row_idx in range(sheet.nrows):
+                row = sheet.row_values(row_idx)
+                cells = [
+                    str(c).strip()
+                    for c in row
+                    if c is not None and str(c).strip() != ""
+                ]
+                if cells:
+                    parts.append(" | ".join(cells))
+    else:
+        raise ValueError(f"Extension Excel non gérée : {ext}")
+
+    text = "\n".join(parts)
+    return [Document(page_content=text, metadata={"source": source_name, "page": 1})]
+
+
+def _load_documents(file_path: str, ext: str, source_name: str | None = None):
     """
     Load a document using the appropriate loader for the file extension.
     Returns a list of LangChain Document objects.
@@ -202,6 +281,8 @@ def _load_documents(file_path: str, ext: str):
     elif ext in {".txt", ".md"}:
         from langchain_community.document_loaders import TextLoader
         loader = TextLoader(file_path, encoding="utf-8")
+    elif ext in {".xlsx", ".xls"}:
+        return _load_excel_document(file_path, ext, source_name or file_path)
     else:
         raise ValueError(
             f"Format non supporté : '{ext}'. "
@@ -225,12 +306,10 @@ def ingest_file(
     Ingest a document file into the user's Qdrant collection (dense) and
     their BM25 corpus (sparse).
 
-    Supported formats: PDF, DOCX, TXT, MD.
+    Supported formats: PDF, DOCX, TXT, MD, XLSX, XLS.
 
     Returns the number of chunks indexed.
     """
-    global _bm25_corpora
-
     collection_name = _collection_for_user(user_id)
 
     # Ensure corpus is loaded
@@ -242,7 +321,7 @@ def ingest_file(
         ext = Path(file_path).suffix.lower()
 
     # 1. Load document
-    pages = _load_documents(file_path, ext)
+    pages = _load_documents(file_path, ext, source_name)
     logger.info("Loaded %d page(s)/section(s) from '%s'.", len(pages), source_name)
 
     # 2. Split into chunks — semantic (v3.9.0 default) or legacy size-based
@@ -312,19 +391,6 @@ def ingest_file(
 # ---------------------------------------------------------------------------
 # Helper functions for user collections
 # ---------------------------------------------------------------------------
-
-
-def get_indexed_doc_count(qdrant_url: str = QDRANT_URL, collection_name: str = QDRANT_COLLECTION) -> int:
-    """Return total number of vectors in the given collection."""
-    try:
-        client = get_qdrant_client(qdrant_url)
-        existing = [c.name for c in client.get_collections().collections]
-        if collection_name not in existing:
-            return 0
-        info = client.get_collection(collection_name)
-        return info.points_count or 0
-    except Exception:
-        return 0
 
 
 def get_all_collections(qdrant_url: str = QDRANT_URL) -> dict[str, int]:
@@ -468,17 +534,3 @@ def reset_collection(qdrant_url: str = QDRANT_URL, user_id: str = "default") -> 
     ensure_collection(client, collection_name)
     reset_bm25_corpus(user_id)
     logger.info("Collection '%s' reset for user '%s'.", collection_name, user_id)
-
-
-# ---------------------------------------------------------------------------
-# Legacy aliases (kept for backwards compatibility)
-# ---------------------------------------------------------------------------
-
-
-def ingest_pdf(
-    file_path: str,
-    source_name: str,
-    qdrant_url: str = QDRANT_URL,
-) -> int:
-    """Alias for ingest_file — retained for backwards compatibility."""
-    return ingest_file(file_path, source_name, qdrant_url=qdrant_url)

@@ -1,18 +1,24 @@
 """
-Gap Analysis service — v3.5 "Analyse d'écarts".
+Gap Analysis service — v3.11.0 "Analyse d'écarts" + RAG enrichi par feedback.
 
 Analyse un cahier des charges client :
   1. Parse le fichier (PDF/DOCX/TXT/MD) et agrège le texte.
-  2. Demande au LLM (GPT-4o-mini) d'extraire une liste structurée d'exigences
-     (JSON) : [{id, title, description, category}].
+  2. Demande au LLM d'extraire une liste structurée d'exigences (JSON).
   3. Pour chaque exigence, lance une requête hybride (RRF) sur la collection
-     Qdrant de l'utilisateur pour récupérer les chunks pertinents.
+     Qdrant ``referentiels_opsidium`` pour récupérer les chunks pertinents.
   4. Demande au LLM de statuer : covered / partial / missing / ambiguous,
-     avec justification et liste de sources (fichier + page).
-  5. Renvoie un rapport JSON complet.
+     avec justification, score de confiance et liste de sources.
+  5. Re-pass GPT-4o sur les verdicts ambigus / faible confiance.
+  6. Renvoie un rapport JSON complet.
 
-Tout est exécuté en parallèle avec un semaphore pour limiter les concurrences
-vers OpenAI (évite les rate-limits).
+RAG enrichi par feedback (v3.11.0) — deux axes, ON par défaut, no-op si le
+user n'a aucun feedback validé :
+  - Few-shot : 0 à 3 exemples de verdicts validés (vote='up') du même domaine
+    SIRH sont injectés AVANT la question dans le prompt verdict.
+  - Boost retrieval : les sources citées par des verdicts validés voient leur
+    score RRF multiplié par 1.0..1.5 (post-RRF, pré-rerank).
+
+Tout est exécuté en parallèle avec un semaphore pour limiter les appels OpenAI.
 """
 from __future__ import annotations
 
@@ -24,7 +30,7 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from langchain_openai import ChatOpenAI
 
@@ -42,7 +48,7 @@ def _repass_model() -> str:
     """Return the LLM model selected for the re-pass on ambiguous verdicts."""
     return get_setting("llm_repass", "gpt-4o")
 from .ingest import _load_documents, get_embeddings
-from .retriever import get_retriever_for_user
+from .retriever import ReferentielsOnlyRetriever
 
 # Deterministic seed passed to OpenAI for best-effort reproducibility
 # (same seed + same prompt + same model = same output, most of the time).
@@ -59,7 +65,7 @@ DEDUP_SIMILARITY_THRESHOLD = 0.88
 logger = logging.getLogger(__name__)
 
 # Bump this when prompts or pipeline change to invalidate old cache entries.
-PIPELINE_VERSION = "v3.9.0"
+PIPELINE_VERSION = "v3.11.0"
 
 # Persistent cache directory on disk.
 GAP_CACHE_DIR = os.path.join(DATA_DIR, "gap_cache")
@@ -96,18 +102,24 @@ REPASS_MAX_PARALLEL = 3
 VALID_STATUSES = {"covered", "partial", "missing", "ambiguous"}
 VALID_PRIORITIES = {"must", "should", "could", "wont"}
 VALID_OBLIGATIONS = {"contractuelle", "recommandée", "optionnelle"}
+# v3.10.0 — Taxonomie métier SIRH (8 domaines + fallback "Autre").
+# Remplace l'ancienne grille ISO 25010 (qualité logicielle générique) par une
+# segmentation orientée besoin SIRH/paie, plus parlante pour les consultants
+# AMOA et les chefs de projet.
 VALID_CATEGORIES = {
-    "Fonctionnel — Métier",
-    "Fonctionnel — Interface utilisateur",
-    "Intégration",
-    "Données",
-    "Sécurité & confidentialité",
-    "Performance",
-    "Disponibilité & résilience",
-    "Conformité réglementaire",
-    "Support & maintenance",
+    "Paie",
+    "DSN",
+    "GTA",
+    "Absences/Congés",
+    "Contrats/Administration",
+    "Portail/Self-service",
+    "Intégrations/Interfaces",
+    "Réglementaire",
     "Autre",
 }
+
+# Borne max pour le champ libre `subdomain` (sous-domaine métier SIRH).
+SUBDOMAIN_MAX_CHARS = 80
 
 
 # ---------------------------------------------------------------------------
@@ -181,17 +193,50 @@ Si ambigu, applique "must" par défaut et note l'ambiguïté dans notes.
 Obligation_level : "contractuelle" (must), "recommandée" (should),
 "optionnelle" (could / wont).
 
-Catégorie (ISO/IEC 25010 adapté) — choisis UNE seule parmi :
-- Fonctionnel — Métier
-- Fonctionnel — Interface utilisateur
-- Intégration
-- Données
-- Sécurité & confidentialité
-- Performance
-- Disponibilité & résilience
-- Conformité réglementaire
-- Support & maintenance
-- Autre (à justifier dans notes)
+Catégorie (taxonomie métier SIRH) — choisis UNE seule parmi :
+- Paie
+    Calcul et production des bulletins de paie (brut/net, cotisations sociales,
+    indemnités, primes, saisies-arrêts, IJSS subrogées, prélèvement à la source).
+    Ex. "Calcul du brut imposable", "Gestion des saisies-arrêts sur salaire".
+- DSN
+    Déclaration sociale nominative : DSN mensuelle, DSN événementielle (arrêt
+    maladie, fin de contrat), retours CRAM/CPAM, conformité norme GIP-MDS.
+    Ex. "DSN événementielle arrêt maladie", "Production DSN mensuelle".
+- GTA
+    Gestion des temps et activités : pointage, suivi des heures travaillées,
+    annualisation, modulation, plannings, badgeuses.
+    Ex. "Pointage par badgeuse physique", "Annualisation du temps de travail".
+- Absences/Congés
+    Demandes et soldes de congés payés, RTT, congés spéciaux, arrêts maladie,
+    workflow de validation manager.
+    Ex. "Solde RTT en self-service", "Workflow de validation des congés".
+- Contrats/Administration
+    Contrats de travail, avenants, dossiers salariés, données administratives,
+    cycle de vie collaborateur, gestion documentaire RH.
+    Ex. "Génération automatique d'un avenant", "Coffre-fort numérique RH".
+- Portail/Self-service
+    Espace collaborateur (RH self-service), espace manager, accès aux bulletins,
+    saisie déclarative, demande d'absences en ligne.
+    Ex. "Téléchargement du bulletin par le salarié", "Tableau de bord manager".
+- Intégrations/Interfaces
+    Échanges avec d'autres SI : comptabilité (Sage, Cegid), pointeuses, SIRH
+    tiers, API/webhooks, fichiers plats, formats normalisés.
+    Ex. "Interface paie-comptabilité au format SAGE", "Webhook salarié-créé".
+- Réglementaire
+    Conformité légale et réglementaire au-delà de la DSN : RGPD, droit du
+    travail, conventions collectives, archivage légal, audit, accessibilité.
+    Ex. "Archivage légal des bulletins 50 ans", "Conformité RGPD données salariés".
+- Autre (à justifier dans notes — uniquement si vraiment hors-cadre SIRH)
+
+Sous-domaine (subdomain) — champ libre optionnel (≤ 80 caractères) pour
+préciser le sous-thème métier dans la catégorie choisie. Remplis-le quand
+c'est pertinent et apporte une information utile (catégorie/sous-thème).
+Exemples :
+- "Paie" → "Paie/cotisations", "Paie/saisies-arrêts", "Paie/IJSS"
+- "DSN" → "DSN/événementielle", "DSN/mensuelle", "DSN/retours"
+- "Intégrations/Interfaces" → "Interfaces/comptabilité SAGE", "API/REST"
+- "Absences/Congés" → "Absences/maladie", "Congés/RTT"
+Si rien d'utile à préciser, laisse vide ou null.
 
 Critères d'acceptation : 2 à 5 critères testables et mesurables, à l'impératif
 ou au présent. Ils serviront à vérifier la couverture produit.
@@ -227,7 +272,8 @@ et l'envoyer automatiquement à Net-Entreprises."
     "Le format respecte la norme DSN publiée par GIP-MDS",
     "Les données transmises correspondent exactement à la paie validée"
   ],
-  "category": "Conformité réglementaire",
+  "category": "DSN",
+  "subdomain": "DSN/mensuelle",
   "priority": "must",
   "obligation_level": "contractuelle",
   "source_location": "§3.1.2, page 14",
@@ -244,7 +290,8 @@ et l'envoyer automatiquement à Net-Entreprises."
     "Un accusé de réception est archivé automatiquement",
     "Les erreurs de transmission sont notifiées à l'administrateur paie"
   ],
-  "category": "Intégration",
+  "category": "Intégrations/Interfaces",
+  "subdomain": "DSN/Net-Entreprises",
   "priority": "must",
   "obligation_level": "contractuelle",
   "source_location": "§3.1.2, page 14",
@@ -264,7 +311,8 @@ Exemple 2 — exigence implicite dans un tableau SLA :
     "Les incidents sont documentés avec timestamp début/fin",
     "Un rapport mensuel de disponibilité est fourni au client"
   ],
-  "category": "Disponibilité & résilience",
+  "category": "Autre",
+  "subdomain": "SLA/disponibilité",
   "priority": "must",
   "obligation_level": "contractuelle",
   "source_location": "Annexe SLA, page 42",
@@ -274,7 +322,18 @@ Exemple 2 — exigence implicite dans un tableau SLA :
 
 FORMAT DE SORTIE :
 Retourne UNIQUEMENT un JSON valide (pas de markdown, pas de commentaire) :
-{"requirements": [ {...}, {...} ]}"""
+{"requirements": [ {...}, {...} ]}
+
+Schéma d'un objet exigence (clés attendues) :
+- id (str), title (str), description (str)
+- category (str — un des 9 domaines SIRH listés ci-dessus)
+- subdomain (str ou null, ≤ 80 caractères — sous-thème libre, optionnel)
+- priority (str — must/should/could/wont)
+- obligation_level (str — contractuelle/recommandée/optionnelle)
+- acceptance_criteria (list[str], 2-5 items)
+- source_location (str)
+- depends_on (list[str])
+- notes (str)"""
 
 _EXTRACT_HUMAN = "Cahier des charges :\n\n{cdc_text}"
 
@@ -342,6 +401,13 @@ def _normalise_requirement(
             (c for c in VALID_CATEGORIES if c.lower() == low),
             "Autre",
         )
+    # Sous-domaine métier libre (≤ 80 chars). Optionnel — None par défaut.
+    subdomain_raw = r.get("subdomain")
+    if subdomain_raw is None:
+        subdomain: str | None = None
+    else:
+        sub_clean = str(subdomain_raw).strip()
+        subdomain = sub_clean[:SUBDOMAIN_MAX_CHARS] if sub_clean else None
     ac_raw = r.get("acceptance_criteria") or []
     if not isinstance(ac_raw, list):
         ac_raw = [str(ac_raw)]
@@ -357,6 +423,7 @@ def _normalise_requirement(
         "title": str(r.get("title", "")).strip()[:200],
         "description": str(r.get("description", "")).strip()[:3000],
         "category": cat,
+        "subdomain": subdomain,
         "priority": prio,
         "obligation_level": obl,
         "acceptance_criteria": acceptance_criteria,
@@ -668,14 +735,25 @@ RÈGLE IMPORTANTE : tu ne dois JAMAIS halluciner. Si un critère n'est pas
 explicitement couvert par le contexte, ne l'affirme pas couvert. Mieux vaut
 classer "ambiguous" que surestimer la couverture.
 
+SCORE DE CONFIANCE :
+Tu dois également fournir un score de confiance (`confidence`) entre 0.0 et
+1.0 reflétant à quel point tu es sûr de ton verdict, indépendamment du statut
+choisi :
+- 1.0 : preuves explicites, multiples et concordantes dans le contexte
+- 0.7 : preuves convergentes mais partielles ou indirectes
+- 0.5 : éléments contradictoires, vocabulaire ambigu, contexte limité
+- 0.3 : seules quelques bribes lointaines ; statut posé par défaut
+- 0.0 : aucune base dans le contexte (typiquement statut "missing")
+
 FORMAT DE SORTIE (JSON strict, sans markdown) :
 {
   "status": "covered" | "partial" | "missing" | "ambiguous",
   "verdict": "1 à 4 phrases expliquant ta décision, en citant les critères couverts / non couverts si pertinent.",
-  "evidence": ["Citation courte extraite du contexte", "..."]
+  "evidence": ["Citation courte extraite du contexte", "..."],
+  "confidence": 0.0 à 1.0
 }"""
 
-_VERDICT_HUMAN = """Exigence à évaluer
+_VERDICT_HUMAN = """{few_shot_block}Exigence à évaluer
 ------------------
 ID : {req_id}
 Titre : {title}
@@ -692,14 +770,101 @@ Extraits de la documentation produit
 Réponds en JSON strict (voir schéma du système)."""
 
 
+def _format_few_shot_block(examples: list[dict[str, Any]] | None) -> str:
+    """Construit le bloc few-shot à injecter avant la question courante.
+
+    Format : un titre clair indiquant qu'il s'agit de verdicts validés par
+    l'utilisateur (référence de style et de rigueur), suivi de N exemples
+    numérotés. Renvoie une chaîne vide si aucun exemple disponible.
+    """
+    if not examples:
+        return ""
+    lines: list[str] = [
+        "# Exemples de verdicts validés par l'utilisateur "
+        "(référence de style et rigueur)",
+        "",
+    ]
+    for idx, ex in enumerate(examples, 1):
+        domain = ex.get("category") or ex.get("domain") or "?"
+        status = ex.get("status") or "?"
+        title = (ex.get("title") or "").strip()
+        description = (ex.get("description") or "").strip()
+        verdict = (ex.get("verdict") or "").strip()
+        lines.append(
+            f"Exemple {idx} (domaine: {domain}, statut: {status}) :"
+        )
+        lines.append(f"Exigence : {title}")
+        if description:
+            lines.append(f"Description : {description}")
+        lines.append(f"Verdict : {verdict}")
+        lines.append("")
+    lines.append("---")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _clamp_unit(value: Any, default: float = 0.5) -> float:
+    """Clamp ``value`` au segment [0, 1] ; retourne ``default`` si non numérique."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return float(default)
+    if v != v:  # NaN
+        return float(default)
+    if v < 0.0:
+        return 0.0
+    if v > 1.0:
+        return 1.0
+    return v
+
+
+def _compute_retrieval_confidence(sources: list[dict[str, Any]]) -> float:
+    """Confiance retrieval = moyenne des scores RRF top-3, normalisée [0, 1].
+
+    Les scores RRF retournés par ReferentielsOnlyRetriever / HybridRetriever
+    sont déjà bornés (1 / (rrf_k + rank + 1)) — pour rrf_k=60, le top-1 vaut
+    ~0.0164, le top-10 ~0.0143. Pour produire un score [0, 1] stable, on
+    normalise par 2 / (rrf_k + 2) qui correspond au plafond théorique
+    « top-1 sur deux listes fusionnées » côté HyDE+raw.
+
+    Si moins de 3 sources : moyenne des disponibles. Aucune source : 0.0.
+    """
+    if not sources:
+        return 0.0
+    top = sources[:3]
+    raw_scores = [float(s.get("score", 0.0) or 0.0) for s in top]
+    avg = sum(raw_scores) / len(raw_scores)
+    # Plafond théorique : top-1 fusionné sur 2 listes = 2 * 1/(60+1) ≈ 0.0328.
+    # En pratique on prend rrf_k=60 ; on borne avec un facteur sûr.
+    norm = avg / (2.0 / (60 + 2))
+    if norm < 0.0:
+        return 0.0
+    if norm > 1.0:
+        return 1.0
+    return round(norm, 6)
+
+
 async def _judge_requirement(
     requirement: dict[str, Any],
     sources: list[dict[str, Any]],
     context: str,
     llm: ChatOpenAI,
     semaphore: asyncio.Semaphore,
+    few_shot_examples: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Ask the LLM to classify coverage for one requirement."""
+    """Ask the LLM to classify coverage for one requirement.
+
+    v3.10.0 — extrait également un score de confiance LLM (`llm_confidence`)
+    et le combine avec un score de retrieval (`retrieval_confidence`) pour
+    produire un `confidence` final stocké sur le requirement.
+
+    v3.11.0 — accepte ``few_shot_examples`` (≤ 3 verdicts validés du même
+    domaine SIRH) qui sont injectés AVANT la question pour guider le LLM
+    sur le style et le niveau de rigueur attendus.
+    """
+    retrieval_conf = _compute_retrieval_confidence(sources)
+    few_shot_count = len(few_shot_examples) if few_shot_examples else 0
+    few_shot_block = _format_few_shot_block(few_shot_examples)
     async with semaphore:
         if not context.strip():
             return {
@@ -708,6 +873,13 @@ async def _judge_requirement(
                 "verdict": "Aucun extrait pertinent trouvé dans la base indexée.",
                 "evidence": [],
                 "sources": [],
+                "llm_confidence": 0.0,
+                "retrieval_confidence": 0.0,
+                "confidence": 0.0,
+                "enrichment_used": {
+                    "few_shot_count": few_shot_count,
+                    "boosted_sources": [],
+                },
             }
         crit = requirement.get("acceptance_criteria") or []
         criteria_block = (
@@ -718,6 +890,7 @@ async def _judge_requirement(
             {
                 "role": "user",
                 "content": _VERDICT_HUMAN.format(
+                    few_shot_block=few_shot_block,
                     req_id=requirement.get("id", ""),
                     title=requirement["title"],
                     category=requirement.get("category", "Autre"),
@@ -737,6 +910,7 @@ async def _judge_requirement(
                 status = "ambiguous"
             verdict = str(parsed.get("verdict", "")).strip()
             evidence = [str(e).strip() for e in parsed.get("evidence", []) if e]
+            llm_conf = _clamp_unit(parsed.get("confidence"), default=0.5)
         except Exception as exc:
             logger.warning("Verdict LLM call failed for %s: %s", requirement["id"], exc)
             return {
@@ -745,13 +919,28 @@ async def _judge_requirement(
                 "verdict": f"Erreur pendant l'analyse : {exc}",
                 "evidence": [],
                 "sources": sources,
+                "llm_confidence": 0.0,
+                "retrieval_confidence": retrieval_conf,
+                "confidence": round(0.3 * retrieval_conf, 3),
+                "enrichment_used": {
+                    "few_shot_count": few_shot_count,
+                    "boosted_sources": [],
+                },
             }
+        confidence_final = round(0.7 * llm_conf + 0.3 * retrieval_conf, 3)
         return {
             **requirement,
             "status": status,
             "verdict": verdict,
             "evidence": evidence[:5],
             "sources": sources,
+            "llm_confidence": round(llm_conf, 3),
+            "retrieval_confidence": round(retrieval_conf, 3),
+            "confidence": confidence_final,
+            "enrichment_used": {
+                "few_shot_count": few_shot_count,
+                "boosted_sources": [],
+            },
         }
 
 
@@ -845,12 +1034,22 @@ async def analyse_requirement(
     qdrant_url: str,
     semaphore: asyncio.Semaphore,
     hyde_llm: ChatOpenAI | None = None,
+    source_boosts: dict[str, float] | None = None,
+    few_shot_provider: "Callable[[str], list[dict[str, Any]]] | None" = None,
 ) -> dict[str, Any]:
     """Retrieve + judge one requirement (thread-safe).
 
     v3.8.0: if HyDE is enabled AND a ``hyde_llm`` is provided, generate a
     hypothetical answer and fuse retrievals from (raw query) + (hypothesis)
     via RRF before sending the top-K to the verdict LLM.
+
+    v3.11.0:
+      - ``source_boosts`` : mapping ``{source_canonique: boost_factor}`` à
+        appliquer post-RRF côté retriever. Si None et ``user_id`` fourni,
+        le retriever charge lui-même le boost user (lazy via SQLite).
+      - ``few_shot_provider`` : callable ``(domain) -> [{title, ...}]`` qui
+        retourne 0..3 exemples de verdicts validés du même domaine SIRH ;
+        utilisé pour enrichir le prompt verdict.
     """
     # Build the raw query (title + description + acceptance criteria)
     criteria_text = " ".join(requirement.get("acceptance_criteria") or [])
@@ -860,7 +1059,17 @@ async def analyse_requirement(
         criteria_text,
     ]
     query = ". ".join(p for p in query_parts if p).strip()
-    retriever = get_retriever_for_user(user_id, qdrant_url=qdrant_url)
+    # Cloisonnement Analyse CDC : Référentiels Opsidium UNIQUEMENT.
+    # On exclut explicitement :
+    #   - la collection privée user (Indexation) — réservée au chat
+    #   - la KB publique (service-public, BOSS, DSN-info, URSSAF) — réservée au chat
+    # Seule la méthodologie interne Opsidium sert de référence pour évaluer
+    # les exigences extraites du cahier des charges client.
+    retriever = ReferentielsOnlyRetriever(
+        qdrant_url=qdrant_url,
+        user_id=user_id,
+        source_boosts=source_boosts,
+    )
 
     hyde_used = False
     hypothesis = ""
@@ -872,15 +1081,19 @@ async def analyse_requirement(
     chunks_raw = await asyncio.to_thread(
         retriever.retrieve, query, RETRIEVAL_K, 20, 20, True
     )
+    boosted_after_raw = list(retriever._boosted_sources_last)
 
     if hyde_used:
         # Retrieve a second time with the hypothesis, then RRF-merge.
         chunks_hyp = await asyncio.to_thread(
             retriever.retrieve, hypothesis, RETRIEVAL_K, 20, 20, True
         )
+        boosted_after_hyp = list(retriever._boosted_sources_last)
         chunks = _fuse_retrievals(chunks_raw, chunks_hyp, k=RETRIEVAL_K)
+        boosted_used = sorted(set(boosted_after_raw) | set(boosted_after_hyp))
     else:
         chunks = chunks_raw
+        boosted_used = boosted_after_raw
 
     sources = [
         {
@@ -892,9 +1105,31 @@ async def analyse_requirement(
         for c in chunks
     ]
     context = _format_context(chunks) if chunks else ""
+
+    few_shot_examples: list[dict[str, Any]] = []
+    if few_shot_provider is not None:
+        try:
+            domain = str(requirement.get("category") or "Autre")
+            few_shot_examples = few_shot_provider(domain) or []
+        except Exception as exc:
+            logger.warning(
+                "Few-shot provider failed for req %s : %s",
+                requirement.get("id", "?"), exc,
+            )
+            few_shot_examples = []
+
     judged = await _judge_requirement(
-        requirement, sources, context, llm, semaphore
+        requirement,
+        sources,
+        context,
+        llm,
+        semaphore,
+        few_shot_examples=few_shot_examples,
     )
+    enrichment = judged.setdefault(
+        "enrichment_used", {"few_shot_count": 0, "boosted_sources": []}
+    )
+    enrichment["boosted_sources"] = boosted_used
     if hyde_used:
         judged["hyde_used"] = True
         judged["hypothesis"] = hypothesis
@@ -973,6 +1208,74 @@ def _write_cache(path: str, report: dict[str, Any]) -> None:
             json.dump(report, f, ensure_ascii=False)
     except OSError as exc:
         logger.warning("Failed to write cache %s: %s", path, exc)
+
+
+def _apply_corrections_overrides(
+    analysed: list[dict[str, Any]], user_id: str
+) -> list[dict[str, Any]]:
+    """Écrase status + verdict des exigences pour lesquelles l'utilisateur a
+    enregistré une correction validée.
+
+    Lookup par ``content_key`` (sha256 normalisé de category+subdomain+title)
+    pour que la correction d'une exigence faite sur un CDC précédent s'applique
+    automatiquement à un nouveau CDC qui contient la même exigence.
+
+    Renvoie la liste avec les requirements corrigés in-place.
+    """
+    if not analysed or not user_id:
+        return analysed
+    try:
+        from . import workspace as _ws  # import local pour éviter le cycle
+    except Exception as exc:
+        logger.warning("Corrections : import workspace impossible : %s", exc)
+        return analysed
+
+    # 1. Calculer la content_key pour chaque exigence
+    keys: list[str] = []
+    for r in analysed:
+        keys.append(
+            _ws.compute_content_key(
+                category=r.get("category"),
+                subdomain=r.get("subdomain"),
+                title=r.get("title"),
+            )
+        )
+    unique_keys = list({k for k in keys if k})
+    if not unique_keys:
+        return analysed
+
+    # 2. Bulk lookup
+    try:
+        corrections = _ws.get_corrections_by_content_key(user_id, unique_keys)
+    except Exception as exc:
+        logger.warning(
+            "Corrections : lecture impossible (user=%s) : %s", user_id, exc
+        )
+        return analysed
+    if not corrections:
+        return analysed
+
+    # 3. Override
+    overridden = 0
+    for req, key in zip(analysed, keys):
+        corr = corrections.get(key)
+        if not corr:
+            continue
+        req["status"] = corr["verdict"]
+        req["verdict"] = corr["answer"]
+        req["correction_applied"] = True
+        req["correction_source_analysis_id"] = corr.get("analysis_id")
+        req["correction_updated_at"] = corr.get("updated_at")
+        # Confiance maximale sur un verdict humain validé.
+        req["confidence"] = 1.0
+        req["llm_confidence"] = 1.0
+        overridden += 1
+    if overridden:
+        logger.info(
+            "Corrections : %d exigence(s) écrasée(s) par verdict humain (user=%s)",
+            overridden, user_id,
+        )
+    return analysed
 
 
 async def run_gap_analysis(
@@ -1074,9 +1377,56 @@ async def run_gap_analysis(
             max_tokens=220,
         )
     semaphore = asyncio.Semaphore(MAX_PARALLEL_LLM)
+
+    # v3.11.0 — Pré-charge le boost source + le provider few-shot une seule
+    # fois pour toute l'analyse. Si l'utilisateur n'a aucun feedback, ces
+    # deux objets restent vides et le pipeline reste strictement v3.10.
+    source_boosts: dict[str, float] = {}
+    few_shot_provider: Callable[[str], list[dict[str, Any]]] | None = None
+    try:
+        from . import workspace as _ws  # import local pour éviter le cycle
+        source_boosts = _ws.get_validated_source_boosts(user_id)
+
+        # Cache mémoire par domaine, valable pour cette exécution.
+        _few_shot_cache: dict[str, list[dict[str, Any]]] = {}
+
+        def _provider(domain: str) -> list[dict[str, Any]]:
+            if domain in _few_shot_cache:
+                return _few_shot_cache[domain]
+            try:
+                examples = _ws.get_top_validated_verdicts(user_id, domain, 3)
+            except Exception as exc:
+                logger.warning(
+                    "Lecture few-shot impossible pour user=%s domaine=%s : %s",
+                    user_id, domain, exc,
+                )
+                examples = []
+            _few_shot_cache[domain] = examples
+            return examples
+
+        few_shot_provider = _provider
+    except Exception as exc:
+        logger.warning(
+            "Enrichissement feedback indisponible (user=%s) : %s",
+            user_id, exc,
+        )
+
+    if source_boosts:
+        logger.info(
+            "RAG enrichi : %d source(s) boostée(s) chargée(s) pour user=%s",
+            len(source_boosts), user_id,
+        )
+
     tasks = [
         analyse_requirement(
-            req, user_id, llm, qdrant_url, semaphore, hyde_llm=hyde_llm,
+            req,
+            user_id,
+            llm,
+            qdrant_url,
+            semaphore,
+            hyde_llm=hyde_llm,
+            source_boosts=source_boosts,
+            few_shot_provider=few_shot_provider,
         )
         for req in requirements
     ]
@@ -1094,16 +1444,26 @@ async def run_gap_analysis(
                     "verdict": f"Erreur pendant l'analyse : {res}",
                     "evidence": [],
                     "sources": [],
+                    "llm_confidence": 0.0,
+                    "retrieval_confidence": 0.0,
+                    "confidence": 0.0,
                 }
             )
         else:
             analysed.append(res)
 
     # Step 3.5 — Re-pass on ambiguous with a stronger model (GPT-4o)
-    repass_count = 0
+    # v3.10.0 : on étend le re-pass aux verdicts à faible confiance finale
+    # (confidence < 0.5), en plus des verdicts ambigus. Le drapeau
+    # `repass_applied` empêche un second passage sur le même requirement.
     if REPASS_ENABLED:
         ambiguous_idx = [
-            i for i, r in enumerate(analysed) if r.get("status") == "ambiguous"
+            i for i, r in enumerate(analysed)
+            if not r.get("repass_applied")
+            and (
+                r.get("status") == "ambiguous"
+                or float(r.get("confidence", 1.0) or 0.0) < 0.5
+            )
         ]
         if ambiguous_idx:
             repass_model = _repass_model()
@@ -1163,9 +1523,15 @@ async def run_gap_analysis(
                         analysed[i]["repass_applied"] = False
                     else:
                         analysed[i] = new_r
-                        repass_count += 1
             except Exception as exc:
                 logger.warning("Re-pass skipped due to error: %s", exc)
+
+    # Step 3.6 — overrides humains (corrections validées)
+    # On écrase verdict + status sur les exigences pour lesquelles l'utilisateur
+    # a sauvegardé une correction. Lookup par content_key (category + subdomain
+    # + title) → matche aussi à travers plusieurs CDCs (futurs CDCs avec une
+    # exigence libellée à l'identique).
+    analysed = _apply_corrections_overrides(analysed, user_id)
 
     # Step 4 — summary
     counts = {"covered": 0, "partial": 0, "missing": 0, "ambiguous": 0}
@@ -1188,4 +1554,163 @@ async def run_gap_analysis(
         "requirements": analysed,
     }
     _write_cache(cache_path, report)
+    return report
+
+
+# ---------------------------------------------------------------------------
+# v3.11.0 — Re-pass ciblé en lot (batch)
+# ---------------------------------------------------------------------------
+
+
+def _summarise(requirements: list[dict[str, Any]]) -> dict[str, Any]:
+    """Recalcul ``summary`` (counts + coverage_percent) à partir de la liste
+    des requirements (utilisé après un re-pass batch pour rafraîchir le
+    rapport).
+    """
+    counts = {"covered": 0, "partial": 0, "missing": 0, "ambiguous": 0}
+    for r in requirements:
+        s = r.get("status", "ambiguous")
+        if s in counts:
+            counts[s] += 1
+    total = len(requirements)
+    coverage = (
+        (counts["covered"] + 0.5 * counts["partial"]) / total if total else 0.0
+    )
+    return {
+        "total": total,
+        **counts,
+        "coverage_percent": round(coverage * 100, 1),
+    }
+
+
+async def run_repass_batch(
+    *,
+    report: dict[str, Any],
+    requirement_ids: list[str],
+    user_id: str,
+    openai_api_key: str,
+    force: bool = False,
+) -> dict[str, Any]:
+    """Re-évalue UNIQUEMENT les exigences listées dans ``requirement_ids``
+    en réutilisant les chunks déjà retournés (pas de nouveau retrieval) et
+    en appelant directement le modèle re-pass (typiquement GPT-4o).
+
+    Garde-fou : par défaut, une exigence avec ``repass_applied=True`` n'est
+    PAS rejouée. Passer ``force=True`` pour forcer.
+
+    Returns:
+        Le rapport modifié in-place : ``requirements`` mis à jour, ``summary``
+        recalculé. Les champs added/modifiés sur les exigences re-passées :
+          - status, verdict, evidence, llm_confidence, retrieval_confidence,
+            confidence
+          - repass_applied = True
+          - repass_model
+          - repass_reason = "batch_user_request"
+    """
+    if not openai_api_key:
+        raise ValueError("Clé API OpenAI manquante.")
+    requirements = report.get("requirements") or []
+    if not requirements:
+        return report
+
+    target_ids = {str(rid) for rid in (requirement_ids or []) if rid}
+    if not target_ids:
+        return report
+
+    repass_model = _repass_model()
+    strong_llm = ChatOpenAI(
+        model=repass_model,
+        temperature=LLM_TEMPERATURE,
+        api_key=openai_api_key,
+        model_kwargs={
+            "response_format": {"type": "json_object"},
+            "seed": OPENAI_SEED,
+        },
+    )
+    semaphore = asyncio.Semaphore(REPASS_MAX_PARALLEL)
+
+    # Few-shot provider : on réutilise les exemples validés du même user.
+    _few_shot_cache: dict[str, list[dict[str, Any]]] = {}
+
+    def _provider(domain: str) -> list[dict[str, Any]]:
+        if domain in _few_shot_cache:
+            return _few_shot_cache[domain]
+        try:
+            from . import workspace as _ws
+            ex = _ws.get_top_validated_verdicts(user_id, domain, 3)
+        except Exception as exc:
+            logger.warning(
+                "Re-pass batch : few-shot indisponible (user=%s domaine=%s) : %s",
+                user_id, domain, exc,
+            )
+            ex = []
+        _few_shot_cache[domain] = ex
+        return ex
+
+    async def _redo_one(idx: int) -> tuple[int, dict[str, Any] | Exception]:
+        req = requirements[idx]
+        if not force and req.get("repass_applied"):
+            # Déjà re-passé du même type (batch) : on saute, on garde tel quel.
+            return idx, req
+        # Reconstruit le contexte à partir des sources stockées.
+        srcs = req.get("sources") or []
+        chunk_like = [
+            {
+                "text": s.get("text", ""),
+                "metadata": {
+                    "source": s.get("source", "?"),
+                    "page": s.get("page", "?"),
+                },
+            }
+            for s in srcs
+        ]
+        ctx = _format_context(chunk_like) if chunk_like else ""
+        few_shot = _provider(str(req.get("category") or "Autre"))
+        try:
+            rejudged = await _judge_requirement(
+                req, srcs, ctx, strong_llm, semaphore,
+                few_shot_examples=few_shot,
+            )
+        except Exception as exc:
+            return idx, exc
+        rejudged["repass_applied"] = True
+        rejudged["repass_model"] = repass_model
+        rejudged["repass_reason"] = "batch_user_request"
+        # Préserve les méta HyDE de l'analyse initiale.
+        if req.get("hyde_used"):
+            rejudged["hyde_used"] = True
+            rejudged["hypothesis"] = req.get("hypothesis", "")
+        # Marque l'enrichissement few-shot effectivement utilisé.
+        enrichment = rejudged.setdefault(
+            "enrichment_used", {"few_shot_count": 0, "boosted_sources": []}
+        )
+        enrichment["few_shot_count"] = len(few_shot)
+        # Pas de nouveau retrieval → on conserve le boost calculé à l'analyse
+        # initiale s'il existait.
+        previous = (req.get("enrichment_used") or {}).get("boosted_sources") or []
+        enrichment["boosted_sources"] = list(previous)
+        return idx, rejudged
+
+    indices = [i for i, r in enumerate(requirements) if str(r.get("id")) in target_ids]
+    if not indices:
+        return report
+
+    tasks = [_redo_one(i) for i in indices]
+    results = await asyncio.gather(*tasks)
+    for idx, value in results:
+        if isinstance(value, Exception):
+            logger.warning(
+                "Re-pass batch failed for req %s : %s",
+                requirements[idx].get("id", "?"), value,
+            )
+            continue
+        requirements[idx] = value
+
+    # Override par corrections humaines validées (lookup par content_key).
+    # Un verdict humain validé l'emporte sur le re-jugement LLM, même si
+    # l'utilisateur a déclenché un repass après avoir saisi la correction.
+    requirements = _apply_corrections_overrides(requirements, user_id)
+
+    report["requirements"] = requirements
+    report["summary"] = _summarise(requirements)
     return report

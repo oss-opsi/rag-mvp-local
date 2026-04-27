@@ -34,6 +34,17 @@
     --ink: 211 60% 11%;
     --ink-fg: 0 0% 100%;
     --radius: 12px;
+
+    /* v4 — variantes "soft" pour les fonds subtils (badges, hovers, fonds de bulles) */
+    --accent-soft: 219 78% 95%;
+    --success-soft: 173 75% 94%;
+    --warning-soft: 38 92% 94%;
+    --danger-soft: 347 78% 96%;
+    --violet-soft: 263 83% 96%;
+
+    /* v4 — bordure plus douce (cartes élevées, séparateurs) et surface alternative */
+    --border-soft: 218 35% 94%;
+    --surface-2: 218 33% 99%;
   }
 
   * {
@@ -69,4 +80,23 @@
     transform: translateY(-4px);
     opacity: 1;
   }
+}
+
+/* v4 — lignes squelette (shimmer) pour l'attente du premier token */
+@layer utilities {
+  .skeleton-line {
+    background: linear-gradient(
+      90deg,
+      hsl(var(--border-soft)) 0%,
+      hsl(var(--border)) 50%,
+      hsl(var(--border-soft)) 100%
+    );
+    background-size: 200% 100%;
+    animation: skeleton-shimmer 1.6s linear infinite;
+    border-radius: 6px;
+  }
+}
+@keyframes skeleton-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
 }

@@ -70,7 +70,7 @@ export function MarkdownContent({
             </a>
           ),
           blockquote: ({ children }) => (
-            <blockquote className="border-l-2 border-border pl-3 text-muted-foreground">
+            <blockquote className="border-l-2 border-soft pl-3 text-muted-foreground">
               {children}
             </blockquote>
           ),
@@ -105,16 +105,16 @@ export function MarkdownContent({
             </div>
           ),
           th: ({ children }) => (
-            <th className="border border-border px-2 py-1 text-left font-semibold">
+            <th className="border border-soft px-2 py-1 text-left font-semibold">
               {children}
             </th>
           ),
           td: ({ children }) => (
-            <td className="border border-border px-2 py-1 align-top">
+            <td className="border border-soft px-2 py-1 align-top">
               {children}
             </td>
           ),
-          hr: () => <hr className="my-2 border-border" />,
+          hr: () => <hr className="my-2 border-soft" />,
         }}
       >
         {children}
