@@ -3,14 +3,13 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import {
-  FileText,
+  CheckCircle2,
   Loader2,
   ShieldAlert,
   Trash2,
 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -23,6 +22,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { UploadDropzone } from "@/components/upload-dropzone";
+import { FileIcon, getExt } from "@/components/file-tile";
 import { useToast } from "@/components/ui/use-toast";
 import { useAppShell } from "@/components/app-shell-context";
 
@@ -177,16 +177,22 @@ export default function ReferentielsPage() {
           }
         />
         <div className="flex flex-1 items-center justify-center p-8">
-          <div className="flex max-w-md flex-col items-center gap-3 rounded-lg border border-border bg-muted/30 p-8 text-center">
-            <ShieldAlert className="h-8 w-8 text-muted-foreground" />
-            <div className="text-base font-medium">Accès réservé</div>
-            <p className="text-sm text-muted-foreground">
-              Cette section est réservée aux administrateurs Opsidium. Elle
-              contient les référentiels de méthodologie interne utilisés pour
-              l'analyse des cahiers des charges client.
-            </p>
+          <div className="flex max-w-md flex-col items-center gap-4 rounded-2xl border border-soft bg-card p-8 text-center shadow-tinted-sm">
+            <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-warning-soft to-danger-soft text-warning shadow-tinted-sm">
+              <ShieldAlert className="h-6 w-6" />
+            </span>
+            <div className="space-y-1">
+              <div className="text-base font-semibold tracking-tight">
+                Accès réservé
+              </div>
+              <p className="text-sm text-muted-foreground">
+                Cette section est réservée aux administrateurs Opsidium. Elle
+                contient les référentiels de méthodologie interne utilisés pour
+                l&apos;analyse des cahiers des charges client.
+              </p>
+            </div>
             <Button variant="outline" onClick={() => router.push("/documents")}>
-              Retour à l'indexation
+              Retour à l&apos;indexation
             </Button>
           </div>
         </div>
@@ -199,101 +205,119 @@ export default function ReferentielsPage() {
       <Topbar breadcrumb="Référentiels" />
 
       <div className="flex flex-1 flex-col gap-6 overflow-y-auto p-6">
-        <div>
-          <h1 className="text-xl font-semibold">Référentiels Opsidium</h1>
-        </div>
-
-        <UploadDropzone
-          accept={ACCEPT}
-          disabled={uploading}
-          onFile={handleUpload}
-          title={
-            uploading
-              ? "Indexation en cours…"
-              : "Déposer vos documents"
-          }
-          hint="Formats admis : PDF, DOCX, XLSX, XLS"
-        />
-
-        <div>
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-              Référentiels indexés
-            </h2>
-            {!loading && docs.length > 0 ? (
-              <Badge variant="secondary">{docs.length}</Badge>
-            ) : null}
+        <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
+          <div>
+            <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-accent">
+              Méthodologie interne
+            </div>
+            <h1 className="mt-0.5 text-xl font-semibold tracking-tight">
+              Référentiels Opsidium
+            </h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Documents méthodologiques utilisés à l&apos;analyse des cahiers des
+              charges. Visibles uniquement par les administrateurs.
+            </p>
           </div>
 
-          {loading ? (
-            <div className="flex items-center gap-2 rounded-lg border border-border p-6 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Chargement…
+          <UploadDropzone
+            accept={ACCEPT}
+            disabled={uploading}
+            onFile={handleUpload}
+            title={
+              uploading
+                ? "Indexation en cours…"
+                : "Déposer vos référentiels"
+            }
+            hint="Formats admis : PDF, DOCX, XLSX, XLS — 50 Mo max"
+          />
+
+          <section>
+            <div className="mb-3 flex items-baseline justify-between">
+              <h2 className="text-sm font-semibold tracking-tight">
+                Référentiels indexés
+                {!loading && docs.length > 0 ? (
+                  <span className="ml-2 text-xs font-normal text-muted-foreground tabular-nums">
+                    ({docs.length})
+                  </span>
+                ) : null}
+              </h2>
             </div>
-          ) : docs.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
-              Aucun référentiel indexé pour le moment.
-            </div>
-          ) : (
-            <ul className="divide-y divide-border rounded-lg border border-border">
-              {docs.map((d) => (
-                <li
-                  key={d.source}
-                  className="flex items-center justify-between gap-3 px-4 py-3"
-                >
-                  <div className="flex min-w-0 items-center gap-3">
-                    <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-medium">
-                        {d.source}
+
+            {loading ? (
+              <div className="flex items-center gap-2 rounded-2xl border border-soft bg-card p-6 text-sm text-muted-foreground shadow-tinted-sm">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Chargement…
+              </div>
+            ) : docs.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-soft bg-muted/20 p-8 text-center text-sm text-muted-foreground">
+                Aucun référentiel indexé pour le moment. Déposez un document
+                ci-dessus pour démarrer.
+              </div>
+            ) : (
+              <ul className="grid gap-3">
+                {docs.map((d) => (
+                  <li key={d.source}>
+                    <div className="group flex items-center gap-3 rounded-2xl border border-soft bg-card p-3.5 shadow-tinted-sm transition-all hover:-translate-y-0.5 hover:border-accent/30 hover:shadow-tinted-md">
+                      <FileIcon ext={getExt(d.source)} />
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-semibold tracking-tight">
+                          {d.source}
+                        </div>
+                        <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                          <span className="tabular-nums">
+                            {d.chunks} {d.chunks > 1 ? "chunks" : "chunk"}
+                          </span>
+                          <span className="h-1 w-1 rounded-full bg-border" aria-hidden />
+                          <span className="inline-flex items-center gap-1 rounded-full border border-success/25 bg-success-soft px-2 py-0.5 text-[11px] font-medium text-success">
+                            <CheckCircle2 className="h-3 w-3" />
+                            Indexé
+                          </span>
+                        </div>
                       </div>
-                      <div className="text-xs text-muted-foreground">
-                        {d.chunks} {d.chunks > 1 ? "chunks" : "chunk"} indexé
-                        {d.chunks > 1 ? "s" : ""}
-                      </div>
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            aria-label="Supprimer"
+                            className="h-8 w-8 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 hover:text-danger"
+                            disabled={deleting === d.source}
+                          >
+                            {deleting === d.source ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-4 w-4" />
+                            )}
+                          </Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>
+                              Supprimer ce référentiel ?
+                            </AlertDialogTitle>
+                            <AlertDialogDescription>
+                              <strong>{d.source}</strong> sera retiré de l&apos;index.
+                              Les futures analyses de cahiers des charges ne s&apos;y
+                              référeront plus. Cette action est irréversible.
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>Annuler</AlertDialogCancel>
+                            <AlertDialogAction
+                              onClick={() => void handleDelete(d.source)}
+                              className="bg-danger text-danger-foreground hover:bg-danger/90"
+                            >
+                              Supprimer
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
                     </div>
-                  </div>
-                  <AlertDialog>
-                    <AlertDialogTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="text-danger hover:bg-danger/10 hover:text-danger"
-                        disabled={deleting === d.source}
-                      >
-                        {deleting === d.source ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                          <Trash2 className="h-4 w-4" />
-                        )}
-                      </Button>
-                    </AlertDialogTrigger>
-                    <AlertDialogContent>
-                      <AlertDialogHeader>
-                        <AlertDialogTitle>
-                          Supprimer ce référentiel ?
-                        </AlertDialogTitle>
-                        <AlertDialogDescription>
-                          <strong>{d.source}</strong> sera retiré de l'index.
-                          Les futures analyses de cahiers des charges ne s'y
-                          référeront plus. Cette action est irréversible.
-                        </AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                        <AlertDialogCancel>Annuler</AlertDialogCancel>
-                        <AlertDialogAction
-                          onClick={() => void handleDelete(d.source)}
-                          className="bg-danger text-danger-foreground hover:bg-danger/90"
-                        >
-                          Supprimer
-                        </AlertDialogAction>
-                      </AlertDialogFooter>
-                    </AlertDialogContent>
-                  </AlertDialog>
-                </li>
-              ))}
-            </ul>
-          )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
         </div>
       </div>
     </div>

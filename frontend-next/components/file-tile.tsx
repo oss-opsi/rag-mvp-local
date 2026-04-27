@@ -84,7 +84,7 @@ export function FileTile({
   );
 }
 
-function getExt(filename: string): string {
+export function getExt(filename: string): string {
   const m = filename.toLowerCase().match(/\.([a-z0-9]+)$/);
   if (!m) return "FIC";
   const ext = m[1];
@@ -102,7 +102,7 @@ const ICON_STYLES: Record<string, string> = {
   MD: "bg-muted/60 text-muted-foreground",
 };
 
-function FileIcon({ ext }: { ext: string }) {
+export function FileIcon({ ext }: { ext: string }) {
   const style = ICON_STYLES[ext] ?? "bg-muted/60 text-muted-foreground";
   return (
     <div
