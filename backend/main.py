@@ -2459,6 +2459,83 @@ def workspace_quality_dashboard(
 
 
 # ---------------------------------------------------------------------------
+# Workspace — Corrections humaines validées (v4)
+# ---------------------------------------------------------------------------
+
+
+class RequirementCorrectionRequest(BaseModel):
+    verdict: str  # "covered", "partial" ou "missing"
+    answer: str
+    notes: str | None = None
+    # Métadonnées de l'exigence pour calculer la content_key.
+    category: str | None = None
+    subdomain: str | None = None
+    title: str | None = None
+
+
+@app.put(
+    "/workspace/analyses/{analysis_id}/requirements/{requirement_id}/correction",
+    tags=["Workspace"],
+)
+def workspace_put_requirement_correction(
+    analysis_id: str,
+    requirement_id: str,
+    req: RequirementCorrectionRequest,
+    user_id: str = Depends(get_current_user),
+) -> dict:
+    """Crée ou met à jour la correction validée pour une exigence."""
+    _ensure_analysis_owned(user_id, analysis_id)
+    content_key = workspace.compute_content_key(
+        category=req.category,
+        subdomain=req.subdomain,
+        title=req.title,
+    )
+    try:
+        return workspace.upsert_correction(
+            analysis_id=analysis_id,
+            requirement_id=requirement_id,
+            user_id=user_id,
+            content_key=content_key,
+            verdict=req.verdict,
+            answer=req.answer,
+            notes=req.notes,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.delete(
+    "/workspace/analyses/{analysis_id}/requirements/{requirement_id}/correction",
+    tags=["Workspace"],
+)
+def workspace_delete_requirement_correction(
+    analysis_id: str,
+    requirement_id: str,
+    user_id: str = Depends(get_current_user),
+) -> dict:
+    _ensure_analysis_owned(user_id, analysis_id)
+    removed = workspace.delete_correction(
+        analysis_id=analysis_id,
+        requirement_id=requirement_id,
+        user_id=user_id,
+    )
+    return {"removed": removed}
+
+
+@app.get(
+    "/workspace/analyses/{analysis_id}/corrections",
+    tags=["Workspace"],
+)
+def workspace_list_requirement_corrections(
+    analysis_id: str,
+    user_id: str = Depends(get_current_user),
+) -> dict:
+    _ensure_analysis_owned(user_id, analysis_id)
+    items = workspace.list_corrections_for_analysis(analysis_id, user_id)
+    return {"analysis_id": analysis_id, "corrections": items}
+
+
+# ---------------------------------------------------------------------------
 # Workspace — v3.11.0 : re-pass batch + export CSV feedback
 # ---------------------------------------------------------------------------
 

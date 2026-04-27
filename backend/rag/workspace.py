@@ -115,6 +115,31 @@ CREATE INDEX IF NOT EXISTS idx_req_feedback_analysis
     ON requirement_feedback(analysis_id);
 CREATE INDEX IF NOT EXISTS idx_req_feedback_user
     ON requirement_feedback(analysis_id, user_id);
+
+-- v4 — Corrections humaines validées sur les exigences.
+-- Diffèrent du feedback (vote 👍/👎) : portent un verdict autoritatif
+-- (covered/partial/missing) + une description de la couverture réelle.
+-- Sont réutilisées :
+--   1. Sur la ré-analyse du même CDC (clé requirement_id) → override direct.
+--   2. Sur l'analyse d'un futur CDC (clé content_key)     → injection few-shot.
+CREATE TABLE IF NOT EXISTS requirement_corrections (
+    id              TEXT PRIMARY KEY,
+    analysis_id     TEXT NOT NULL,
+    requirement_id  TEXT NOT NULL,
+    user_id         TEXT NOT NULL,
+    content_key     TEXT NOT NULL,
+    verdict         TEXT NOT NULL CHECK(verdict IN ('covered','partial','missing')),
+    answer          TEXT NOT NULL,
+    notes           TEXT,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
+    UNIQUE(analysis_id, requirement_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_req_corr_analysis
+    ON requirement_corrections(analysis_id);
+CREATE INDEX IF NOT EXISTS idx_req_corr_content_key
+    ON requirement_corrections(user_id, content_key);
 """
 
 
@@ -699,6 +724,201 @@ def user_owns_analysis(user_id: str, analysis_id: str) -> bool:
         return False
     with _connect() as conn:
         return _user_owns_analysis(conn, user_id, aid)
+
+
+# ---------------------------------------------------------------------------
+# v4 — Corrections humaines validées sur les exigences
+# ---------------------------------------------------------------------------
+
+VALID_CORRECTION_VERDICTS = {"covered", "partial", "missing"}
+ANSWER_MAX_CHARS = 8000
+NOTES_MAX_CHARS = 2000
+
+
+def compute_content_key(
+    category: Optional[str],
+    subdomain: Optional[str],
+    title: Optional[str],
+) -> str:
+    """Clé canonique pour matcher une exigence à travers plusieurs CDCs.
+
+    Strict : sha256 d'une concaténation normalisée (lowercase + strip + espaces
+    compactés). Deux exigences avec le même triplet (catégorie, sous-domaine,
+    titre) — modulo casse et espaces — partagent la même correction.
+    """
+    def _norm(s: Optional[str]) -> str:
+        return " ".join((s or "").strip().lower().split())
+
+    raw = f"{_norm(category)}||{_norm(subdomain)}||{_norm(title)}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _correction_id(analysis_id: str, requirement_id: str, user_id: str) -> str:
+    raw = f"corr|{analysis_id}|{requirement_id}|{user_id}"
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def upsert_correction(
+    analysis_id: str,
+    requirement_id: str,
+    user_id: str,
+    content_key: str,
+    verdict: str,
+    answer: str,
+    notes: Optional[str] = None,
+) -> dict[str, Any]:
+    """INSERT OR REPLACE d'une correction. Renvoie la ligne enregistrée."""
+    if verdict not in VALID_CORRECTION_VERDICTS:
+        raise ValueError(
+            f"verdict invalide : '{verdict}' "
+            "(attendu : 'covered', 'partial' ou 'missing')."
+        )
+    requirement_id = (requirement_id or "").strip()
+    if not requirement_id:
+        raise ValueError("requirement_id est requis.")
+    analysis_id = str(analysis_id or "").strip()
+    if not analysis_id:
+        raise ValueError("analysis_id est requis.")
+    content_key = (content_key or "").strip()
+    if not content_key:
+        raise ValueError("content_key est requis.")
+    answer = (answer or "").strip()
+    if not answer:
+        raise ValueError("answer est requis (description de la couverture).")
+    if len(answer) > ANSWER_MAX_CHARS:
+        answer = answer[:ANSWER_MAX_CHARS]
+    cleaned_notes = (notes or "").strip() or None
+    if cleaned_notes and len(cleaned_notes) > NOTES_MAX_CHARS:
+        cleaned_notes = cleaned_notes[:NOTES_MAX_CHARS]
+    cid = _correction_id(analysis_id, requirement_id, user_id)
+    now = _now_iso()
+    with _connect() as conn:
+        existing = conn.execute(
+            "SELECT created_at FROM requirement_corrections WHERE id = ?",
+            (cid,),
+        ).fetchone()
+        created_at = existing["created_at"] if existing else now
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO requirement_corrections(
+                id, analysis_id, requirement_id, user_id, content_key,
+                verdict, answer, notes, created_at, updated_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                cid,
+                analysis_id,
+                requirement_id,
+                user_id,
+                content_key,
+                verdict,
+                answer,
+                cleaned_notes,
+                created_at,
+                now,
+            ),
+        )
+    return {
+        "id": cid,
+        "analysis_id": analysis_id,
+        "requirement_id": requirement_id,
+        "user_id": user_id,
+        "content_key": content_key,
+        "verdict": verdict,
+        "answer": answer,
+        "notes": cleaned_notes,
+        "created_at": created_at,
+        "updated_at": now,
+    }
+
+
+def delete_correction(
+    analysis_id: str,
+    requirement_id: str,
+    user_id: str,
+) -> bool:
+    cid = _correction_id(str(analysis_id), requirement_id, user_id)
+    with _connect() as conn:
+        cur = conn.execute(
+            "DELETE FROM requirement_corrections WHERE id = ?",
+            (cid,),
+        )
+        return cur.rowcount > 0
+
+
+def get_correction(
+    analysis_id: str,
+    requirement_id: str,
+    user_id: str,
+) -> Optional[dict[str, Any]]:
+    cid = _correction_id(str(analysis_id), requirement_id, user_id)
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT id, analysis_id, requirement_id, user_id, content_key,
+                   verdict, answer, notes, created_at, updated_at
+            FROM requirement_corrections
+            WHERE id = ?
+            """,
+            (cid,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def list_corrections_for_analysis(
+    analysis_id: str, user_id: str
+) -> list[dict[str, Any]]:
+    """Toutes les corrections de l'utilisateur courant pour cette analyse."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, analysis_id, requirement_id, user_id, content_key,
+                   verdict, answer, notes, created_at, updated_at
+            FROM requirement_corrections
+            WHERE analysis_id = ? AND user_id = ?
+            ORDER BY updated_at DESC
+            """,
+            (str(analysis_id), user_id),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_corrections_by_requirement_id(
+    analysis_id: str, user_id: str
+) -> dict[str, dict[str, Any]]:
+    """Map ``requirement_id → correction`` pour la ré-analyse du même CDC."""
+    return {
+        r["requirement_id"]: r
+        for r in list_corrections_for_analysis(analysis_id, user_id)
+    }
+
+
+def get_corrections_by_content_key(
+    user_id: str, content_keys: list[str]
+) -> dict[str, dict[str, Any]]:
+    """Map ``content_key → correction la plus récente`` pour les futurs CDCs.
+
+    Si plusieurs corrections existent pour la même content_key (issues de
+    différentes analyses), on retient la plus récente (max(updated_at)).
+    """
+    if not content_keys:
+        return {}
+    placeholders = ",".join("?" for _ in content_keys)
+    query = f"""
+        SELECT id, analysis_id, requirement_id, user_id, content_key,
+               verdict, answer, notes, created_at, updated_at
+        FROM requirement_corrections
+        WHERE user_id = ? AND content_key IN ({placeholders})
+        ORDER BY updated_at DESC
+    """
+    out: dict[str, dict[str, Any]] = {}
+    with _connect() as conn:
+        rows = conn.execute(query, (user_id, *content_keys)).fetchall()
+        for r in rows:
+            ck = r["content_key"]
+            if ck not in out:  # première (= plus récente) gagne
+                out[ck] = dict(r)
+    return out
 
 
 # ---------------------------------------------------------------------------

@@ -44,6 +44,7 @@ import { cn } from "@/lib/utils";
 import type {
   AnalysisSummary,
   Requirement,
+  RequirementCorrection,
   RequirementFeedback,
   RequirementStatus,
 } from "@/lib/types";
@@ -66,14 +67,30 @@ const SIRH_DOMAIN_ORDER = [
 ];
 
 const STATUS_CHIPS: { key: StatusFilter; label: string; chipClass: string }[] = [
-  { key: "all", label: "Tous", chipClass: "bg-muted text-foreground" },
-  { key: "covered", label: "Couverts", chipClass: "bg-success/10 text-success" },
-  { key: "partial", label: "Partiels", chipClass: "bg-warning/10 text-warning" },
-  { key: "missing", label: "Manquants", chipClass: "bg-danger/10 text-danger" },
+  {
+    key: "all",
+    label: "Tous",
+    chipClass: "border-accent/25 bg-accent-soft text-accent",
+  },
+  {
+    key: "covered",
+    label: "Couverts",
+    chipClass: "border-success/25 bg-success-soft text-success",
+  },
+  {
+    key: "partial",
+    label: "Partiels",
+    chipClass: "border-warning/25 bg-warning-soft text-warning",
+  },
+  {
+    key: "missing",
+    label: "Manquants",
+    chipClass: "border-danger/25 bg-danger-soft text-danger",
+  },
   {
     key: "ambiguous",
     label: "Ambigus",
-    chipClass: "bg-muted text-muted-foreground",
+    chipClass: "border-soft bg-muted/40 text-muted-foreground",
   },
 ];
 
@@ -139,6 +156,9 @@ export function CdcReport({
   const [openDomains, setOpenDomains] = React.useState<Set<string>>(new Set());
   const [view, setView] = React.useState<ViewMode>("report");
   const [feedbackList, setFeedbackList] = React.useState<RequirementFeedback[]>([]);
+  const [correctionList, setCorrectionList] = React.useState<
+    RequirementCorrection[]
+  >([]);
 
   // Charger préférence groupBy depuis localStorage côté client.
   React.useEffect(() => {
@@ -163,15 +183,38 @@ export function CdcReport({
     }
   }, [analysisId]);
 
+  const reloadCorrections = React.useCallback(async () => {
+    if (!analysisId) {
+      setCorrectionList([]);
+      return;
+    }
+    try {
+      const cs = await api.getAnalysisCorrections(analysisId);
+      setCorrectionList(cs);
+    } catch {
+      // silencieux : ne bloque pas l'affichage
+    }
+  }, [analysisId]);
+
   React.useEffect(() => {
     void reloadFeedback();
   }, [reloadFeedback]);
+
+  React.useEffect(() => {
+    void reloadCorrections();
+  }, [reloadCorrections]);
 
   const feedbackByRequirement = React.useMemo(() => {
     const m = new Map<string, RequirementFeedback>();
     for (const f of feedbackList) m.set(f.requirement_id, f);
     return m;
   }, [feedbackList]);
+
+  const correctionByRequirement = React.useMemo(() => {
+    const m = new Map<string, RequirementCorrection>();
+    for (const c of correctionList) m.set(c.requirement_id, c);
+    return m;
+  }, [correctionList]);
 
   const handleExport = async (fmt: "xlsx" | "md") => {
     if (cdcId === null) return;
@@ -307,7 +350,7 @@ export function CdcReport({
 
   return (
     <div className="flex h-full flex-col">
-      <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border bg-background px-4 md:px-6">
+      <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center justify-between gap-3 border-b border-soft bg-background/80 px-4 backdrop-blur-md md:px-6">
         <div className="flex min-w-0 items-center gap-3">
           <h1 className="truncate text-base font-semibold">{filename}</h1>
           <Badge variant={statusBadgeVariant}>
@@ -393,13 +436,15 @@ export function CdcReport({
         </div>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col md:flex-row">
-          <aside className="flex w-full shrink-0 flex-col gap-4 self-start border-b border-border p-4 md:sticky md:top-14 md:w-80 md:border-b-0 md:border-r md:p-6">
-            <div className="flex justify-center">
-              <CoverageDonut percent={coveragePercent} />
+          <aside className="flex w-full shrink-0 flex-col gap-4 self-start border-b border-soft p-4 md:sticky md:top-14 md:w-80 md:border-b-0 md:border-r md:p-6">
+            <div className="rounded-2xl border border-soft bg-card p-4 shadow-tinted-sm">
+              <div className="flex justify-center">
+                <CoverageDonut percent={coveragePercent} />
+              </div>
             </div>
 
             {overallConfidence !== null ? (
-              <div className="rounded-md border border-border p-3">
+              <div className="rounded-2xl border border-soft bg-card p-3 shadow-tinted-sm">
                 <ConfidenceGauge
                   value={overallConfidence}
                   caption={`Confiance moyenne · ${Math.round(overallConfidence * 100)}%`}
@@ -492,10 +537,10 @@ export function CdcReport({
                   type="button"
                   onClick={() => setStatusFilter(chip.key)}
                   className={cn(
-                    "flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium transition-colors",
+                    "flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-all",
                     statusFilter === chip.key
                       ? chip.chipClass
-                      : "bg-background text-muted-foreground hover:bg-muted/50"
+                      : "border-soft bg-card text-muted-foreground hover:-translate-y-0.5 hover:border-accent/30 hover:text-accent",
                   )}
                 >
                   <span>{chip.label}</span>
@@ -503,8 +548,8 @@ export function CdcReport({
                     className={cn(
                       "rounded-full px-1.5 py-0.5 text-[10px] font-semibold tabular-nums",
                       statusFilter === chip.key
-                        ? "bg-background/50"
-                        : "bg-muted text-muted-foreground"
+                        ? "bg-background/60"
+                        : "bg-muted/60 text-muted-foreground",
                     )}
                   >
                     {counts[chip.key]}
@@ -623,6 +668,7 @@ export function CdcReport({
                     key={r.id}
                     requirement={r}
                     feedbackVote={feedbackByRequirement.get(r.id)?.vote ?? null}
+                    corrected={correctionByRequirement.has(r.id)}
                     onClick={() => openRow(r)}
                   />
                 ))
@@ -665,6 +711,7 @@ export function CdcReport({
                               feedbackVote={
                                 feedbackByRequirement.get(r.id)?.vote ?? null
                               }
+                              corrected={correctionByRequirement.has(r.id)}
                               onClick={() => openRow(r)}
                             />
                           ))
@@ -684,12 +731,17 @@ export function CdcReport({
         feedback={
           activeReq ? feedbackByRequirement.get(activeReq.id) ?? null : null
         }
+        correction={
+          activeReq ? correctionByRequirement.get(activeReq.id) ?? null : null
+        }
         open={sheetOpen}
         onOpenChange={setSheetOpen}
         onFeedbackChange={reloadFeedback}
+        onCorrectionChange={reloadCorrections}
         onAnalysisRefreshed={async () => {
           if (onRefresh) await onRefresh();
           await reloadFeedback();
+          await reloadCorrections();
         }}
       />
     </div>

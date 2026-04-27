@@ -1210,6 +1210,74 @@ def _write_cache(path: str, report: dict[str, Any]) -> None:
         logger.warning("Failed to write cache %s: %s", path, exc)
 
 
+def _apply_corrections_overrides(
+    analysed: list[dict[str, Any]], user_id: str
+) -> list[dict[str, Any]]:
+    """Écrase status + verdict des exigences pour lesquelles l'utilisateur a
+    enregistré une correction validée.
+
+    Lookup par ``content_key`` (sha256 normalisé de category+subdomain+title)
+    pour que la correction d'une exigence faite sur un CDC précédent s'applique
+    automatiquement à un nouveau CDC qui contient la même exigence.
+
+    Renvoie la liste avec les requirements corrigés in-place.
+    """
+    if not analysed or not user_id:
+        return analysed
+    try:
+        from . import workspace as _ws  # import local pour éviter le cycle
+    except Exception as exc:
+        logger.warning("Corrections : import workspace impossible : %s", exc)
+        return analysed
+
+    # 1. Calculer la content_key pour chaque exigence
+    keys: list[str] = []
+    for r in analysed:
+        keys.append(
+            _ws.compute_content_key(
+                category=r.get("category"),
+                subdomain=r.get("subdomain"),
+                title=r.get("title"),
+            )
+        )
+    unique_keys = list({k for k in keys if k})
+    if not unique_keys:
+        return analysed
+
+    # 2. Bulk lookup
+    try:
+        corrections = _ws.get_corrections_by_content_key(user_id, unique_keys)
+    except Exception as exc:
+        logger.warning(
+            "Corrections : lecture impossible (user=%s) : %s", user_id, exc
+        )
+        return analysed
+    if not corrections:
+        return analysed
+
+    # 3. Override
+    overridden = 0
+    for req, key in zip(analysed, keys):
+        corr = corrections.get(key)
+        if not corr:
+            continue
+        req["status"] = corr["verdict"]
+        req["verdict"] = corr["answer"]
+        req["correction_applied"] = True
+        req["correction_source_analysis_id"] = corr.get("analysis_id")
+        req["correction_updated_at"] = corr.get("updated_at")
+        # Confiance maximale sur un verdict humain validé.
+        req["confidence"] = 1.0
+        req["llm_confidence"] = 1.0
+        overridden += 1
+    if overridden:
+        logger.info(
+            "Corrections : %d exigence(s) écrasée(s) par verdict humain (user=%s)",
+            overridden, user_id,
+        )
+    return analysed
+
+
 async def run_gap_analysis(
     cdc_file_path: str,
     cdc_ext: str,
@@ -1457,6 +1525,13 @@ async def run_gap_analysis(
                         analysed[i] = new_r
             except Exception as exc:
                 logger.warning("Re-pass skipped due to error: %s", exc)
+
+    # Step 3.6 — overrides humains (corrections validées)
+    # On écrase verdict + status sur les exigences pour lesquelles l'utilisateur
+    # a sauvegardé une correction. Lookup par content_key (category + subdomain
+    # + title) → matche aussi à travers plusieurs CDCs (futurs CDCs avec une
+    # exigence libellée à l'identique).
+    analysed = _apply_corrections_overrides(analysed, user_id)
 
     # Step 4 — summary
     counts = {"covered": 0, "partial": 0, "missing": 0, "ambiguous": 0}

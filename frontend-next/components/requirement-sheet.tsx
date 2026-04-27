@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Loader2, ThumbsDown, ThumbsUp, Trash2, Wand2 } from "lucide-react";
+import { CheckCircle2, Loader2, ShieldCheck, ThumbsDown, ThumbsUp, Trash2, Wand2 } from "lucide-react";
 import {
   Sheet,
   SheetContent,
@@ -27,7 +27,13 @@ import {
 } from "@/components/requirement-row";
 import { api } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
-import type { AnalysisJob, Requirement, RequirementFeedback } from "@/lib/types";
+import type {
+  AnalysisJob,
+  Requirement,
+  RequirementCorrection,
+  RequirementCorrectionVerdict,
+  RequirementFeedback,
+} from "@/lib/types";
 
 function formatDate(iso?: string): string {
   if (!iso) return "";
@@ -40,17 +46,21 @@ export function RequirementSheet({
   requirement,
   analysisId,
   feedback,
+  correction,
   open,
   onOpenChange,
   onFeedbackChange,
+  onCorrectionChange,
   onAnalysisRefreshed,
 }: {
   requirement: Requirement | null;
   analysisId?: number | string | null;
   feedback?: RequirementFeedback | null;
+  correction?: RequirementCorrection | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onFeedbackChange?: () => void | Promise<void>;
+  onCorrectionChange?: () => void | Promise<void>;
   onAnalysisRefreshed?: () => void | Promise<void>;
 }) {
   const { toast } = useToast();
@@ -61,6 +71,14 @@ export function RequirementSheet({
   const [showBreakdown, setShowBreakdown] = React.useState(false);
   const [repassBusy, setRepassBusy] = React.useState(false);
 
+  // État local pour la correction validée.
+  const [corrVerdict, setCorrVerdict] =
+    React.useState<RequirementCorrectionVerdict | null>(null);
+  const [corrAnswer, setCorrAnswer] = React.useState("");
+  const [corrNotes, setCorrNotes] = React.useState("");
+  const [corrBusy, setCorrBusy] = React.useState(false);
+  const [corrEditing, setCorrEditing] = React.useState(false);
+
   // Reset local state quand on change d'exigence ou que le feedback change.
   React.useEffect(() => {
     setVote(feedback?.vote ?? null);
@@ -68,6 +86,14 @@ export function RequirementSheet({
     setEditing(false);
     setShowBreakdown(false);
   }, [requirement?.id, feedback?.vote, feedback?.comment]);
+
+  // Reset correction state quand l'exigence ou la correction change.
+  React.useEffect(() => {
+    setCorrVerdict(correction?.verdict ?? null);
+    setCorrAnswer(correction?.answer ?? "");
+    setCorrNotes(correction?.notes ?? "");
+    setCorrEditing(false);
+  }, [requirement?.id, correction?.verdict, correction?.answer, correction?.notes]);
 
   const launchRepass = async () => {
     if (!requirement || !analysisId) return;
@@ -110,6 +136,59 @@ export function RequirementSheet({
   const canEdit = analysisId !== null && analysisId !== undefined;
   const hasSavedFeedback = !!feedback;
   const showFeedbackForm = !hasSavedFeedback || editing;
+
+  const hasSavedCorrection = !!correction;
+  const showCorrectionForm = !hasSavedCorrection || corrEditing;
+
+  const submitCorrection = async () => {
+    if (!requirement || !analysisId || !corrVerdict) return;
+    if (!corrAnswer.trim()) {
+      toast({
+        title: "Description manquante",
+        description: "Décrivez la couverture validée.",
+        variant: "destructive",
+      });
+      return;
+    }
+    setCorrBusy(true);
+    try {
+      await api.submitCorrection(analysisId, requirement.id, {
+        verdict: corrVerdict,
+        answer: corrAnswer.trim(),
+        notes: corrNotes.trim() || null,
+        category: requirement.category,
+        subdomain: requirement.subdomain ?? null,
+        title: requirement.title,
+      });
+      toast({ title: "Correction enregistrée" });
+      setCorrEditing(false);
+      if (onCorrectionChange) await onCorrectionChange();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Erreur d'enregistrement";
+      toast({ title: "Erreur", description: msg, variant: "destructive" });
+    } finally {
+      setCorrBusy(false);
+    }
+  };
+
+  const removeCorrection = async () => {
+    if (!requirement || !analysisId) return;
+    setCorrBusy(true);
+    try {
+      await api.deleteCorrection(analysisId, requirement.id);
+      setCorrVerdict(null);
+      setCorrAnswer("");
+      setCorrNotes("");
+      setCorrEditing(false);
+      toast({ title: "Correction supprimée" });
+      if (onCorrectionChange) await onCorrectionChange();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Erreur de suppression";
+      toast({ title: "Erreur", description: msg, variant: "destructive" });
+    } finally {
+      setCorrBusy(false);
+    }
+  };
 
   const submitVote = async () => {
     if (!requirement || !analysisId || !vote) return;
@@ -327,6 +406,172 @@ export function RequirementSheet({
                 {canEdit ? (
                   <>
                     <Separator />
+                    <section>
+                      <div className="mb-1 flex items-center gap-2">
+                        <ShieldCheck className="h-4 w-4 text-accent" aria-hidden />
+                        <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                          Correction validée
+                        </h3>
+                      </div>
+                      <p className="mb-3 text-xs text-muted-foreground">
+                        Saisissez le verdict réel et la description de la
+                        couverture. Cette correction écrase le verdict du LLM
+                        et sera réutilisée à la ré-analyse de ce CDC{" "}
+                        <strong>et sur les futurs CDCs</strong> contenant la
+                        même exigence.
+                      </p>
+
+                      {hasSavedCorrection && !corrEditing ? (
+                        <div className="rounded-2xl border border-accent/25 bg-accent-soft/50 p-3 shadow-tinted-sm">
+                          <div className="flex flex-wrap items-center gap-2 text-sm">
+                            <CheckCircle2
+                              className="h-4 w-4 text-accent"
+                              aria-hidden
+                            />
+                            <span>
+                              Verdict validé :{" "}
+                              <strong>
+                                {correction!.verdict === "covered"
+                                  ? "Couvert"
+                                  : correction!.verdict === "partial"
+                                  ? "Partiel"
+                                  : "Manquant"}
+                              </strong>
+                              {correction!.updated_at
+                                ? ` · ${formatDate(correction!.updated_at)}`
+                                : ""}
+                            </span>
+                          </div>
+                          <p className="mt-2 whitespace-pre-wrap text-sm text-foreground">
+                            {correction!.answer}
+                          </p>
+                          {correction!.notes ? (
+                            <p className="mt-2 whitespace-pre-wrap text-xs text-muted-foreground">
+                              Notes : {correction!.notes}
+                            </p>
+                          ) : null}
+                          <div className="mt-3 flex gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => setCorrEditing(true)}
+                              disabled={corrBusy}
+                            >
+                              Modifier
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => void removeCorrection()}
+                              disabled={corrBusy}
+                              className="text-danger hover:text-danger"
+                            >
+                              {corrBusy ? (
+                                <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                              ) : (
+                                <Trash2 className="mr-1 h-3 w-3" />
+                              )}
+                              Effacer
+                            </Button>
+                          </div>
+                        </div>
+                      ) : null}
+
+                      {showCorrectionForm ? (
+                        <div className="space-y-3">
+                          <div className="grid grid-cols-3 gap-2">
+                            {(
+                              [
+                                {
+                                  v: "covered" as const,
+                                  label: "Couvert",
+                                  active:
+                                    "border-success/40 bg-success-soft text-success",
+                                },
+                                {
+                                  v: "partial" as const,
+                                  label: "Partiel",
+                                  active:
+                                    "border-warning/40 bg-warning-soft text-warning",
+                                },
+                                {
+                                  v: "missing" as const,
+                                  label: "Manquant",
+                                  active:
+                                    "border-danger/40 bg-danger-soft text-danger",
+                                },
+                              ]
+                            ).map((opt) => (
+                              <button
+                                key={opt.v}
+                                type="button"
+                                onClick={() => setCorrVerdict(opt.v)}
+                                className={cn(
+                                  "rounded-full border px-3 py-2 text-sm font-medium transition-all",
+                                  corrVerdict === opt.v
+                                    ? opt.active
+                                    : "border-soft bg-background text-muted-foreground hover:border-accent/30 hover:text-accent",
+                                )}
+                                disabled={corrBusy}
+                              >
+                                {opt.label}
+                              </button>
+                            ))}
+                          </div>
+                          <Textarea
+                            value={corrAnswer}
+                            onChange={(e) => setCorrAnswer(e.target.value)}
+                            placeholder="Décrivez précisément comment la solution couvre (ou non) cette exigence — cette description remplace le verdict du LLM."
+                            disabled={corrBusy}
+                            rows={5}
+                          />
+                          <Textarea
+                            value={corrNotes}
+                            onChange={(e) => setCorrNotes(e.target.value)}
+                            placeholder="Notes internes (optionnel)"
+                            disabled={corrBusy}
+                            rows={2}
+                          />
+                          <div className="flex flex-wrap gap-2">
+                            <Button
+                              size="sm"
+                              onClick={() => void submitCorrection()}
+                              disabled={
+                                corrBusy || !corrVerdict || !corrAnswer.trim()
+                              }
+                            >
+                              {corrBusy ? (
+                                <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                              ) : null}
+                              Enregistrer la correction
+                            </Button>
+                            {hasSavedCorrection && corrEditing ? (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => {
+                                  setCorrEditing(false);
+                                  setCorrVerdict(correction?.verdict ?? null);
+                                  setCorrAnswer(correction?.answer ?? "");
+                                  setCorrNotes(correction?.notes ?? "");
+                                }}
+                                disabled={corrBusy}
+                              >
+                                Annuler
+                              </Button>
+                            ) : null}
+                          </div>
+                          <p className="text-[11px] text-muted-foreground">
+                            Sera ré-utilisé sur les futurs CDCs contenant une
+                            exigence avec la même catégorie, le même
+                            sous-domaine et le même titre.
+                          </p>
+                        </div>
+                      ) : null}
+                    </section>
+
+                    <Separator />
+
                     <section>
                       <h3 className="mb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                         Votre avis sur ce verdict

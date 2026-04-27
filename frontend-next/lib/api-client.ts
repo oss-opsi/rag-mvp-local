@@ -14,6 +14,8 @@ import type {
   QualityDashboard,
   QueryResponse,
   RefreshJob,
+  RequirementCorrection,
+  RequirementCorrectionVerdict,
   RequirementFeedback,
   Schedule,
   UploadResponse,
@@ -388,6 +390,66 @@ export const api = {
       `/api/workspace/analyses/${encodeURIComponent(
         String(analysisId),
       )}/requirements/${encodeURIComponent(requirementId)}/feedback`,
+      { method: "DELETE" },
+    );
+    await handle(res);
+  },
+
+  async getAnalysisCorrections(
+    analysisId: number | string,
+  ): Promise<RequirementCorrection[]> {
+    const res = await fetch(
+      `/api/workspace/analyses/${encodeURIComponent(
+        String(analysisId),
+      )}/corrections`,
+    );
+    const data = await handle<{
+      analysis_id: string;
+      corrections: RequirementCorrection[];
+    }>(res);
+    return data.corrections || [];
+  },
+
+  async submitCorrection(
+    analysisId: number | string,
+    requirementId: string,
+    payload: {
+      verdict: RequirementCorrectionVerdict;
+      answer: string;
+      notes?: string | null;
+      category?: string | null;
+      subdomain?: string | null;
+      title?: string | null;
+    },
+  ): Promise<RequirementCorrection> {
+    const res = await fetch(
+      `/api/workspace/analyses/${encodeURIComponent(
+        String(analysisId),
+      )}/requirements/${encodeURIComponent(requirementId)}/correction`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          verdict: payload.verdict,
+          answer: payload.answer,
+          notes: payload.notes ?? null,
+          category: payload.category ?? null,
+          subdomain: payload.subdomain ?? null,
+          title: payload.title ?? null,
+        }),
+      },
+    );
+    return handle<RequirementCorrection>(res);
+  },
+
+  async deleteCorrection(
+    analysisId: number | string,
+    requirementId: string,
+  ): Promise<void> {
+    const res = await fetch(
+      `/api/workspace/analyses/${encodeURIComponent(
+        String(analysisId),
+      )}/requirements/${encodeURIComponent(requirementId)}/correction`,
       { method: "DELETE" },
     );
     await handle(res);

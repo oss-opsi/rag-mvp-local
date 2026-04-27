@@ -196,6 +196,21 @@ export type RequirementFeedback = {
   updated_at: string;
 };
 
+export type RequirementCorrectionVerdict = "covered" | "partial" | "missing";
+
+export type RequirementCorrection = {
+  id?: string;
+  analysis_id?: string;
+  requirement_id: string;
+  user_id?: string;
+  content_key?: string;
+  verdict: RequirementCorrectionVerdict;
+  answer: string;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type QualityDashboard = {
   analysis_id: string;
   total_votes: number;

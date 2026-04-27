@@ -4,7 +4,6 @@ import * as React from "react";
 import { Loader2, Play, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { UploadDropzone } from "@/components/upload-dropzone";
 import { ContextPanel } from "@/components/context-panel";
 import { useToast } from "@/components/ui/use-toast";
@@ -456,32 +455,27 @@ export default function AnalysePage() {
                   />
                 </label>
               </div>
-              <ScrollArea className="rounded-md border border-border">
-                <ul>
-                  {currentCdcs.map((c) => (
-                    <li
-                      key={c.id}
-                      className="flex h-11 items-center justify-between gap-3 border-b border-border px-4 last:border-b-0"
+              <ul className="grid gap-2">
+                {currentCdcs.map((c) => (
+                  <li key={c.id}>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedCdcId(c.id)}
+                      className="group flex w-full min-w-0 items-center gap-3 rounded-2xl border border-soft bg-card px-4 py-3 text-left shadow-tinted-sm transition-all hover:-translate-y-0.5 hover:border-accent/30 hover:shadow-tinted-md"
                     >
-                      <button
-                        type="button"
-                        onClick={() => setSelectedCdcId(c.id)}
-                        className="flex min-w-0 flex-1 items-center gap-3 text-left"
-                      >
-                        <span className="truncate text-sm font-medium">
-                          {c.filename}
-                        </span>
-                        <StatusPill status={c.status} />
-                        {typeof c.coverage_percent === "number" ? (
-                          <Badge variant="secondary" className="tabular-nums">
-                            {c.coverage_percent.toFixed(0)}%
-                          </Badge>
-                        ) : null}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </ScrollArea>
+                      <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                        {c.filename}
+                      </span>
+                      <StatusPill status={c.status} />
+                      {typeof c.coverage_percent === "number" ? (
+                        <Badge variant="secondary" className="tabular-nums">
+                          {c.coverage_percent.toFixed(0)}%
+                        </Badge>
+                      ) : null}
+                    </button>
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
         </div>
@@ -643,16 +637,42 @@ function buildReportFromDetail(detail: CdcDetail): Report | null {
 
 function StatusPill({ status }: { status: string }) {
   const map: Record<string, { label: string; cls: string }> = {
-    pending: { label: "En attente", cls: "bg-muted text-muted-foreground" },
-    uploaded: { label: "Importé", cls: "bg-muted text-muted-foreground" },
-    parsing: { label: "Parsing", cls: "bg-warning/10 text-warning" },
-    analysing: { label: "Analyse", cls: "bg-warning/10 text-warning" },
-    analyzed: { label: "Analysé", cls: "bg-success/10 text-success" },
-    error: { label: "Erreur", cls: "bg-danger/10 text-danger" },
+    pending: {
+      label: "En attente",
+      cls: "border-soft bg-muted/40 text-muted-foreground",
+    },
+    uploaded: {
+      label: "Importé",
+      cls: "border-soft bg-muted/40 text-muted-foreground",
+    },
+    parsing: {
+      label: "Parsing",
+      cls: "border-warning/25 bg-warning-soft text-warning",
+    },
+    analysing: {
+      label: "Analyse",
+      cls: "border-warning/25 bg-warning-soft text-warning",
+    },
+    analyzed: {
+      label: "Analysé",
+      cls: "border-success/25 bg-success-soft text-success",
+    },
+    error: {
+      label: "Erreur",
+      cls: "border-danger/25 bg-danger-soft text-danger",
+    },
   };
-  const m = map[status] || { label: status, cls: "bg-muted text-muted-foreground" };
+  const m = map[status] || {
+    label: status,
+    cls: "border-soft bg-muted/40 text-muted-foreground",
+  };
   return (
-    <span className={cn("rounded px-2 py-0.5 text-xs font-medium", m.cls)}>
+    <span
+      className={cn(
+        "inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-medium",
+        m.cls,
+      )}
+    >
       {m.label}
     </span>
   );
