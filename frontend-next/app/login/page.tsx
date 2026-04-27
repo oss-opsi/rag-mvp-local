@@ -96,7 +96,7 @@ function HeroIllustration() {
 function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const nextPath = searchParams.get("next") || "/documents";
+  const nextPath = searchParams.get("next") || "/chat";
 
   const [username, setUsername] = React.useState("");
   const [password, setPassword] = React.useState("");
@@ -211,7 +211,7 @@ function LoginForm() {
             </div>
 
             {error ? (
-              <div className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">
+              <div className="rounded-2xl border border-danger/25 bg-danger-soft px-3 py-2 text-sm text-danger shadow-tinted-sm">
                 {error}
               </div>
             ) : null}
