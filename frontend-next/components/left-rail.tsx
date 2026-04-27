@@ -64,8 +64,17 @@ const ADMIN_NAV: NavItem[] = [
  */
 export function LeftRail() {
   return (
-    <aside className="hidden h-full w-[80px] shrink-0 flex-col items-center border-r border-border bg-background md:flex">
-      <LeftRailContent />
+    <aside
+      className="relative hidden h-full w-[80px] shrink-0 flex-col items-center border-r border-soft bg-gradient-to-b from-accent-soft/60 via-surface-2 to-surface-2 md:flex"
+    >
+      {/* Halo très doux en haut, façon hero du mockup */}
+      <div
+        className="pointer-events-none absolute inset-x-0 top-0 h-40 bg-[radial-gradient(ellipse_at_top,_hsl(var(--accent)/0.12),_transparent_70%)]"
+        aria-hidden
+      />
+      <div className="relative z-10 flex h-full w-full flex-col items-center">
+        <LeftRailContent />
+      </div>
     </aside>
   );
 }
@@ -99,7 +108,7 @@ export function LeftRailContent({
     <TooltipProvider delayDuration={200}>
       <div className="flex h-full w-full flex-col items-center">
         {/* Logo Ω */}
-        <div className="flex h-16 w-full items-center justify-center border-b border-border">
+        <div className="flex h-16 w-full items-center justify-center border-b border-soft">
           <Link
             href="/chat"
             onClick={onNavigate}
@@ -123,10 +132,10 @@ export function LeftRailContent({
                     aria-label={item.label}
                     onClick={onNavigate}
                     className={cn(
-                      "relative flex h-11 w-11 items-center justify-center rounded-lg text-muted-foreground transition-colors",
+                      "relative flex h-11 w-11 items-center justify-center rounded-xl text-muted-foreground transition-all",
                       active
-                        ? "bg-accent/10 text-accent"
-                        : "hover:bg-muted hover:text-foreground"
+                        ? "bg-accent-soft text-accent shadow-tinted-sm"
+                        : "hover:bg-card/80 hover:text-foreground hover:shadow-tinted-sm",
                     )}
                   >
                     {active ? (
@@ -141,7 +150,7 @@ export function LeftRailContent({
           })}
 
           {/* Séparateur */}
-          <div className="my-2 h-px w-8 bg-border" aria-hidden />
+          <div className="my-2 h-px w-8 bg-[hsl(var(--border-soft))]" aria-hidden />
 
           {/* Navigation secondaire */}
           {secondaryNav.map((item) => {
@@ -155,10 +164,10 @@ export function LeftRailContent({
                     aria-label={item.label}
                     onClick={onNavigate}
                     className={cn(
-                      "relative flex h-11 w-11 items-center justify-center rounded-lg text-muted-foreground transition-colors",
+                      "relative flex h-11 w-11 items-center justify-center rounded-xl text-muted-foreground transition-all",
                       active
-                        ? "bg-accent/10 text-accent"
-                        : "hover:bg-muted hover:text-foreground"
+                        ? "bg-accent-soft text-accent shadow-tinted-sm"
+                        : "hover:bg-card/80 hover:text-foreground hover:shadow-tinted-sm",
                     )}
                   >
                     {active ? (
