@@ -216,6 +216,24 @@ export function CdcReport({
     return m;
   }, [correctionList]);
 
+  // Vue effective : applique les corrections humaines validées comme override
+  // sur status + confidence — un verdict humain l'emporte sur le LLM,
+  // immédiatement, sans attendre un repass ni une ré-analyse complète.
+  // Le verdict text du LLM est conservé tel quel : la description humaine
+  // est affichée séparément dans le panneau "Correction validée" du sheet.
+  const requirementsView = React.useMemo(() => {
+    if (correctionByRequirement.size === 0) return requirements;
+    return requirements.map((r) => {
+      const corr = correctionByRequirement.get(r.id);
+      if (!corr) return r;
+      return {
+        ...r,
+        status: corr.verdict,
+        confidence: 1,
+      };
+    });
+  }, [requirements, correctionByRequirement]);
+
   const handleExport = async (fmt: "xlsx" | "md") => {
     if (cdcId === null) return;
     setExporting(fmt);
@@ -231,15 +249,15 @@ export function CdcReport({
 
   const categories = React.useMemo(() => {
     const set = new Set<string>();
-    for (const r of requirements) {
+    for (const r of requirementsView) {
       if (r.category) set.add(r.category);
     }
     return Array.from(set).sort();
-  }, [requirements]);
+  }, [requirementsView]);
 
   const filtered = React.useMemo(() => {
     const q = search.trim().toLowerCase();
-    const list = requirements.filter((r) => {
+    const list = requirementsView.filter((r) => {
       if (statusFilter !== "all" && r.status !== statusFilter) return false;
       if (selectedCategories.size > 0 && !selectedCategories.has(r.category))
         return false;
@@ -255,13 +273,13 @@ export function CdcReport({
       });
     }
     return list;
-  }, [requirements, statusFilter, search, selectedCategories, sortByConfidence]);
+  }, [requirementsView, statusFilter, search, selectedCategories, sortByConfidence]);
 
   // Counts per status, applied AFTER category + search filters so chips reflect
   // what the user would see after each toggle.
   const counts = React.useMemo(() => {
     const q = search.trim().toLowerCase();
-    const base = requirements.filter((r) => {
+    const base = requirementsView.filter((r) => {
       if (selectedCategories.size > 0 && !selectedCategories.has(r.category))
         return false;
       if (q && !`${r.id} ${r.title} ${r.description}`.toLowerCase().includes(q))
@@ -280,7 +298,7 @@ export function CdcReport({
       if (k in acc) acc[k] += 1;
     }
     return acc;
-  }, [requirements, selectedCategories, search]);
+  }, [requirementsView, selectedCategories, search]);
 
   const groupedByDomain = React.useMemo(() => {
     const groups = new Map<string, Requirement[]>();
@@ -296,8 +314,8 @@ export function CdcReport({
   }, [filtered]);
 
   const overallConfidence = React.useMemo(
-    () => avgConfidence(requirements),
-    [requirements],
+    () => avgConfidence(requirementsView),
+    [requirementsView],
   );
 
   const toggleCategory = (cat: string) => {
@@ -324,7 +342,7 @@ export function CdcReport({
   };
 
   const openRequirementById = (rid: string) => {
-    const r = requirements.find((x) => x.id === rid);
+    const r = requirementsView.find((x) => x.id === rid);
     if (r) {
       setView("report");
       setActiveReq(r);
@@ -332,16 +350,37 @@ export function CdcReport({
     }
   };
 
-  const coveragePercent =
-    typeof summary?.coverage_percent === "number" ? summary.coverage_percent : 0;
-  const safeSummary = {
-    total: summary?.total ?? 0,
-    covered: summary?.covered ?? 0,
-    partial: summary?.partial ?? 0,
-    missing: summary?.missing ?? 0,
-    ambiguous: summary?.ambiguous ?? 0,
-    coverage_percent: coveragePercent,
-  };
+  // Summary effectif : recalculé depuis requirementsView pour qu'il reflète
+  // les corrections humaines validées sans attendre une ré-analyse complète.
+  const safeSummary = React.useMemo(() => {
+    if (correctionByRequirement.size === 0 && summary) {
+      return {
+        total: summary.total ?? 0,
+        covered: summary.covered ?? 0,
+        partial: summary.partial ?? 0,
+        missing: summary.missing ?? 0,
+        ambiguous: summary.ambiguous ?? 0,
+        coverage_percent:
+          typeof summary.coverage_percent === "number"
+            ? summary.coverage_percent
+            : 0,
+      };
+    }
+    const total = requirementsView.length;
+    const acc = { covered: 0, partial: 0, missing: 0, ambiguous: 0 };
+    for (const r of requirementsView) {
+      const k = r.status as keyof typeof acc;
+      if (k in acc) acc[k] += 1;
+    }
+    const coverage = total > 0 ? (acc.covered + 0.5 * acc.partial) / total : 0;
+    return {
+      total,
+      ...acc,
+      coverage_percent: Math.round(coverage * 1000) / 10,
+    };
+  }, [requirementsView, summary, correctionByRequirement]);
+
+  const coveragePercent = safeSummary.coverage_percent;
   const statusBadgeVariant = (() => {
     if (coveragePercent >= 70) return "success" as const;
     if (coveragePercent >= 40) return "warning" as const;
@@ -426,7 +465,7 @@ export function CdcReport({
         <div className="min-h-0 flex-1">
           <QualityDashboard
             analysisId={analysisId}
-            requirements={requirements}
+            requirements={requirementsView}
             onOpenRequirement={openRequirementById}
             onAnalysisRefreshed={async () => {
               if (onRefresh) await onRefresh();
