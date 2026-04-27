@@ -121,6 +121,11 @@ workspace.init_db()
 ingestion_jobs.init_db()
 gap_analysis_jobs.init_db()
 
+# Page Admin Planificateur (cf. backend/rag/scheduler/) — tables SQLite
+# créées au démarrage. APScheduler est armé via le startup event plus bas.
+from rag.scheduler import init_scheduler_db as _init_scheduler_db
+_init_scheduler_db()
+
 
 def _cleanup_mismatched_embedding_collections() -> None:
     """v3.7.0 upgrade: drop Qdrant collections whose vector size no longer
@@ -483,6 +488,27 @@ def _bootstrap_first_admin() -> None:
         ensure_first_admin()
     except Exception as exc:  # pragma: no cover - best effort
         logging.getLogger(__name__).warning("first-admin bootstrap failed: %s", exc)
+
+
+@app.on_event("startup")
+def _start_admin_scheduler() -> None:
+    """Démarre APScheduler et arme les planifications enabled au boot."""
+    try:
+        from rag.scheduler import get_scheduler_manager
+        get_scheduler_manager().start()
+    except Exception as exc:  # pragma: no cover - best effort
+        logging.getLogger(__name__).warning(
+            "Page Admin Planificateur — démarrage APScheduler échoué : %s", exc,
+        )
+
+
+@app.on_event("shutdown")
+def _stop_admin_scheduler() -> None:
+    try:
+        from rag.scheduler import get_scheduler_manager
+        get_scheduler_manager().shutdown()
+    except Exception:  # pragma: no cover
+        pass
 
 
 @app.on_event("startup")
@@ -1307,6 +1333,20 @@ async def health() -> dict:
     }
 
 
+@app.get("/maintenance-status", tags=["Système"])
+async def maintenance_status() -> dict:
+    """Renvoie le flag chat_paused (no auth required).
+
+    Utilisé par le frontend pour afficher un bandeau « Maintenance en cours »
+    sur la page chat sans avoir à exposer toute la table app_settings.
+    """
+    try:
+        from rag.scheduler import db as _scheduler_db
+        return {"chat_paused": _scheduler_db.is_chat_paused()}
+    except Exception:
+        return {"chat_paused": False}
+
+
 # ---------------------------------------------------------------------------
 # Document upload
 # ---------------------------------------------------------------------------
@@ -1506,6 +1546,21 @@ async def query(
     Répond à une question en recherchant dans les documents indexés (RAG hybride).
     Non-streaming.
     """
+    # Page Admin Planificateur : pause chat pendant maintenance.
+    try:
+        from rag.scheduler import db as _scheduler_db
+        if _scheduler_db.is_chat_paused():
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Maintenance en cours, chat indisponible le temps du "
+                    "rafraîchissement des sources publiques."
+                ),
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        pass
     # Resolve OpenAI key: prefer request.openai_api_key, else use stored key
     effective_key = (request.openai_api_key or "").strip()
     if not effective_key and user_id != "guest":
@@ -1578,6 +1633,25 @@ async def query_stream(
       data: [SOURCES]{json}\\n\\n
       data: [DONE]\\n\\n
     """
+    # Page Admin Planificateur : si le flag chat_paused est positionné par
+    # une planification "pause_chat_during_refresh=True", on bloque le chat
+    # pendant la maintenance.
+    try:
+        from rag.scheduler import db as _scheduler_db
+        if _scheduler_db.is_chat_paused():
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Maintenance en cours, chat indisponible le temps du "
+                    "rafraîchissement des sources publiques."
+                ),
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        # Si la table n'existe pas encore (premier boot), on ne bloque pas.
+        pass
+
     effective_key = (request.openai_api_key or "").strip()
     if not effective_key and user_id != "guest":
         effective_key = get_user_api_key(user_id)
@@ -2485,6 +2559,354 @@ def workspace_export_feedback_csv(
         media_type="text/csv; charset=utf-8",
         headers=headers,
     )
+
+
+# ---------------------------------------------------------------------------
+# Page Admin Planificateur (cron + jobs + maintenance + notifications)
+# ---------------------------------------------------------------------------
+# Tous les endpoints réservés à l'admin via require_admin. Le runner FIFO
+# garantit qu'un seul job tourne à la fois (sérialisation au niveau
+# process backend). Cf. rag/scheduler/.
+
+from rag.scheduler import db as scheduler_db  # noqa: E402
+from rag.scheduler import maintenance as scheduler_maintenance  # noqa: E402
+from rag.scheduler.manager import (  # noqa: E402
+    _next_run_iso as _scheduler_next_run_iso,
+    _validate_cron as _scheduler_validate_cron,
+    get_scheduler_manager as _get_scheduler_manager,
+)
+
+
+class ScheduleCreateRequest(BaseModel):
+    source: str
+    cron_expression: str
+    label: Optional[str] = None
+    pause_chat_during_refresh: bool = False
+    enabled: bool = True
+
+
+class ScheduleUpdateRequest(BaseModel):
+    cron_expression: Optional[str] = None
+    label: Optional[str] = None
+    pause_chat_during_refresh: Optional[bool] = None
+    enabled: Optional[bool] = None
+
+
+def _enrich_schedule(sched: dict) -> dict:
+    """Ajoute next_run_at calculé live à partir de l'expression cron."""
+    out = dict(sched)
+    nxt = _scheduler_next_run_iso(out.get("cron_expression") or "")
+    if nxt:
+        out["next_run_at"] = nxt
+    return out
+
+
+@app.get("/admin/schedules", tags=["Admin Planificateur"])
+def admin_list_schedules(_: str = Depends(require_admin)) -> dict:
+    """Liste toutes les planifications, avec next_run_at calculé live."""
+    schedules = [_enrich_schedule(s) for s in scheduler_db.list_schedules()]
+    return {"schedules": schedules}
+
+
+@app.post(
+    "/admin/schedules",
+    tags=["Admin Planificateur"],
+    status_code=201,
+)
+def admin_create_schedule(
+    req: ScheduleCreateRequest,
+    user_id: str = Depends(require_admin),
+) -> dict:
+    """Crée une nouvelle planification cron pour une source."""
+    if req.source not in scheduler_db.VALID_SOURCES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Source inconnue : '{req.source}'. "
+                f"Attendu : {', '.join(scheduler_db.VALID_SOURCES)}."
+            ),
+        )
+    try:
+        _scheduler_validate_cron(req.cron_expression)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    try:
+        sched = _get_scheduler_manager().add_schedule(
+            source=req.source,
+            cron_expression=req.cron_expression,
+            enabled=req.enabled,
+            pause_chat_during_refresh=req.pause_chat_during_refresh,
+            label=req.label,
+            created_by=user_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return _enrich_schedule(sched)
+
+
+@app.put("/admin/schedules/{schedule_id}", tags=["Admin Planificateur"])
+def admin_update_schedule(
+    schedule_id: int,
+    req: ScheduleUpdateRequest,
+    _: str = Depends(require_admin),
+) -> dict:
+    if req.cron_expression is not None:
+        try:
+            _scheduler_validate_cron(req.cron_expression)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+    sched = _get_scheduler_manager().update_schedule(
+        schedule_id,
+        cron_expression=req.cron_expression,
+        enabled=req.enabled,
+        pause_chat_during_refresh=req.pause_chat_during_refresh,
+        label=req.label,
+    )
+    if sched is None:
+        raise HTTPException(status_code=404, detail="Planification introuvable.")
+    return _enrich_schedule(sched)
+
+
+@app.delete("/admin/schedules/{schedule_id}", tags=["Admin Planificateur"])
+def admin_delete_schedule(
+    schedule_id: int,
+    _: str = Depends(require_admin),
+) -> dict:
+    deleted = _get_scheduler_manager().delete_schedule(schedule_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Planification introuvable.")
+    return {"deleted": True, "schedule_id": schedule_id}
+
+
+@app.post(
+    "/admin/schedules/{schedule_id}/run-now",
+    tags=["Admin Planificateur"],
+    status_code=202,
+)
+def admin_schedule_run_now(
+    schedule_id: int,
+    _: str = Depends(require_admin),
+) -> dict:
+    """Déclenche manuellement une planification (queue si un job tourne déjà)."""
+    sched = scheduler_db.get_schedule(schedule_id)
+    if sched is None:
+        raise HTTPException(status_code=404, detail="Planification introuvable.")
+    job = _get_scheduler_manager().trigger_now(
+        source=sched["source"],
+        schedule_id=schedule_id,
+        pause_chat=bool(sched.get("pause_chat_during_refresh")),
+    )
+    return job
+
+
+@app.post(
+    "/admin/sources/{source}/run-now",
+    tags=["Admin Planificateur"],
+    status_code=202,
+)
+def admin_source_run_now(
+    source: str,
+    _: str = Depends(require_admin),
+) -> dict:
+    """Lance un refresh one-shot (sans planification associée)."""
+    if source not in scheduler_db.PUBLIC_SOURCES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Source inconnue : '{source}'. "
+                f"Attendu : {', '.join(scheduler_db.PUBLIC_SOURCES)}."
+            ),
+        )
+    job = _get_scheduler_manager().trigger_now(source=source)
+    return job
+
+
+@app.get("/admin/jobs", tags=["Admin Planificateur"])
+def admin_list_jobs(
+    source: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = Query(20, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    _: str = Depends(require_admin),
+) -> dict:
+    """Liste paginée des jobs (les plus récents en premier)."""
+    statuses: Optional[list[str]] = None
+    if status:
+        statuses = [s.strip() for s in status.split(",") if s.strip()]
+    jobs = scheduler_db.list_jobs(
+        source=source, status=statuses, limit=limit, offset=offset,
+    )
+    return {"jobs": jobs}
+
+
+@app.get("/admin/jobs/current", tags=["Admin Planificateur"])
+def admin_get_current_job(_: str = Depends(require_admin)) -> dict:
+    """Renvoie le job en cours d'exécution (status='running'), s'il y en a un."""
+    job = scheduler_db.get_running_job()
+    return {"job": job}
+
+
+@app.get("/admin/jobs/{job_id}", tags=["Admin Planificateur"])
+def admin_get_job(
+    job_id: int,
+    _: str = Depends(require_admin),
+) -> dict:
+    job = scheduler_db.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job introuvable.")
+    return job
+
+
+@app.post("/admin/jobs/{job_id}/cancel", tags=["Admin Planificateur"])
+def admin_cancel_job(
+    job_id: int,
+    _: str = Depends(require_admin),
+) -> dict:
+    """Annule un job ``queued`` (immédiat) ou demande l'arrêt d'un ``running``.
+
+    Pour un job running : positionne le flag stop_requested. Le runner le
+    vérifie entre 2 batches du connecteur et termine en ``cancelled``.
+    """
+    job = scheduler_db.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job introuvable.")
+    if job["status"] == "queued":
+        scheduler_db.update_job(
+            job_id,
+            status="cancelled",
+            finished_at=scheduler_db._now_iso(),
+            error_message="Annulé avant démarrage.",
+        )
+        return {"cancelled": True, "job_id": job_id, "was": "queued"}
+    if job["status"] == "running":
+        scheduler_db.update_job(job_id, stop_requested=True)
+        return {"cancel_requested": True, "job_id": job_id, "was": "running"}
+    return {"noop": True, "job_id": job_id, "status": job["status"]}
+
+
+# ---------------------------------------------------------------------------
+# Page Admin — Maintenance Qdrant (re-embed, optimize, integrity, stats)
+# ---------------------------------------------------------------------------
+
+
+@app.post(
+    "/admin/maintenance/reembed/{source}",
+    tags=["Admin Maintenance"],
+    status_code=202,
+)
+def admin_maintenance_reembed_source(
+    source: str,
+    _: str = Depends(require_admin),
+) -> dict:
+    """Lance un job de re-embedding complet d'une source publique."""
+    if source not in scheduler_db.PUBLIC_SOURCES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Source inconnue : '{source}'. "
+                f"Attendu : {', '.join(scheduler_db.PUBLIC_SOURCES)}."
+            ),
+        )
+    job = _get_scheduler_manager().trigger_now(source=f"reembed_{source}")
+    return job
+
+
+@app.post(
+    "/admin/maintenance/reembed-all",
+    tags=["Admin Maintenance"],
+    status_code=202,
+)
+def admin_maintenance_reembed_all(
+    _: str = Depends(require_admin),
+) -> dict:
+    """Re-embedding complet des 4 sources publiques (très long)."""
+    job = _get_scheduler_manager().trigger_now(source="reembed_all")
+    return job
+
+
+@app.post(
+    "/admin/maintenance/optimize/{collection}",
+    tags=["Admin Maintenance"],
+    status_code=202,
+)
+def admin_maintenance_optimize(
+    collection: str,
+    _: str = Depends(require_admin),
+) -> dict:
+    """Force un optimize d'une collection Qdrant (compactage segments)."""
+    if not collection or "/" in collection or " " in collection:
+        raise HTTPException(status_code=400, detail="Nom de collection invalide.")
+    job = _get_scheduler_manager().trigger_now(
+        source="optimize_qdrant",
+        optimize_target=collection,
+    )
+    return job
+
+
+@app.post(
+    "/admin/maintenance/integrity-check",
+    tags=["Admin Maintenance"],
+    status_code=202,
+)
+def admin_maintenance_integrity_check(
+    _: str = Depends(require_admin),
+) -> dict:
+    """Lance un job de vérification d'intégrité des collections."""
+    job = _get_scheduler_manager().trigger_now(source="integrity_check")
+    return job
+
+
+@app.get(
+    "/admin/maintenance/qdrant-stats",
+    tags=["Admin Maintenance"],
+)
+def admin_maintenance_qdrant_stats(
+    _: str = Depends(require_admin),
+) -> dict:
+    """Stats live de toutes les collections Qdrant (lecture seule)."""
+    return scheduler_maintenance.get_qdrant_stats()
+
+
+# ---------------------------------------------------------------------------
+# Notifications internes (Page Admin Planificateur)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/notifications/unread", tags=["Notifications"])
+def notifications_unread(
+    user_id: str = Depends(get_current_user),
+) -> dict:
+    """Liste les notifications non-lues de l'utilisateur courant."""
+    items = scheduler_db.list_notifications(user_id, unread_only=True, limit=20)
+    count = scheduler_db.count_unread_notifications(user_id)
+    return {"unread_count": count, "items": items}
+
+
+@app.get("/notifications", tags=["Notifications"])
+def notifications_list(
+    limit: int = Query(20, ge=1, le=100),
+    user_id: str = Depends(get_current_user),
+) -> dict:
+    """Les N dernières notifications de l'utilisateur (lues + non lues)."""
+    items = scheduler_db.list_notifications(user_id, unread_only=False, limit=limit)
+    return {"items": items}
+
+
+@app.post("/notifications/{notification_id}/read", tags=["Notifications"])
+def notifications_mark_read(
+    notification_id: int,
+    user_id: str = Depends(get_current_user),
+) -> dict:
+    ok = scheduler_db.mark_notification_read(notification_id, user_id)
+    return {"ok": ok}
+
+
+@app.post("/notifications/read-all", tags=["Notifications"])
+def notifications_mark_all_read(
+    user_id: str = Depends(get_current_user),
+) -> dict:
+    n = scheduler_db.mark_all_notifications_read(user_id)
+    return {"marked": n}
 
 
 # ---------------------------------------------------------------------------

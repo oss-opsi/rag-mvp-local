@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   BookMarked,
+  CalendarClock,
   LayoutGrid,
   MessageCircle,
   FileSearch,
@@ -53,6 +54,7 @@ const SECONDARY_NAV: NavItem[] = [
 // Admin-only — injecté conditionnellement dans la nav secondaire.
 const ADMIN_NAV: NavItem[] = [
   { href: "/referentiels", label: "Référentiels", icon: BookMarked },
+  { href: "/scheduler", label: "Planificateur", icon: CalendarClock },
 ];
 
 /**

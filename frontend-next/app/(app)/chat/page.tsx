@@ -26,6 +26,7 @@ import {
 import { MessageBubble } from "@/components/chat/message-bubble";
 import { Composer } from "@/components/chat/composer";
 import { ContextPanel } from "@/components/context-panel";
+import { MaintenanceBanner } from "@/components/maintenance-banner";
 import { useToast } from "@/components/ui/use-toast";
 import { api } from "@/lib/api-client";
 import { cn, formatDateTime } from "@/lib/utils";
@@ -322,6 +323,7 @@ export default function ChatPage() {
 
   return (
     <div className="flex h-full flex-col">
+      <MaintenanceBanner />
       <ContextPanel>
         <div className="flex h-full flex-col">
           <div className="flex items-center justify-between border-b border-border px-4 py-3">

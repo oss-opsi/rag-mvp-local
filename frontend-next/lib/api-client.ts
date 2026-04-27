@@ -1,6 +1,7 @@
 import type {
   AdminUser,
   AnalysisJob,
+  AppNotification,
   ApiKeyInfo,
   Client,
   ClientCdcsResponse,
@@ -9,9 +10,12 @@ import type {
   Conversation,
   ConversationDetail,
   IngestionJob,
+  QdrantCollectionStat,
   QualityDashboard,
   QueryResponse,
+  RefreshJob,
   RequirementFeedback,
+  Schedule,
   UploadResponse,
   User,
 } from "./types";
@@ -578,5 +582,176 @@ export const api = {
     return handle<{ per_question: RagasPerQuestion[]; aggregate: RagasMetrics }>(
       res,
     );
+  },
+
+  // -------------------------------------------------------------------
+  // Page Admin Planificateur
+  // -------------------------------------------------------------------
+
+  async listSchedules(): Promise<Schedule[]> {
+    const res = await fetch("/api/admin/schedules");
+    const data = await handle<{ schedules: Schedule[] }>(res);
+    return data.schedules || [];
+  },
+
+  async createSchedule(input: {
+    source: string;
+    cron_expression: string;
+    label?: string | null;
+    pause_chat_during_refresh?: boolean;
+    enabled?: boolean;
+  }): Promise<Schedule> {
+    const res = await fetch("/api/admin/schedules", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        source: input.source,
+        cron_expression: input.cron_expression,
+        label: input.label ?? null,
+        pause_chat_during_refresh: !!input.pause_chat_during_refresh,
+        enabled: input.enabled !== false,
+      }),
+    });
+    return handle<Schedule>(res);
+  },
+
+  async updateSchedule(
+    id: number,
+    input: {
+      cron_expression?: string;
+      label?: string | null;
+      pause_chat_during_refresh?: boolean;
+      enabled?: boolean;
+    },
+  ): Promise<Schedule> {
+    const res = await fetch(`/api/admin/schedules/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    return handle<Schedule>(res);
+  },
+
+  async deleteSchedule(id: number): Promise<unknown> {
+    const res = await fetch(`/api/admin/schedules/${id}`, { method: "DELETE" });
+    return handle(res);
+  },
+
+  async runScheduleNow(id: number): Promise<RefreshJob> {
+    const res = await fetch(`/api/admin/schedules/${id}/run-now`, {
+      method: "POST",
+    });
+    return handle<RefreshJob>(res);
+  },
+
+  async runSourceNow(source: string): Promise<RefreshJob> {
+    const res = await fetch(
+      `/api/admin/sources/${encodeURIComponent(source)}/run-now`,
+      { method: "POST" },
+    );
+    return handle<RefreshJob>(res);
+  },
+
+  async listJobs(opts?: {
+    source?: string;
+    status?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<RefreshJob[]> {
+    const params = new URLSearchParams();
+    if (opts?.source) params.set("source", opts.source);
+    if (opts?.status) params.set("status", opts.status);
+    if (opts?.limit !== undefined) params.set("limit", String(opts.limit));
+    if (opts?.offset !== undefined) params.set("offset", String(opts.offset));
+    const qs = params.toString();
+    const res = await fetch(`/api/admin/jobs${qs ? `?${qs}` : ""}`);
+    const data = await handle<{ jobs: RefreshJob[] }>(res);
+    return data.jobs || [];
+  },
+
+  async getCurrentJob(): Promise<RefreshJob | null> {
+    const res = await fetch("/api/admin/jobs/current");
+    const data = await handle<{ job: RefreshJob | null }>(res);
+    return data.job ?? null;
+  },
+
+  async getJob(id: number): Promise<RefreshJob> {
+    const res = await fetch(`/api/admin/jobs/${id}`);
+    return handle<RefreshJob>(res);
+  },
+
+  async cancelJob(id: number): Promise<unknown> {
+    const res = await fetch(`/api/admin/jobs/${id}/cancel`, { method: "POST" });
+    return handle(res);
+  },
+
+  // -------------------------------------------------------------------
+  // Maintenance avancée
+  // -------------------------------------------------------------------
+
+  async maintenanceReembedSource(source: string): Promise<RefreshJob> {
+    const res = await fetch(
+      `/api/admin/maintenance/reembed/${encodeURIComponent(source)}`,
+      { method: "POST" },
+    );
+    return handle<RefreshJob>(res);
+  },
+
+  async maintenanceReembedAll(): Promise<RefreshJob> {
+    const res = await fetch("/api/admin/maintenance/reembed-all", {
+      method: "POST",
+    });
+    return handle<RefreshJob>(res);
+  },
+
+  async maintenanceOptimize(collection: string): Promise<RefreshJob> {
+    const res = await fetch(
+      `/api/admin/maintenance/optimize/${encodeURIComponent(collection)}`,
+      { method: "POST" },
+    );
+    return handle<RefreshJob>(res);
+  },
+
+  async maintenanceIntegrityCheck(): Promise<RefreshJob> {
+    const res = await fetch("/api/admin/maintenance/integrity-check", {
+      method: "POST",
+    });
+    return handle<RefreshJob>(res);
+  },
+
+  async maintenanceQdrantStats(): Promise<{
+    collections: QdrantCollectionStat[];
+    error?: string;
+  }> {
+    const res = await fetch("/api/admin/maintenance/qdrant-stats");
+    return handle<{ collections: QdrantCollectionStat[]; error?: string }>(res);
+  },
+
+  // -------------------------------------------------------------------
+  // Notifications
+  // -------------------------------------------------------------------
+
+  async listUnreadNotifications(): Promise<{
+    unread_count: number;
+    items: AppNotification[];
+  }> {
+    const res = await fetch("/api/notifications/unread");
+    return handle<{ unread_count: number; items: AppNotification[] }>(res);
+  },
+
+  async listNotifications(limit = 20): Promise<AppNotification[]> {
+    const res = await fetch(`/api/notifications?limit=${limit}`);
+    const data = await handle<{ items: AppNotification[] }>(res);
+    return data.items || [];
+  },
+
+  async markNotificationRead(id: number): Promise<unknown> {
+    const res = await fetch(`/api/notifications/${id}/read`, { method: "POST" });
+    return handle(res);
+  },
+
+  async markAllNotificationsRead(): Promise<unknown> {
+    const res = await fetch("/api/notifications/read-all", { method: "POST" });
+    return handle(res);
   },
 };
