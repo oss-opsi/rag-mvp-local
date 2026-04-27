@@ -135,7 +135,7 @@ export function ContextPanelProvider({
                   : "Rétracter le panneau latéral"
               }
               title={desktopCollapsed ? "Déplier" : "Rétracter"}
-              className="absolute left-0 top-3 z-20 hidden h-8 w-6 items-center justify-center rounded-r-md border border-l-0 border-soft bg-background text-muted-foreground shadow-sm hover:bg-muted hover:text-foreground md:inline-flex"
+              className="absolute left-0 top-3 z-20 hidden h-8 w-6 items-center justify-center rounded-r-md border border-l-0 border-soft bg-card text-muted-foreground shadow-tinted-sm hover:bg-accent-soft hover:text-accent md:inline-flex"
             >
               {desktopCollapsed ? (
                 <PanelLeftOpen className="h-3.5 w-3.5" />

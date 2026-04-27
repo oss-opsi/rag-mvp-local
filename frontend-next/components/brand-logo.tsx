@@ -18,7 +18,7 @@ export function BrandMark({
     <span
       aria-hidden
       className={cn(
-        "inline-flex items-center justify-center rounded-xl font-semibold text-white shadow-sm",
+        "inline-flex items-center justify-center rounded-xl font-semibold text-white shadow-tinted-sm",
         className
       )}
       style={{

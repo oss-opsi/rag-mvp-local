@@ -20,7 +20,7 @@ export function PipelineInfoCard({
   return (
     <div
       className={cn(
-        "rounded-md border border-accent/20 bg-accent/5 p-3 text-xs",
+        "rounded-2xl border border-accent/25 bg-accent-soft/40 p-3 text-xs shadow-tinted-sm",
         className,
       )}
     >

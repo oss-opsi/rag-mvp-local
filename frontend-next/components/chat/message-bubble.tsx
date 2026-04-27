@@ -84,8 +84,8 @@ function FeedbackButtons({
         aria-label="Réponse utile"
         title="Réponse utile"
         className={cn(
-          "flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-background hover:text-foreground",
-          isUp && "bg-background text-success",
+          "flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground transition-all hover:bg-success-soft hover:text-success",
+          isUp && "border border-success/25 bg-success-soft text-success",
         )}
       >
         <ThumbsUp className="h-3.5 w-3.5" />
@@ -97,8 +97,8 @@ function FeedbackButtons({
         aria-label="Réponse à améliorer"
         title="Réponse à améliorer"
         className={cn(
-          "flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-background hover:text-foreground",
-          isDown && "bg-background text-danger",
+          "flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground transition-all hover:bg-danger-soft hover:text-danger",
+          isDown && "border border-danger/25 bg-danger-soft text-danger",
         )}
       >
         <ThumbsDown className="h-3.5 w-3.5" />
