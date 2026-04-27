@@ -243,23 +243,30 @@ export default function AnalysePage() {
       const ref = { jobId, cdcId, cancelled: false };
       pollingRef.current = ref;
       const POLL_INTERVAL_MS = 3000;
+      const MAX_CONSECUTIVE_ERRORS = 5; // tolérer les coupures réseau passagères
+      let consecutiveErrors = 0;
       while (!ref.cancelled) {
         try {
           const job = await api.analysisJob(jobId);
           if (ref.cancelled) return;
+          consecutiveErrors = 0;
           if (job.status === "done" || job.status === "error") {
             await finishAnalyseFromJob(job);
             return;
           }
         } catch (err) {
-          const msg =
-            err instanceof Error ? err.message : "Erreur de polling";
-          toast({
-            title: "Erreur",
-            description: msg,
-            variant: "destructive",
-          });
-          return;
+          consecutiveErrors += 1;
+          if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+            const msg =
+              err instanceof Error ? err.message : "Erreur de polling";
+            toast({
+              title: "Suivi de l'analyse interrompu",
+              description: `${msg} (${MAX_CONSECUTIVE_ERRORS} échecs consécutifs). L'analyse continue en arrière-plan — rafraîchissez la page pour reprendre le suivi.`,
+              variant: "destructive",
+            });
+            return;
+          }
+          // Erreur transitoire : on backoff puis on réessaye au tour suivant.
         }
         await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
       }
