@@ -723,7 +723,12 @@ export function RequirementSheet({
                           size="sm"
                           variant="outline"
                           onClick={() => void launchRepass()}
-                          disabled={repassBusy}
+                          disabled={repassBusy || hasSavedCorrection}
+                          title={
+                            hasSavedCorrection
+                              ? "Une correction validée existe — votre verdict humain l'emporte, le repass est inutile."
+                              : undefined
+                          }
                         >
                           {repassBusy ? (
                             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -734,8 +739,9 @@ export function RequirementSheet({
                         </Button>
                       </div>
                       <p className="mt-2 text-xs text-muted-foreground">
-                        Relance un verdict GPT-4o sur cette seule exigence.
-                        L'historique précédent reste consultable.
+                        {hasSavedCorrection
+                          ? "Bouton désactivé : votre correction validée l'emporte sur le verdict du LLM. Effacez la correction si vous voulez relancer GPT-4o."
+                          : "Relance un verdict GPT-4o sur cette seule exigence. L'historique précédent reste consultable."}
                       </p>
                     </section>
                   </>
