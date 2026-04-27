@@ -59,8 +59,8 @@ function SourcesPill({
 }) {
   const pillClasses =
     scope === "private"
-      ? "border-transparent bg-accent/15 text-accent hover:bg-accent/25"
-      : "border-border bg-background text-foreground hover:bg-muted";
+      ? "border-accent/20 bg-accent-soft text-accent hover:border-accent/40 hover:bg-accent-soft/80"
+      : "border-soft bg-card text-foreground hover:border-accent/30 hover:bg-accent-soft/60 hover:text-accent";
   return (
     <div className="flex flex-col">
       <button
@@ -69,7 +69,7 @@ function SourcesPill({
         aria-expanded={open}
         onClick={onToggle}
         className={cn(
-          "inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+          "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 hover:-translate-y-0.5",
           pillClasses,
         )}
       >
@@ -115,7 +115,10 @@ export function SourcesPanel({ sources }: { sources: QuerySource[] }) {
   }
 
   return (
-    <div className="mt-2 flex flex-wrap items-start gap-2">
+    <div className="mt-3 flex flex-wrap items-start gap-2 border-t border-soft pt-3">
+      <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+        Sources
+      </span>
       {privateItems.length > 0 ? (
         <SourcesPill
           label="Documents privés"

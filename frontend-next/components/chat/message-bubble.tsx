@@ -11,20 +11,26 @@ import type { ChatMessage, MessageFeedback } from "@/lib/types";
 
 function TypingDots() {
   return (
-    <div
-      className="flex items-center gap-1.5 py-1"
-      role="status"
-      aria-label="Rédaction de la réponse en cours"
-    >
-      <span className="inline-block h-2 w-2 rounded-full bg-muted-foreground/70 [animation:typing-bounce_1.2s_ease-in-out_infinite]" />
-      <span
-        className="inline-block h-2 w-2 rounded-full bg-muted-foreground/70 [animation:typing-bounce_1.2s_ease-in-out_infinite]"
-        style={{ animationDelay: "0.15s" }}
-      />
-      <span
-        className="inline-block h-2 w-2 rounded-full bg-muted-foreground/70 [animation:typing-bounce_1.2s_ease-in-out_infinite]"
-        style={{ animationDelay: "0.3s" }}
-      />
+    <div role="status" aria-label="Rédaction de la réponse en cours">
+      <div className="flex items-center gap-1.5 py-1">
+        <span className="inline-block h-1.5 w-1.5 rounded-full bg-accent [animation:typing-bounce_1.2s_ease-in-out_infinite]" />
+        <span
+          className="inline-block h-1.5 w-1.5 rounded-full bg-accent [animation:typing-bounce_1.2s_ease-in-out_infinite]"
+          style={{ animationDelay: "0.15s" }}
+        />
+        <span
+          className="inline-block h-1.5 w-1.5 rounded-full bg-accent [animation:typing-bounce_1.2s_ease-in-out_infinite]"
+          style={{ animationDelay: "0.3s" }}
+        />
+        <span className="ml-2 text-[12px] text-muted-foreground">
+          Tell me rédige sa réponse…
+        </span>
+      </div>
+      <div className="mt-3 space-y-2" aria-hidden="true">
+        <div className="skeleton-line h-3 w-[92%]" />
+        <div className="skeleton-line h-3 w-[78%]" />
+        <div className="skeleton-line h-3 w-[60%]" />
+      </div>
     </div>
   );
 }
@@ -118,10 +124,10 @@ export function MessageBubble({
     >
       <div
         className={cn(
-          "flex min-w-0 max-w-[80%] flex-col gap-2 rounded-lg px-4 py-3 text-sm",
+          "flex min-w-0 max-w-[80%] flex-col gap-2 px-4 py-3 text-sm",
           isUser
-            ? "bg-accent text-accent-foreground"
-            : "bg-muted text-foreground"
+            ? "rounded-2xl rounded-br-md bg-gradient-to-br from-accent to-accent-hover text-accent-foreground shadow-user-bubble"
+            : "rounded-2xl rounded-bl-md border border-soft bg-gradient-to-br from-card to-accent-soft/40 text-foreground shadow-tinted-sm",
         )}
       >
         {isUser ? (

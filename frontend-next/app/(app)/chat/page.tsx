@@ -1,7 +1,18 @@
 "use client";
 
 import * as React from "react";
-import { Plus, Trash2, Pencil, Loader2 } from "lucide-react";
+import {
+  Plus,
+  Trash2,
+  Pencil,
+  Loader2,
+  MessageCircle,
+  Calculator,
+  Calendar,
+  BookOpen,
+  Users,
+  ArrowRight,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -36,6 +47,78 @@ import type {
   ConversationDetail,
   QuerySource,
 } from "@/lib/types";
+
+const SUGGESTIONS: {
+  icon: typeof Calculator;
+  title: string;
+  sub: string;
+  prompt: string;
+}[] = [
+  {
+    icon: Calculator,
+    title: "Calculer la prime d'ancienneté",
+    sub: "CCN66 — barème par tranches",
+    prompt:
+      "Comment calculer la prime d'ancienneté en CCN66 et quel est le barème par tranches ?",
+  },
+  {
+    icon: Calendar,
+    title: "Durée du congé maternité",
+    sub: "Cas standard et prolongations",
+    prompt:
+      "Quelle est la durée du congé maternité dans le cas standard et quelles sont les prolongations possibles ?",
+  },
+  {
+    icon: BookOpen,
+    title: "DSN événementielle vs mensuelle",
+    sub: "Différences et délais légaux",
+    prompt:
+      "Quelle est la différence entre DSN événementielle et DSN mensuelle, et quels sont les délais légaux ?",
+  },
+  {
+    icon: Users,
+    title: "Bulletin cadre forfait jours",
+    sub: "Mentions obligatoires et exceptions",
+    prompt:
+      "Quelles sont les mentions obligatoires sur le bulletin de paie d'un cadre au forfait jours ?",
+  },
+];
+
+function EmptyState({ onPick }: { onPick: (prompt: string) => void }) {
+  return (
+    <div className="px-4 py-8 text-center md:py-12">
+      <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-accent to-violet text-white shadow-tinted-md">
+        <MessageCircle className="h-8 w-8" />
+      </div>
+      <h2 className="text-2xl font-semibold tracking-tight">
+        Que voulez-vous savoir aujourd'hui&nbsp;?
+      </h2>
+      <p className="mx-auto mt-2 max-w-xl text-sm text-muted-foreground">
+        Posez votre question en langage naturel — Tell me cherche dans vos
+        documents indexés et les sources publiques activées.
+      </p>
+      <div className="mx-auto mt-8 grid max-w-3xl gap-3 text-left sm:grid-cols-2">
+        {SUGGESTIONS.map((s) => (
+          <button
+            key={s.title}
+            type="button"
+            onClick={() => onPick(s.prompt)}
+            className="group flex items-start gap-3 rounded-2xl border border-soft bg-card p-4 text-left transition-all hover:-translate-y-0.5 hover:border-accent/30 hover:shadow-tinted-md"
+          >
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent">
+              <s.icon className="h-4 w-4" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-[13px] font-medium">{s.title}</div>
+              <div className="text-xs text-muted-foreground">{s.sub}</div>
+            </div>
+            <ArrowRight className="h-4 w-4 shrink-0 text-muted-foreground transition-all group-hover:translate-x-0.5 group-hover:text-accent" />
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export default function ChatPage() {
   const { toast } = useToast();
@@ -435,9 +518,7 @@ export default function ChatPage() {
               Chargement...
             </div>
           ) : messagesToRender.length === 0 && !streaming ? (
-            <div className="py-12 text-center text-sm text-muted-foreground">
-              Posez votre première question pour démarrer.
-            </div>
+            <EmptyState onPick={(p) => setInput(p)} />
           ) : (
             messagesToRender.map((m, i) => (
               <MessageBubble key={i} message={m} />
