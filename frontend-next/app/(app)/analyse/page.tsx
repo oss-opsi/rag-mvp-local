@@ -302,14 +302,28 @@ export default function AnalysePage() {
     }
   };
 
-  // À la sélection d'un CDC, reprendre un éventuel job actif (queued/running)
-  // pour ce CDC. Permet de retrouver l'analyse en cours après un refresh ou
-  // une navigation.
+  // Le bouton "Réanalyser" doit refléter l'état RÉEL du batch côté backend,
+  // pas juste un state local. On poll les jobs queued/running pour ce CDC
+  // toutes les 5s :
+  //   - si un job actif est trouvé et qu'on n'est pas déjà en train de le
+  //     suivre, on lance pollAnalysisJob (gros poll qui rafraîchira aussi
+  //     le rapport quand le job se termine) ;
+  //   - sinon analysing repasse à false → bouton réactif.
+  //
+  // Couvre : reprise après refresh/navigation, libération automatique du
+  // bouton si le job se termine côté backend pendant que l'utilisateur est
+  // sur la page, ré-action si l'utilisateur lance une analyse depuis un
+  // autre onglet.
   React.useEffect(() => {
-    if (selectedCdcId === null) return;
+    if (selectedCdcId === null) {
+      setAnalysing(false);
+      return;
+    }
     let cancelled = false;
-    let opened = false;
-    (async () => {
+    let trackingJobId: number | null = null;
+    const STATUS_POLL_MS = 5000;
+
+    const tick = async () => {
       try {
         const jobs = await api.analysisJobs({
           statusFilter: "queued,running",
@@ -318,27 +332,33 @@ export default function AnalysePage() {
         if (cancelled) return;
         if (jobs.length > 0) {
           const job = jobs[0]!;
-          opened = true;
-          setAnalysing(true);
-          toast({
-            title: "Analyse en cours",
-            description: "Reprise du suivi de l'analyse en arrière-plan.",
-          });
-          await pollAnalysisJob(job.id, selectedCdcId);
+          if (!analysing) setAnalysing(true);
+          if (trackingJobId !== job.id) {
+            trackingJobId = job.id;
+            // Lance le polling fin (3s) qui finira par rafraîchir le rapport
+            // à done/error. On ne bloque pas le tick : pollAnalysisJob tourne
+            // en parallèle.
+            void pollAnalysisJob(job.id, selectedCdcId).finally(() => {
+              trackingJobId = null;
+            });
+          }
+        } else {
+          if (analysing) setAnalysing(false);
         }
       } catch {
         // silencieux : pas bloquant
-      } finally {
-        // Garantit qu'on ne reste jamais bloqué en analysing=true même si
-        // une exception inattendue est remontée du polling.
-        if (!cancelled && opened) setAnalysing(false);
       }
-    })();
+    };
+
+    void tick();
+    const interval = window.setInterval(() => void tick(), STATUS_POLL_MS);
     return () => {
       cancelled = true;
+      window.clearInterval(interval);
       if (pollingRef.current) pollingRef.current.cancelled = true;
     };
-  }, [selectedCdcId, pollAnalysisJob, toast]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCdcId, pollAnalysisJob]);
 
   // Context panel: clients list
   const contextPanelContent = (
