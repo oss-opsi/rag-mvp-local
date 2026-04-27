@@ -416,15 +416,15 @@ export function CdcReport({
           </Badge>
         </div>
         <div className="flex items-center gap-2">
-          <div className="flex items-center rounded-md border border-border p-0.5 text-xs">
+          <div className="flex items-center gap-0.5 rounded-full border border-soft bg-card p-0.5 text-xs shadow-tinted-sm">
             <button
               type="button"
               onClick={() => setView("report")}
               className={cn(
-                "rounded px-2 py-1 transition-colors",
+                "rounded-full px-3 py-1 font-medium transition-all",
                 view === "report"
-                  ? "bg-muted text-foreground"
-                  : "text-muted-foreground hover:text-foreground",
+                  ? "bg-accent-soft text-accent shadow-tinted-sm"
+                  : "text-muted-foreground hover:text-accent",
               )}
             >
               Rapport
@@ -433,10 +433,11 @@ export function CdcReport({
               type="button"
               onClick={() => setView("quality")}
               className={cn(
-                "flex items-center gap-1 rounded px-2 py-1 transition-colors",
+                "flex items-center gap-1 rounded-full px-3 py-1 font-medium transition-all",
                 view === "quality"
-                  ? "bg-muted text-foreground"
-                  : "text-muted-foreground hover:text-foreground",
+                  ? "bg-accent-soft text-accent shadow-tinted-sm"
+                  : "text-muted-foreground hover:text-accent",
+                !analysisId && "cursor-not-allowed opacity-50 hover:text-muted-foreground",
               )}
               disabled={!analysisId}
               title={
@@ -589,7 +590,7 @@ export function CdcReport({
           </aside>
 
           <section className="flex min-w-0 flex-1 flex-col">
-            <div className="sticky top-14 z-10 flex flex-wrap items-center gap-2 border-b border-border bg-background px-4 py-3 md:px-6">
+            <div className="sticky top-14 z-10 flex flex-wrap items-center gap-2 border-b border-soft bg-background/80 px-4 py-3 backdrop-blur-md md:px-6">
               {STATUS_CHIPS.map((chip) => (
                 <button
                   key={chip.key}
@@ -615,7 +616,7 @@ export function CdcReport({
                   </span>
                 </button>
               ))}
-              <div className="mx-2 h-5 w-px bg-border" aria-hidden />
+              <div className="mx-2 h-5 w-px bg-[hsl(var(--border-soft))]" aria-hidden />
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="outline" size="sm">
@@ -643,15 +644,15 @@ export function CdcReport({
                 </DropdownMenuContent>
               </DropdownMenu>
 
-              <div className="flex items-center rounded-md border border-border p-0.5 text-xs">
+              <div className="flex items-center gap-0.5 rounded-full border border-soft bg-card p-0.5 text-xs">
                 <button
                   type="button"
                   onClick={() => setGroupMode("flat")}
                   className={cn(
-                    "rounded px-2 py-1 transition-colors",
+                    "rounded-full px-3 py-1 font-medium transition-all",
                     groupMode === "flat"
-                      ? "bg-muted text-foreground"
-                      : "text-muted-foreground hover:text-foreground",
+                      ? "bg-accent-soft text-accent shadow-tinted-sm"
+                      : "text-muted-foreground hover:text-accent",
                   )}
                 >
                   Vue plate
@@ -660,10 +661,10 @@ export function CdcReport({
                   type="button"
                   onClick={() => setGroupMode("domain")}
                   className={cn(
-                    "rounded px-2 py-1 transition-colors",
+                    "rounded-full px-3 py-1 font-medium transition-all",
                     groupMode === "domain"
-                      ? "bg-muted text-foreground"
-                      : "text-muted-foreground hover:text-foreground",
+                      ? "bg-accent-soft text-accent shadow-tinted-sm"
+                      : "text-muted-foreground hover:text-accent",
                   )}
                 >
                   Vue par domaine
@@ -691,7 +692,7 @@ export function CdcReport({
               </div>
             </div>
 
-            <div className="flex items-center justify-between gap-2 border-b border-border bg-muted/30 px-4 py-2 text-xs text-muted-foreground md:px-6">
+            <div className="flex items-center justify-between gap-2 border-b border-soft bg-muted/20 px-4 py-2 text-xs text-muted-foreground md:px-6">
               <div>
                 <span className="font-semibold tabular-nums text-foreground">
                   {filtered.length}
@@ -743,11 +744,11 @@ export function CdcReport({
                     ambiguous: reqs.filter((r) => r.status === "ambiguous").length,
                   };
                   return (
-                    <div key={domain} className="border-b border-border">
+                    <div key={domain} className="border-b border-soft">
                       <button
                         type="button"
                         onClick={() => toggleDomain(domain)}
-                        className="flex w-full items-center gap-3 bg-muted/30 px-4 py-2 text-left transition-colors hover:bg-muted/50 md:px-6"
+                        className="flex w-full items-center gap-3 bg-muted/20 px-4 py-2 text-left transition-colors hover:bg-accent-soft/40 md:px-6"
                       >
                         <ChevronDown
                           className={cn(
