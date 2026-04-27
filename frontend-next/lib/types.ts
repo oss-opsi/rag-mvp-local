@@ -256,3 +256,76 @@ export type CdcDetail = {
   corpus_fingerprint?: string;
   analysis: AnalysisRow | null;
 };
+
+// ---------------------------------------------------------------------------
+// Page Admin Planificateur — types
+// ---------------------------------------------------------------------------
+
+export type SchedulerSource =
+  | "boss"
+  | "urssaf"
+  | "dsn_info"
+  | "service_public"
+  | "reembed_boss"
+  | "reembed_urssaf"
+  | "reembed_dsn_info"
+  | "reembed_service_public"
+  | "reembed_all"
+  | "optimize_qdrant"
+  | "integrity_check";
+
+export type Schedule = {
+  id: number;
+  source: SchedulerSource | string;
+  cron_expression: string;
+  enabled: boolean;
+  pause_chat_during_refresh: boolean;
+  label: string | null;
+  last_run_at: string | null;
+  next_run_at: string | null;
+  created_at: string;
+  created_by: string | null;
+};
+
+export type RefreshJobStatus =
+  | "queued"
+  | "running"
+  | "success"
+  | "error"
+  | "cancelled";
+
+export type RefreshJob = {
+  id: number;
+  schedule_id: number | null;
+  source: SchedulerSource | string;
+  trigger: "cron" | "manual";
+  status: RefreshJobStatus;
+  started_at: string | null;
+  finished_at: string | null;
+  duration_s: number | null;
+  pages_fetched: number | null;
+  chunks_indexed: number | null;
+  error_message: string | null;
+  log_excerpt: string | null;
+  stop_requested?: boolean;
+  created_at: string;
+};
+
+export type AppNotification = {
+  id: number;
+  user: string;
+  level: "info" | "warn" | "error";
+  title: string;
+  body: string | null;
+  created_at: string;
+  read_at: string | null;
+};
+
+export type QdrantCollectionStat = {
+  name: string;
+  points?: number;
+  segments?: number;
+  status?: string;
+  indexed_vectors?: number;
+  error?: string;
+};

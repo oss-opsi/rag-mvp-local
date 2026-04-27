@@ -30,3 +30,6 @@ beautifulsoup4>=4.12.0
 lxml>=5.0.0
 # curl_cffi : impersonation TLS Chrome pour passer Cloudflare (URSSAF)
 curl_cffi>=0.7
+# Page Admin Planificateur — déclenchement cron des refresh sources publiques
+APScheduler>=3.10
+croniter>=2.0
