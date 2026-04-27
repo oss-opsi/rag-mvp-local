@@ -411,7 +411,14 @@ export default function ChatPage() {
       <ContextPanel>
         <div className="flex h-full flex-col">
           <div className="flex items-center justify-between border-b border-soft px-4 py-3">
-            <h2 className="text-sm font-semibold">Conversations</h2>
+            <div>
+              <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+                Historique
+              </div>
+              <h2 className="mt-0.5 text-sm font-semibold tracking-tight">
+                Conversations
+              </h2>
+            </div>
             <Button
               size="icon"
               variant="ghost"
@@ -429,7 +436,7 @@ export default function ChatPage() {
                 Aucune conversation.
               </div>
             ) : (
-              <ul className="py-1">
+              <ul className="flex flex-col gap-1 p-2">
                 {conversations.map((c) => {
                   const active = c.id === selectedId;
                   return (
@@ -438,16 +445,25 @@ export default function ChatPage() {
                         type="button"
                         onClick={() => setSelectedId(c.id)}
                         className={cn(
-                          "flex w-full flex-col gap-0.5 border-l-2 px-3 py-2 text-left text-sm transition-colors",
+                          "group relative flex w-full flex-col gap-0.5 rounded-xl px-3 py-2 text-left text-sm transition-all",
                           active
-                            ? "border-l-accent bg-muted"
-                            : "border-l-transparent hover:bg-muted/50"
+                            ? "bg-accent-soft text-accent shadow-tinted-sm"
+                            : "text-muted-foreground hover:bg-card hover:text-foreground hover:shadow-tinted-sm",
                         )}
                       >
+                        {active ? (
+                          <span
+                            className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-accent"
+                            aria-hidden
+                          />
+                        ) : null}
                         <span className="truncate font-medium">
                           {c.title || "Sans titre"}
                         </span>
-                        <span className="text-[10px] text-muted-foreground">
+                        <span className={cn(
+                          "text-[10px]",
+                          active ? "text-accent/70" : "text-muted-foreground",
+                        )}>
                           {formatDateTime(c.updated_at)} · {c.message_count} msg
                         </span>
                       </button>
