@@ -13,7 +13,6 @@ import {
 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/components/ui/use-toast";
 import { api, type RagasMetrics, type RagasPerQuestion } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
@@ -63,7 +62,7 @@ function GaugeCard({
   const dash = `${pct * 251.2} 251.2`; // 2 * pi * 40
 
   return (
-    <div className="flex flex-col items-center gap-3 rounded-xl border border-border bg-card p-5 shadow-sm">
+    <div className="flex flex-col items-center gap-3 rounded-2xl border border-soft bg-card p-5 shadow-tinted-sm transition-all hover:-translate-y-0.5 hover:shadow-tinted-md">
       <div className="relative">
         <svg width="120" height="120" viewBox="0 0 100 100">
           <circle
@@ -71,7 +70,7 @@ function GaugeCard({
             cy="50"
             r="40"
             fill="none"
-            stroke="hsl(var(--border))"
+            stroke="hsl(var(--border-soft))"
             strokeWidth="10"
           />
           <circle
@@ -109,12 +108,14 @@ function ScoreCell({ value }: { value: number }) {
     return <span className="text-muted-foreground">—</span>;
   }
   const pct = (value * 100).toFixed(0);
+  const color = scoreColor(value);
   return (
     <span
-      className="inline-flex h-6 min-w-[40px] items-center justify-center rounded-md px-1.5 text-xs font-medium tabular-nums"
+      className="inline-flex h-6 min-w-[44px] items-center justify-center rounded-full border px-2 text-xs font-medium tabular-nums"
       style={{
-        backgroundColor: `${scoreColor(value)}1F`, // 12% opacity
-        color: scoreColor(value),
+        backgroundColor: `${color}14`, // ~8% opacity (soft)
+        borderColor: `${color}40`, // ~25% opacity
+        color,
       }}
     >
       {pct}
@@ -257,21 +258,26 @@ export default function RagasPage() {
           </>
         }
       >
-        <Badge
-          variant="outline"
-          className="border-violet/30 bg-violet/10 text-violet"
-        >
-          <LineChartIcon className="mr-1 h-3 w-3" />
+        <span className="inline-flex items-center gap-1 rounded-full border border-violet/25 bg-violet-soft px-2.5 py-0.5 text-[11px] font-medium text-violet">
+          <LineChartIcon className="h-3 w-3" />
           4 métriques
-        </Badge>
+        </span>
       </Topbar>
 
       <div className="flex-1 overflow-auto">
         <div className="mx-auto grid w-full max-w-6xl grid-cols-1 gap-6 px-4 py-5 md:p-6 lg:grid-cols-[1fr_280px]">
           {/* Colonne principale */}
           <div className="flex flex-col gap-6">
+            <div>
+              <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-violet">
+                Évaluation
+              </div>
+              <h1 className="mt-0.5 text-xl font-semibold tracking-tight">
+                RAGAS — qualité du pipeline
+              </h1>
+            </div>
             {/* Bandeau upload + run */}
-            <section className="rounded-xl border border-border bg-card p-5 shadow-sm">
+            <section className="rounded-2xl border border-soft bg-card p-5 shadow-tinted-sm">
               <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div className="min-w-0 flex-1">
                   <h2 className="text-base font-semibold">
@@ -320,20 +326,20 @@ export default function RagasPage() {
               </div>
 
               {file ? (
-                <div className="mt-4 flex flex-wrap items-center gap-3 rounded-md border border-dashed border-border bg-background px-3 py-2 text-xs">
-                  <FileText className="h-4 w-4 text-muted-foreground" />
+                <div className="mt-4 flex flex-wrap items-center gap-3 rounded-2xl border border-dashed border-soft bg-muted/20 px-3 py-2 text-xs">
+                  <FileText className="h-4 w-4 text-accent" />
                   <span className="font-medium text-foreground">{file.name}</span>
                   <span className="text-muted-foreground">
                     {(file.size / 1024).toFixed(1)} Ko
                   </span>
                   {questionCount > 0 ? (
-                    <Badge variant="secondary" className="tabular-nums">
+                    <span className="inline-flex items-center rounded-full border border-soft bg-card px-2 py-0.5 text-[11px] font-medium text-muted-foreground tabular-nums">
                       {questionCount} question{questionCount > 1 ? "s" : ""}
-                    </Badge>
+                    </span>
                   ) : null}
                   {questionCount > 20 ? (
-                    <span className="text-warning">
-                      ⚠ seules les 20 premières seront évaluées.
+                    <span className="inline-flex items-center gap-1 rounded-full border border-warning/25 bg-warning-soft px-2 py-0.5 text-[11px] font-medium text-warning">
+                      ⚠ seules les 20 premières seront évaluées
                     </span>
                   ) : null}
                 </div>
@@ -365,9 +371,9 @@ export default function RagasPage() {
             </section>
 
             {/* Tableau par question */}
-            <section className="rounded-xl border border-border bg-card shadow-sm">
-              <div className="flex items-center justify-between border-b border-border px-5 py-3">
-                <h3 className="text-sm font-semibold">Détail par question</h3>
+            <section className="rounded-2xl border border-soft bg-card shadow-tinted-sm">
+              <div className="flex items-center justify-between border-b border-soft px-5 py-3">
+                <h3 className="text-sm font-semibold tracking-tight">Détail par question</h3>
                 {result && result.per_question.length > 0 ? (
                   <Button variant="outline" size="sm" onClick={handleExport}>
                     <Download className="mr-1.5 h-4 w-4" />
@@ -387,7 +393,7 @@ export default function RagasPage() {
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
-                    <thead className="bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
+                    <thead className="bg-muted/30 text-[11px] uppercase tracking-wide text-muted-foreground">
                       <tr>
                         <th className="px-5 py-2.5 text-left font-medium">Question</th>
                         <th className="px-3 py-2.5 text-center font-medium">F</th>
@@ -400,7 +406,7 @@ export default function RagasPage() {
                       {result.per_question.map((r, i) => (
                         <tr
                           key={i}
-                          className="border-t border-border align-top hover:bg-muted/30"
+                          className="border-t border-soft align-top transition-colors hover:bg-accent-soft/30"
                         >
                           <td className="px-5 py-3">
                             <div
@@ -431,12 +437,12 @@ export default function RagasPage() {
 
           {/* Sidebar info */}
           <aside className="flex flex-col gap-4">
-            <section className="rounded-xl border border-border bg-card p-4 shadow-sm">
+            <section className="rounded-2xl border border-soft bg-card p-4 shadow-tinted-sm">
               <div className="mb-2 flex items-center gap-2 text-sm font-semibold">
                 <Info className="h-4 w-4 text-accent" />
                 Format CSV
               </div>
-              <pre className="overflow-x-auto rounded-md bg-muted px-3 py-2 text-[11px] leading-relaxed">
+              <pre className="overflow-x-auto rounded-md border border-soft bg-muted/40 px-3 py-2 text-[11px] leading-relaxed">
 {`question,ground_truth
 "Quelle est la durée ?","12 mois"
 "Combien de SLA ?","3 niveaux"`}
@@ -446,7 +452,7 @@ export default function RagasPage() {
               </p>
             </section>
 
-            <section className="rounded-xl border border-border bg-card p-4 shadow-sm">
+            <section className="rounded-2xl border border-soft bg-card p-4 shadow-tinted-sm">
               <div className="mb-2 flex items-center gap-2 text-sm font-semibold">
                 <KeyRound className="h-4 w-4 text-accent" />
                 Clé OpenAI
@@ -454,7 +460,7 @@ export default function RagasPage() {
               {keyInfo?.has_key ? (
                 <p className="text-xs text-muted-foreground">
                   Clé configurée :{" "}
-                  <code className="rounded bg-muted px-1">{keyInfo.masked}</code>
+                  <code className="rounded-md border border-soft bg-muted/40 px-1.5 py-0.5">{keyInfo.masked}</code>
                 </p>
               ) : (
                 <p className="text-xs text-warning">
@@ -463,7 +469,7 @@ export default function RagasPage() {
               )}
             </section>
 
-            <section className="rounded-xl border border-border bg-card p-4 shadow-sm">
+            <section className="rounded-2xl border border-soft bg-card p-4 shadow-tinted-sm">
               <div className="mb-2 flex items-center gap-2 text-sm font-semibold">
                 <LineChartIcon className="h-4 w-4 text-violet" />
                 Métriques
@@ -482,7 +488,7 @@ export default function RagasPage() {
                   <span className="font-medium text-foreground">CR · Context recall</span> — couverture vs. vérité.
                 </li>
               </ul>
-              <p className="mt-3 border-t border-border pt-3 text-[11px] text-muted-foreground">
+              <p className="mt-3 border-t border-soft pt-3 text-[11px] text-muted-foreground">
                 Coût indicatif : ~0,18 $ pour 50 questions (gpt-4o-mini).
               </p>
             </section>
