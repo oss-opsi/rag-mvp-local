@@ -10,6 +10,22 @@ URL GitHub : https://github.com/oss-opsi/rag-mvp-local/releases/tag/v3.9.0-stabl
 **`ui-pre-modern-v1`** — commit `f3b1c35` (tag local sur la VM, non poussé sur GitHub tant que pas d'auth git)
 État de `main` avant la refonte UI moderne (chantier `feat/ui-modern-v4`). Inclut le PR #2 (KB partagée + retrieval hybride). Sert de point de retour ciblé pour rollback de la refonte UI uniquement, sans perdre les améliorations backend.
 
+**`v4.4.0-lot2bis-stable`** — commit `74d84d3`
+État stable consolidé du 27 avril 2026 : intègre l'ensemble de la branche `feat/lot2bis-sources-pratiques` (21 commits qui n'avaient jamais été mergés dans `main`) + le scaffold UI v4 (page `/mockup`) + les tokens design (soft variants, ombres tintées, shimmer skeleton). Validé fonctionnellement avant la refonte UI moderne v4 page-par-page. Contient :
+- 9 pages : login, documents, chat, analyse, ragas, **scheduler**, **referentiels**, settings, users + /mockup
+- chat enrichi : toggle Recherche approfondie, sections privé/public, mémoire 5 tours, pastilles sources repliables, demande de clarification
+- analyse-cdc v3.10/v3.11 : confiance, feedback, dashboard qualité, re-pass batch, export CSV
+- connecteurs sources publiques : BOSS, DSN-info, URSSAF, Légifrance, service-public.fr
+- scheduler : cron + jobs + maintenance + notifications
+- referentiels : admin Opsidium, PDF/DOCX/xlsx, analyse CDC
+
+Rollback rapide :
+```bash
+git fetch --tags
+git checkout v4.4.0-lot2bis-stable
+docker compose up -d --build
+```
+
 ## Que contient ce tag
 
 - Backend FastAPI v3.1.0 (`:8000`)
