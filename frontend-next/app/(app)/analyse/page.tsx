@@ -392,7 +392,7 @@ export default function AnalysePage() {
       <>
         {contextPanelContent}
         <div className="flex h-full flex-col">
-          <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-4 md:px-6">
+          <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-soft px-4 md:px-6">
             <div className="text-sm font-semibold">
               Analyse
               <span className="mx-1.5 text-muted-foreground">—</span>
@@ -424,7 +424,7 @@ export default function AnalysePage() {
       <>
         {contextPanelContent}
         <div className="flex h-full flex-col">
-        <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-4 md:px-6">
+        <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-soft px-4 md:px-6">
           <div className="min-w-0 flex-1 truncate text-sm font-semibold">
             Analyse
             <span className="mx-1.5 text-muted-foreground">—</span>
@@ -474,7 +474,7 @@ export default function AnalysePage() {
                 </h2>
                 <label
                   className={cn(
-                    "inline-flex cursor-pointer items-center gap-2 rounded-md border border-border bg-background px-3 py-1.5 text-sm hover:bg-muted",
+                    "inline-flex cursor-pointer items-center gap-2 rounded-md border border-soft bg-background px-3 py-1.5 text-sm hover:bg-muted",
                     uploading && "pointer-events-none opacity-60"
                   )}
                 >
@@ -551,7 +551,7 @@ export default function AnalysePage() {
       <>
         {contextPanelContent}
         <div className="flex h-full flex-col">
-          <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-4 md:px-6">
+          <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-soft px-4 md:px-6">
             <div className="flex min-w-0 flex-1 items-center gap-2">
               <Button
                 variant="ghost"

@@ -1604,7 +1604,7 @@ function ScheduleEditor({
               value={source}
               onChange={(e) => setSource(e.target.value)}
               disabled={!!editing}
-              className="flex h-9 w-full rounded-md border border-border bg-background px-3 text-sm"
+              className="flex h-9 w-full rounded-md border border-soft bg-background px-3 text-sm"
             >
               <optgroup label="Sources publiques">
                 {PUBLIC_SOURCES.map((s) => (
@@ -1643,7 +1643,7 @@ function ScheduleEditor({
                       "rounded-md border px-2 py-1 text-xs",
                       mode === m
                         ? "border-accent bg-accent/10 text-accent"
-                        : "border-border bg-background text-muted-foreground",
+                        : "border-soft bg-background text-muted-foreground",
                     )}
                   >
                     {m === "daily"
@@ -1665,7 +1665,7 @@ function ScheduleEditor({
                     <select
                       value={dayOfWeek}
                       onChange={(e) => setDayOfWeek(Number(e.target.value))}
-                      className="h-8 rounded-md border border-border bg-background px-2"
+                      className="h-8 rounded-md border border-soft bg-background px-2"
                     >
                       <option value={1}>lundi</option>
                       <option value={2}>mardi</option>
@@ -1734,7 +1734,7 @@ function ScheduleEditor({
             ) : null}
           </div>
 
-          <div className="flex flex-col gap-2 rounded-md border border-border p-3 text-xs">
+          <div className="flex flex-col gap-2 rounded-md border border-soft p-3 text-xs">
             <label className="flex items-center justify-between gap-2">
               <span>Pause chat pendant ce refresh</span>
               <input

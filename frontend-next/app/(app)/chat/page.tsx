@@ -410,7 +410,7 @@ export default function ChatPage() {
       <MaintenanceBanner />
       <ContextPanel>
         <div className="flex h-full flex-col">
-          <div className="flex items-center justify-between border-b border-border px-4 py-3">
+          <div className="flex items-center justify-between border-b border-soft px-4 py-3">
             <h2 className="text-sm font-semibold">Conversations</h2>
             <Button
               size="icon"
@@ -459,7 +459,7 @@ export default function ChatPage() {
           </ScrollArea>
         </div>
       </ContextPanel>
-      <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-4 md:px-6">
+      <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-soft px-4 md:px-6">
         <div className="min-w-0 flex-1 truncate text-sm font-semibold">
           Chat
           <span className="mx-1.5 text-muted-foreground">—</span>

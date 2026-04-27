@@ -234,7 +234,7 @@ export function RequirementSheet({
       <SheetContent side="right" className="flex w-full flex-col gap-0 p-0 sm:max-w-xl">
         {requirement ? (
           <>
-            <SheetHeader className="border-b border-border p-6">
+            <SheetHeader className="border-b border-soft p-6">
               <div className="flex items-center gap-3">
                 <span
                   className={cn(
@@ -376,7 +376,7 @@ export function RequirementSheet({
                       {requirement.sources.map((s, i) => (
                         <div
                           key={i}
-                          className="rounded-md border border-border p-3"
+                          className="rounded-md border border-soft p-3"
                         >
                           <div className="mb-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                             <span className="font-medium text-foreground">
@@ -582,7 +582,7 @@ export function RequirementSheet({
                       </p>
 
                       {hasSavedFeedback && !editing ? (
-                        <div className="rounded-md border border-border p-3">
+                        <div className="rounded-md border border-soft p-3">
                           <div className="flex flex-wrap items-center gap-2 text-sm">
                             {feedback!.vote === "up" ? (
                               <ThumbsUp className="h-4 w-4 text-accent" aria-hidden />
@@ -644,7 +644,7 @@ export function RequirementSheet({
                                 "flex items-center justify-center gap-2 rounded-md border px-3 py-2 text-sm transition-colors",
                                 vote === "up"
                                   ? "border-accent bg-accent/10 text-accent"
-                                  : "border-border bg-background hover:bg-muted/50",
+                                  : "border-soft bg-background hover:bg-muted/50",
                               )}
                               disabled={busy}
                             >
@@ -658,7 +658,7 @@ export function RequirementSheet({
                                 "flex items-center justify-center gap-2 rounded-md border px-3 py-2 text-sm transition-colors",
                                 vote === "down"
                                   ? "border-danger bg-danger/10 text-danger"
-                                  : "border-border bg-background hover:bg-muted/50",
+                                  : "border-soft bg-background hover:bg-muted/50",
                               )}
                               disabled={busy}
                             >
