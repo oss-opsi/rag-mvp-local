@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Loader2, Play, Upload } from "lucide-react";
+import { ChevronLeft, Loader2, Play, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { UploadDropzone } from "@/components/upload-dropzone";
@@ -552,12 +552,28 @@ export default function AnalysePage() {
         {contextPanelContent}
         <div className="flex h-full flex-col">
           <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-4 md:px-6">
-            <div className="min-w-0 flex-1 truncate text-sm font-semibold">
-              Analyse
-              <span className="mx-1.5 text-muted-foreground">—</span>
-              <span className="font-normal text-muted-foreground">
-                {cdcDetail.cdc.filename}
-              </span>
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setSelectedCdcId(null);
+                  setCdcDetail(null);
+                  setReport(null);
+                }}
+                aria-label="Retour à la liste des CDCs"
+                className="h-8 shrink-0 px-2 text-muted-foreground hover:text-foreground"
+              >
+                <ChevronLeft className="h-4 w-4" />
+                <span className="ml-1 hidden md:inline">CDCs</span>
+              </Button>
+              <div className="min-w-0 truncate text-sm font-semibold">
+                Analyse
+                <span className="mx-1.5 text-muted-foreground">—</span>
+                <span className="font-normal text-muted-foreground">
+                  {cdcDetail.cdc.filename}
+                </span>
+              </div>
             </div>
             <div className="flex items-center gap-2">
               <StatusPill status={cdcDetail.status} />
@@ -600,6 +616,11 @@ export default function AnalysePage() {
         summary={report.summary}
         requirements={report.requirements}
         pipelineVersion={report.pipeline_version || currentState?.pipelineVersion}
+        onBack={() => {
+          setSelectedCdcId(null);
+          setCdcDetail(null);
+          setReport(null);
+        }}
         onReanalyse={() => handleAnalyse(true)}
         onDelete={handleDeleteCdc}
         onRefresh={async () => {

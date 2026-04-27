@@ -8,6 +8,7 @@ import {
   Download,
   Loader2,
   ChevronDown,
+  ChevronLeft,
   BarChart3,
   ArrowDownNarrowWide,
 } from "lucide-react";
@@ -127,6 +128,7 @@ export function CdcReport({
   summary,
   requirements,
   pipelineVersion,
+  onBack,
   onReanalyse,
   onDelete,
   onRefresh,
@@ -138,6 +140,7 @@ export function CdcReport({
   summary: AnalysisSummary | Partial<AnalysisSummary> | null | undefined;
   requirements: Requirement[];
   pipelineVersion?: string;
+  onBack?: () => void;
   onReanalyse: () => void | Promise<void>;
   onDelete: () => void | Promise<void>;
   onRefresh?: () => void | Promise<void>;
@@ -392,7 +395,22 @@ export function CdcReport({
     <div className="flex h-full flex-col">
       <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center justify-between gap-3 border-b border-soft bg-background/80 px-4 backdrop-blur-md md:px-6">
         <div className="flex min-w-0 items-center gap-3">
-          <h1 className="truncate text-base font-semibold">{filename}</h1>
+          {onBack ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onBack}
+              aria-label="Retour à la liste des CDCs"
+              title="Retour à la liste des CDCs"
+              className="h-8 shrink-0 px-2 text-muted-foreground hover:text-foreground"
+            >
+              <ChevronLeft className="h-4 w-4" />
+              <span className="ml-1 hidden md:inline">CDCs</span>
+            </Button>
+          ) : null}
+          <h1 className="truncate text-base font-semibold tracking-tight">
+            {filename}
+          </h1>
           <Badge variant={statusBadgeVariant}>
             {coveragePercent.toFixed(0)}% couvert
           </Badge>

@@ -38,11 +38,10 @@ type NavItem = {
   icon: React.ComponentType<{ className?: string }>;
 };
 
-// Tell me v4.5 — page d'accueil = Chat. Indexation passe en admin.
+// Tell me v4.5 — accueil = Chat. Indexation et RAGAS sont en admin.
 const PRIMARY_NAV: NavItem[] = [
   { href: "/chat", label: "Chat", icon: MessageCircle },
   { href: "/analyse", label: "Analyse d'écarts", icon: FileSearch },
-  { href: "/ragas", label: "RAGAS", icon: LineChart },
 ];
 
 const SECONDARY_NAV: NavItem[] = [
@@ -54,6 +53,7 @@ const SECONDARY_NAV: NavItem[] = [
 const ADMIN_NAV: NavItem[] = [
   { href: "/documents", label: "Indexation", icon: LayoutGrid },
   { href: "/referentiels", label: "Référentiels", icon: BookMarked },
+  { href: "/ragas", label: "RAGAS", icon: LineChart },
   { href: "/scheduler", label: "Planificateur", icon: CalendarClock },
 ];
 
