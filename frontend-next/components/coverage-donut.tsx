@@ -35,7 +35,7 @@ export function CoverageDonut({
           cy={size / 2}
           r={radius}
           fill="none"
-          stroke="hsl(var(--muted))"
+          stroke="hsl(var(--border-soft))"
           strokeWidth={stroke}
         />
         <circle

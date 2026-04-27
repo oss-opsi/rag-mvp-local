@@ -42,7 +42,7 @@ export function MaintenanceBanner() {
   return (
     <div
       role="status"
-      className="flex items-center gap-2 border-b border-warning/40 bg-warning/10 px-4 py-2 text-xs text-warning"
+      className="flex items-center gap-2 border-b border-warning/25 bg-warning-soft px-4 py-2 text-xs font-medium text-warning"
     >
       <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
       <span>

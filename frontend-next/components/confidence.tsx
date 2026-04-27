@@ -34,9 +34,9 @@ export function confidenceBgClass(value: number): string {
 
 export function confidenceSoftClass(value: number): string {
   const t = confidenceTier(value);
-  if (t === "high") return "bg-success/10 text-success";
-  if (t === "medium") return "bg-warning/10 text-warning";
-  return "bg-danger/10 text-danger";
+  if (t === "high") return "border border-success/25 bg-success-soft text-success";
+  if (t === "medium") return "border border-warning/25 bg-warning-soft text-warning";
+  return "border border-danger/25 bg-danger-soft text-danger";
 }
 
 /**
@@ -55,7 +55,7 @@ export function ConfidencePill({
   return (
     <span
       className={cn(
-        "rounded px-1.5 py-0.5 text-xs font-medium tabular-nums",
+        "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium tabular-nums",
         confidenceSoftClass(value),
         className,
       )}
@@ -96,7 +96,7 @@ export function ConfidenceGauge({
           </span>
         </div>
       ) : null}
-      <div className="relative h-2 w-full overflow-hidden rounded-full bg-muted">
+      <div className="relative h-2 w-full overflow-hidden rounded-full bg-[hsl(var(--border-soft))]">
         <div
           className={cn("h-full rounded-full transition-all", confidenceBgClass(clamped))}
           style={{ width: `${pct}%` }}

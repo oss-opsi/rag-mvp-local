@@ -1,7 +1,11 @@
-import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
 export const DEFAULT_PIPELINE_VERSION = "v3.9.0";
+
+const PILL_BASE =
+  "inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium";
+const VERSION_PILL = "border-accent/25 bg-accent-soft text-accent";
+const FEATURE_PILL = "border-soft bg-card text-muted-foreground";
 
 export function PipelineBadges({
   version,
@@ -16,22 +20,22 @@ export function PipelineBadges({
   if (compact) {
     return (
       <div className={cn("flex flex-wrap items-center gap-1", className)}>
-        <Badge variant="secondary">Pipeline {v}</Badge>
-        <Badge variant="outline">HyDE</Badge>
-        <Badge variant="outline">re-pass</Badge>
-        <Badge variant="outline">bge-m3</Badge>
-        <Badge variant="outline">reranker</Badge>
+        <span className={cn(PILL_BASE, VERSION_PILL)}>Pipeline {v}</span>
+        <span className={cn(PILL_BASE, FEATURE_PILL)}>HyDE</span>
+        <span className={cn(PILL_BASE, FEATURE_PILL)}>re-pass</span>
+        <span className={cn(PILL_BASE, FEATURE_PILL)}>bge-m3</span>
+        <span className={cn(PILL_BASE, FEATURE_PILL)}>reranker</span>
       </div>
     );
   }
   return (
     <div className={cn("flex flex-wrap items-center gap-2", className)}>
-      <Badge variant="secondary">Pipeline {v}</Badge>
-      <Badge variant="outline">HyDE actif</Badge>
-      <Badge variant="outline">Re-pass GPT-4o</Badge>
-      <Badge variant="outline">bge-m3</Badge>
-      <Badge variant="outline">reranker v2-m3</Badge>
-      <Badge variant="outline">Chunker v2</Badge>
+      <span className={cn(PILL_BASE, VERSION_PILL)}>Pipeline {v}</span>
+      <span className={cn(PILL_BASE, FEATURE_PILL)}>HyDE actif</span>
+      <span className={cn(PILL_BASE, FEATURE_PILL)}>Re-pass GPT-4o</span>
+      <span className={cn(PILL_BASE, FEATURE_PILL)}>bge-m3</span>
+      <span className={cn(PILL_BASE, FEATURE_PILL)}>reranker v2-m3</span>
+      <span className={cn(PILL_BASE, FEATURE_PILL)}>Chunker v2</span>
     </div>
   );
 }
