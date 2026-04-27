@@ -71,7 +71,7 @@ export function Composer({
       ) : null}
       <div
         className={cn(
-          "flex items-end gap-2 rounded-2xl border border-border bg-card p-2 shadow-tinted-sm transition-all",
+          "flex items-end gap-2 rounded-2xl border border-soft bg-card p-2 shadow-tinted-sm transition-all",
           "focus-within:border-accent/50 focus-within:shadow-tinted-md",
         )}
       >

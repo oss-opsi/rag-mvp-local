@@ -67,7 +67,7 @@ const STATUS_CLASS: Record<SourceStatus, string> = {
   available:
     "bg-green-50 text-green-700 ring-1 ring-green-200 dark:bg-green-900/30 dark:text-green-300 dark:ring-green-800",
   planned:
-    "bg-muted text-muted-foreground ring-1 ring-border",
+    "bg-muted/40 text-muted-foreground ring-1 ring-[hsl(var(--border-soft))]",
   paused:
     "bg-amber-50 text-amber-700 ring-1 ring-amber-200 dark:bg-amber-900/30 dark:text-amber-300 dark:ring-amber-800",
 };
@@ -183,7 +183,7 @@ export function PublicSourcesCard(): React.ReactElement {
       <div className="flex flex-wrap items-baseline gap-2 text-xs text-muted-foreground">
         <span>
           Base de connaissances partagée :{" "}
-          <code className="rounded bg-muted px-1.5 py-0.5 font-mono">
+          <code className="rounded-md border border-soft bg-muted/40 px-1.5 py-0.5 font-mono">
             {data.kb_collection}
           </code>
         </span>
@@ -201,7 +201,7 @@ export function PublicSourcesCard(): React.ReactElement {
           return (
             <div
               key={s.id}
-              className="rounded-md border border-border bg-background p-4"
+              className="rounded-2xl border border-soft bg-card p-4 shadow-tinted-sm transition-colors hover:border-accent/20"
             >
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">

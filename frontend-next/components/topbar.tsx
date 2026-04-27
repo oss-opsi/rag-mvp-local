@@ -21,7 +21,7 @@ export function Topbar({
   return (
     <header
       className={cn(
-        "flex h-14 shrink-0 items-center gap-2 border-b border-border px-4 md:gap-3 md:px-6",
+        "flex h-14 shrink-0 items-center gap-2 border-b border-soft px-4 md:gap-3 md:px-6",
         className,
       )}
     >

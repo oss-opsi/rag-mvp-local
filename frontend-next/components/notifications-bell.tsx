@@ -102,7 +102,7 @@ export function NotificationsBell() {
           aria-label={`Notifications (${count} non-lues)`}
           className={cn(
             "relative flex h-9 w-9 items-center justify-center rounded-md",
-            "text-muted-foreground hover:bg-muted hover:text-foreground",
+            "text-muted-foreground hover:bg-accent-soft/50 hover:text-accent",
             "transition-colors",
           )}
         >
@@ -125,7 +125,7 @@ export function NotificationsBell() {
         sideOffset={6}
         className="w-[360px] p-0"
       >
-        <div className="flex items-center justify-between border-b border-border px-3 py-2">
+        <div className="flex items-center justify-between border-b border-soft px-3 py-2">
           <span className="text-sm font-semibold">Notifications</span>
           <Button
             variant="ghost"

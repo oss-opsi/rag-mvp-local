@@ -131,7 +131,7 @@ export function LlmModelsCard() {
             onChange={(e) =>
               setDraft({ ...draft, [f.key]: e.target.value } as LlmSettings)
             }
-            className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
+            className="h-10 w-full rounded-md border border-soft bg-card px-3 text-sm focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
           >
             {allowed.map((m) => (
               <option key={m} value={m}>
