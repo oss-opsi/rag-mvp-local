@@ -61,8 +61,15 @@ export function ClientsSidebar({
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between border-b border-border px-4 py-3">
-        <h2 className="text-sm font-semibold">Clients</h2>
+      <div className="flex items-center justify-between border-b border-soft px-4 py-3">
+        <div>
+          <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+            Workspace
+          </div>
+          <h2 className="mt-0.5 text-sm font-semibold tracking-tight">
+            Clients
+          </h2>
+        </div>
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogTrigger asChild>
             <Button size="icon" variant="ghost" aria-label="Nouveau client">
@@ -105,7 +112,7 @@ export function ClientsSidebar({
       </div>
 
       <ScrollArea className="flex-1">
-        <ul className="py-1">
+        <ul className="flex flex-col gap-1 p-2">
           {clients.length === 0 ? (
             <li className="px-4 py-6 text-center text-xs text-muted-foreground">
               Aucun client. Créez-en un pour commencer.
@@ -118,19 +125,32 @@ export function ClientsSidebar({
               <li key={c.id}>
                 <div
                   className={cn(
-                    "group flex h-11 items-center gap-2 border-l-2 px-3 text-sm transition-colors",
+                    "group relative flex items-center gap-2 rounded-xl px-3 py-2 text-sm transition-all",
                     active
-                      ? "border-l-accent bg-muted"
-                      : "border-l-transparent hover:bg-muted/50"
+                      ? "bg-accent-soft text-accent shadow-tinted-sm"
+                      : "text-muted-foreground hover:bg-card hover:text-foreground hover:shadow-tinted-sm",
                   )}
                 >
+                  {active ? (
+                    <span
+                      className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-accent"
+                      aria-hidden
+                    />
+                  ) : null}
                   <button
                     type="button"
                     onClick={() => onSelect(c.id)}
                     className="flex min-w-0 flex-1 items-center justify-between gap-2 text-left"
                   >
                     <span className="truncate font-medium">{c.name}</span>
-                    <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] tabular-nums text-muted-foreground">
+                    <span
+                      className={cn(
+                        "inline-flex h-5 min-w-[24px] items-center justify-center rounded-full px-1.5 text-[10px] font-semibold tabular-nums",
+                        active
+                          ? "bg-card text-accent shadow-tinted-sm"
+                          : "border border-soft bg-muted/40 text-muted-foreground",
+                      )}
+                    >
                       {count}
                     </span>
                   </button>
@@ -140,7 +160,7 @@ export function ClientsSidebar({
                         size="icon"
                         variant="ghost"
                         aria-label="Supprimer le client"
-                        className="h-7 w-7 opacity-0 transition-opacity group-hover:opacity-100"
+                        className="h-7 w-7 opacity-0 transition-opacity group-hover:opacity-100 hover:text-danger focus-visible:opacity-100"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>

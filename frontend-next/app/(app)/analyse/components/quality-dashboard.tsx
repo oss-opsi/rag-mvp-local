@@ -318,7 +318,7 @@ export function QualityDashboard({
 
   return (
     <div className="flex h-full flex-col overflow-auto">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-background px-4 py-3 md:px-6">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-soft bg-background/80 px-4 py-3 backdrop-blur-md md:px-6">
         <h2 className="text-base font-semibold">Tableau de bord qualité</h2>
         <div className="flex flex-wrap items-center gap-2">
           <Button
@@ -382,7 +382,7 @@ export function QualityDashboard({
           />
         </div>
 
-        <section className="rounded-md border border-border bg-background p-4">
+        <section className="rounded-2xl border border-soft bg-card p-5 shadow-tinted-sm">
           <h3 className="mb-3 text-sm font-semibold">
             Distribution des scores de confiance
           </h3>
@@ -408,7 +408,7 @@ export function QualityDashboard({
           </div>
         </section>
 
-        <section className="rounded-md border border-border bg-background p-4">
+        <section className="rounded-2xl border border-soft bg-card p-5 shadow-tinted-sm">
           <h3 className="mb-3 text-sm font-semibold">
             Feedback par domaine SIRH
           </h3>
@@ -452,7 +452,7 @@ export function QualityDashboard({
           )}
         </section>
 
-        <section className="rounded-md border border-border bg-background p-4">
+        <section className="rounded-2xl border border-soft bg-card p-5 shadow-tinted-sm">
           <h3 className="mb-3 text-sm font-semibold">
             Top 5 verdicts contestés
           </h3>
@@ -493,7 +493,7 @@ export function QualityDashboard({
           )}
         </section>
 
-        <section className="rounded-md border border-border bg-background p-4">
+        <section className="rounded-2xl border border-soft bg-card p-5 shadow-tinted-sm">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <h3 className="text-sm font-semibold">
               Suggestions de re-pass automatique
@@ -515,7 +515,7 @@ export function QualityDashboard({
             ) : null}
           </div>
           {repassBusy ? (
-            <div className="mb-3 flex items-center gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+            <div className="mb-3 flex items-center gap-2 rounded-2xl border border-soft bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
               <Loader2 className="h-3 w-3 animate-spin" />
               <span>
                 Re-pass en cours.
@@ -577,7 +577,7 @@ export function QualityDashboard({
           )}
         </section>
 
-        <section className="rounded-md border border-border bg-background p-4">
+        <section className="rounded-2xl border border-soft bg-card p-5 shadow-tinted-sm">
           <div className="flex items-start gap-3">
             <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-accent" aria-hidden />
             <div className="flex flex-col gap-1">
@@ -621,7 +621,7 @@ function KpiTile({
   sub?: string;
 }) {
   return (
-    <div className="rounded-md border border-border bg-background p-4">
+    <div className="rounded-2xl border border-soft bg-card p-5 shadow-tinted-sm">
       <div className="text-xs uppercase tracking-wider text-muted-foreground">
         {label}
       </div>
