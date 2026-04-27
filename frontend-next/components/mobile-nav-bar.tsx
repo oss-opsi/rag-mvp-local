@@ -26,7 +26,7 @@ export function MobileNavBar() {
   const { hasContent, mobileOpen, setMobileOpen } = useContextPanel();
 
   return (
-    <div className="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-soft bg-background px-3 md:hidden">
+    <div className="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-soft bg-gradient-to-b from-accent-soft/30 to-background px-3 md:hidden">
       <Sheet open={navOpen} onOpenChange={setNavOpen}>
         <Button
           variant="ghost"

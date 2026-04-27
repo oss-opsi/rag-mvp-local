@@ -641,10 +641,10 @@ export function RequirementSheet({
                               type="button"
                               onClick={() => setVote("up")}
                               className={cn(
-                                "flex items-center justify-center gap-2 rounded-md border px-3 py-2 text-sm transition-colors",
+                                "flex items-center justify-center gap-2 rounded-xl border px-3 py-2 text-sm font-medium transition-all",
                                 vote === "up"
-                                  ? "border-accent bg-accent/10 text-accent"
-                                  : "border-soft bg-background hover:bg-muted/50",
+                                  ? "border-success/25 bg-success-soft text-success shadow-tinted-sm"
+                                  : "border-soft bg-card text-muted-foreground hover:-translate-y-0.5 hover:border-success/25 hover:bg-success-soft/40 hover:text-success",
                               )}
                               disabled={busy}
                             >
@@ -655,10 +655,10 @@ export function RequirementSheet({
                               type="button"
                               onClick={() => setVote("down")}
                               className={cn(
-                                "flex items-center justify-center gap-2 rounded-md border px-3 py-2 text-sm transition-colors",
+                                "flex items-center justify-center gap-2 rounded-xl border px-3 py-2 text-sm font-medium transition-all",
                                 vote === "down"
-                                  ? "border-danger bg-danger/10 text-danger"
-                                  : "border-soft bg-background hover:bg-muted/50",
+                                  ? "border-danger/25 bg-danger-soft text-danger shadow-tinted-sm"
+                                  : "border-soft bg-card text-muted-foreground hover:-translate-y-0.5 hover:border-danger/25 hover:bg-danger-soft/40 hover:text-danger",
                               )}
                               disabled={busy}
                             >
