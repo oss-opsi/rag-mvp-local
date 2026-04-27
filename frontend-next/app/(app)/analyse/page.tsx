@@ -308,6 +308,7 @@ export default function AnalysePage() {
   React.useEffect(() => {
     if (selectedCdcId === null) return;
     let cancelled = false;
+    let opened = false;
     (async () => {
       try {
         const jobs = await api.analysisJobs({
@@ -317,16 +318,20 @@ export default function AnalysePage() {
         if (cancelled) return;
         if (jobs.length > 0) {
           const job = jobs[0]!;
+          opened = true;
           setAnalysing(true);
           toast({
             title: "Analyse en cours",
             description: "Reprise du suivi de l'analyse en arrière-plan.",
           });
           await pollAnalysisJob(job.id, selectedCdcId);
-          if (!cancelled) setAnalysing(false);
         }
       } catch {
         // silencieux : pas bloquant
+      } finally {
+        // Garantit qu'on ne reste jamais bloqué en analysing=true même si
+        // une exception inattendue est remontée du polling.
+        if (!cancelled && opened) setAnalysing(false);
       }
     })();
     return () => {
