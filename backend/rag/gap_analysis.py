@@ -1,18 +1,24 @@
 """
-Gap Analysis service — v3.5 "Analyse d'écarts".
+Gap Analysis service — v3.11.0 "Analyse d'écarts" + RAG enrichi par feedback.
 
 Analyse un cahier des charges client :
   1. Parse le fichier (PDF/DOCX/TXT/MD) et agrège le texte.
-  2. Demande au LLM (GPT-4o-mini) d'extraire une liste structurée d'exigences
-     (JSON) : [{id, title, description, category}].
+  2. Demande au LLM d'extraire une liste structurée d'exigences (JSON).
   3. Pour chaque exigence, lance une requête hybride (RRF) sur la collection
-     Qdrant de l'utilisateur pour récupérer les chunks pertinents.
+     Qdrant ``referentiels_opsidium`` pour récupérer les chunks pertinents.
   4. Demande au LLM de statuer : covered / partial / missing / ambiguous,
-     avec justification et liste de sources (fichier + page).
-  5. Renvoie un rapport JSON complet.
+     avec justification, score de confiance et liste de sources.
+  5. Re-pass GPT-4o sur les verdicts ambigus / faible confiance.
+  6. Renvoie un rapport JSON complet.
 
-Tout est exécuté en parallèle avec un semaphore pour limiter les concurrences
-vers OpenAI (évite les rate-limits).
+RAG enrichi par feedback (v3.11.0) — deux axes, ON par défaut, no-op si le
+user n'a aucun feedback validé :
+  - Few-shot : 0 à 3 exemples de verdicts validés (vote='up') du même domaine
+    SIRH sont injectés AVANT la question dans le prompt verdict.
+  - Boost retrieval : les sources citées par des verdicts validés voient leur
+    score RRF multiplié par 1.0..1.5 (post-RRF, pré-rerank).
+
+Tout est exécuté en parallèle avec un semaphore pour limiter les appels OpenAI.
 """
 from __future__ import annotations
 
@@ -24,7 +30,7 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from langchain_openai import ChatOpenAI
 
@@ -59,7 +65,7 @@ DEDUP_SIMILARITY_THRESHOLD = 0.88
 logger = logging.getLogger(__name__)
 
 # Bump this when prompts or pipeline change to invalidate old cache entries.
-PIPELINE_VERSION = "v3.10.0"
+PIPELINE_VERSION = "v3.11.0"
 
 # Persistent cache directory on disk.
 GAP_CACHE_DIR = os.path.join(DATA_DIR, "gap_cache")
@@ -747,7 +753,7 @@ FORMAT DE SORTIE (JSON strict, sans markdown) :
   "confidence": 0.0 à 1.0
 }"""
 
-_VERDICT_HUMAN = """Exigence à évaluer
+_VERDICT_HUMAN = """{few_shot_block}Exigence à évaluer
 ------------------
 ID : {req_id}
 Titre : {title}
@@ -762,6 +768,39 @@ Extraits de la documentation produit
 {context}
 
 Réponds en JSON strict (voir schéma du système)."""
+
+
+def _format_few_shot_block(examples: list[dict[str, Any]] | None) -> str:
+    """Construit le bloc few-shot à injecter avant la question courante.
+
+    Format : un titre clair indiquant qu'il s'agit de verdicts validés par
+    l'utilisateur (référence de style et de rigueur), suivi de N exemples
+    numérotés. Renvoie une chaîne vide si aucun exemple disponible.
+    """
+    if not examples:
+        return ""
+    lines: list[str] = [
+        "# Exemples de verdicts validés par l'utilisateur "
+        "(référence de style et rigueur)",
+        "",
+    ]
+    for idx, ex in enumerate(examples, 1):
+        domain = ex.get("category") or ex.get("domain") or "?"
+        status = ex.get("status") or "?"
+        title = (ex.get("title") or "").strip()
+        description = (ex.get("description") or "").strip()
+        verdict = (ex.get("verdict") or "").strip()
+        lines.append(
+            f"Exemple {idx} (domaine: {domain}, statut: {status}) :"
+        )
+        lines.append(f"Exigence : {title}")
+        if description:
+            lines.append(f"Description : {description}")
+        lines.append(f"Verdict : {verdict}")
+        lines.append("")
+    lines.append("---")
+    lines.append("")
+    return "\n".join(lines)
 
 
 def _clamp_unit(value: Any, default: float = 0.5) -> float:
@@ -811,14 +850,21 @@ async def _judge_requirement(
     context: str,
     llm: ChatOpenAI,
     semaphore: asyncio.Semaphore,
+    few_shot_examples: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Ask the LLM to classify coverage for one requirement.
 
     v3.10.0 — extrait également un score de confiance LLM (`llm_confidence`)
     et le combine avec un score de retrieval (`retrieval_confidence`) pour
     produire un `confidence` final stocké sur le requirement.
+
+    v3.11.0 — accepte ``few_shot_examples`` (≤ 3 verdicts validés du même
+    domaine SIRH) qui sont injectés AVANT la question pour guider le LLM
+    sur le style et le niveau de rigueur attendus.
     """
     retrieval_conf = _compute_retrieval_confidence(sources)
+    few_shot_count = len(few_shot_examples) if few_shot_examples else 0
+    few_shot_block = _format_few_shot_block(few_shot_examples)
     async with semaphore:
         if not context.strip():
             return {
@@ -830,6 +876,10 @@ async def _judge_requirement(
                 "llm_confidence": 0.0,
                 "retrieval_confidence": 0.0,
                 "confidence": 0.0,
+                "enrichment_used": {
+                    "few_shot_count": few_shot_count,
+                    "boosted_sources": [],
+                },
             }
         crit = requirement.get("acceptance_criteria") or []
         criteria_block = (
@@ -840,6 +890,7 @@ async def _judge_requirement(
             {
                 "role": "user",
                 "content": _VERDICT_HUMAN.format(
+                    few_shot_block=few_shot_block,
                     req_id=requirement.get("id", ""),
                     title=requirement["title"],
                     category=requirement.get("category", "Autre"),
@@ -871,6 +922,10 @@ async def _judge_requirement(
                 "llm_confidence": 0.0,
                 "retrieval_confidence": retrieval_conf,
                 "confidence": round(0.3 * retrieval_conf, 3),
+                "enrichment_used": {
+                    "few_shot_count": few_shot_count,
+                    "boosted_sources": [],
+                },
             }
         confidence_final = round(0.7 * llm_conf + 0.3 * retrieval_conf, 3)
         return {
@@ -882,6 +937,10 @@ async def _judge_requirement(
             "llm_confidence": round(llm_conf, 3),
             "retrieval_confidence": round(retrieval_conf, 3),
             "confidence": confidence_final,
+            "enrichment_used": {
+                "few_shot_count": few_shot_count,
+                "boosted_sources": [],
+            },
         }
 
 
@@ -975,12 +1034,22 @@ async def analyse_requirement(
     qdrant_url: str,
     semaphore: asyncio.Semaphore,
     hyde_llm: ChatOpenAI | None = None,
+    source_boosts: dict[str, float] | None = None,
+    few_shot_provider: "Callable[[str], list[dict[str, Any]]] | None" = None,
 ) -> dict[str, Any]:
     """Retrieve + judge one requirement (thread-safe).
 
     v3.8.0: if HyDE is enabled AND a ``hyde_llm`` is provided, generate a
     hypothetical answer and fuse retrievals from (raw query) + (hypothesis)
     via RRF before sending the top-K to the verdict LLM.
+
+    v3.11.0:
+      - ``source_boosts`` : mapping ``{source_canonique: boost_factor}`` à
+        appliquer post-RRF côté retriever. Si None et ``user_id`` fourni,
+        le retriever charge lui-même le boost user (lazy via SQLite).
+      - ``few_shot_provider`` : callable ``(domain) -> [{title, ...}]`` qui
+        retourne 0..3 exemples de verdicts validés du même domaine SIRH ;
+        utilisé pour enrichir le prompt verdict.
     """
     # Build the raw query (title + description + acceptance criteria)
     criteria_text = " ".join(requirement.get("acceptance_criteria") or [])
@@ -996,7 +1065,11 @@ async def analyse_requirement(
     #   - la KB publique (service-public, BOSS, DSN-info, URSSAF) — réservée au chat
     # Seule la méthodologie interne Opsidium sert de référence pour évaluer
     # les exigences extraites du cahier des charges client.
-    retriever = ReferentielsOnlyRetriever(qdrant_url=qdrant_url)
+    retriever = ReferentielsOnlyRetriever(
+        qdrant_url=qdrant_url,
+        user_id=user_id,
+        source_boosts=source_boosts,
+    )
 
     hyde_used = False
     hypothesis = ""
@@ -1008,15 +1081,19 @@ async def analyse_requirement(
     chunks_raw = await asyncio.to_thread(
         retriever.retrieve, query, RETRIEVAL_K, 20, 20, True
     )
+    boosted_after_raw = list(retriever._boosted_sources_last)
 
     if hyde_used:
         # Retrieve a second time with the hypothesis, then RRF-merge.
         chunks_hyp = await asyncio.to_thread(
             retriever.retrieve, hypothesis, RETRIEVAL_K, 20, 20, True
         )
+        boosted_after_hyp = list(retriever._boosted_sources_last)
         chunks = _fuse_retrievals(chunks_raw, chunks_hyp, k=RETRIEVAL_K)
+        boosted_used = sorted(set(boosted_after_raw) | set(boosted_after_hyp))
     else:
         chunks = chunks_raw
+        boosted_used = boosted_after_raw
 
     sources = [
         {
@@ -1028,9 +1105,31 @@ async def analyse_requirement(
         for c in chunks
     ]
     context = _format_context(chunks) if chunks else ""
+
+    few_shot_examples: list[dict[str, Any]] = []
+    if few_shot_provider is not None:
+        try:
+            domain = str(requirement.get("category") or "Autre")
+            few_shot_examples = few_shot_provider(domain) or []
+        except Exception as exc:
+            logger.warning(
+                "Few-shot provider failed for req %s : %s",
+                requirement.get("id", "?"), exc,
+            )
+            few_shot_examples = []
+
     judged = await _judge_requirement(
-        requirement, sources, context, llm, semaphore
+        requirement,
+        sources,
+        context,
+        llm,
+        semaphore,
+        few_shot_examples=few_shot_examples,
     )
+    enrichment = judged.setdefault(
+        "enrichment_used", {"few_shot_count": 0, "boosted_sources": []}
+    )
+    enrichment["boosted_sources"] = boosted_used
     if hyde_used:
         judged["hyde_used"] = True
         judged["hypothesis"] = hypothesis
@@ -1210,9 +1309,56 @@ async def run_gap_analysis(
             max_tokens=220,
         )
     semaphore = asyncio.Semaphore(MAX_PARALLEL_LLM)
+
+    # v3.11.0 — Pré-charge le boost source + le provider few-shot une seule
+    # fois pour toute l'analyse. Si l'utilisateur n'a aucun feedback, ces
+    # deux objets restent vides et le pipeline reste strictement v3.10.
+    source_boosts: dict[str, float] = {}
+    few_shot_provider: Callable[[str], list[dict[str, Any]]] | None = None
+    try:
+        from . import workspace as _ws  # import local pour éviter le cycle
+        source_boosts = _ws.get_validated_source_boosts(user_id)
+
+        # Cache mémoire par domaine, valable pour cette exécution.
+        _few_shot_cache: dict[str, list[dict[str, Any]]] = {}
+
+        def _provider(domain: str) -> list[dict[str, Any]]:
+            if domain in _few_shot_cache:
+                return _few_shot_cache[domain]
+            try:
+                examples = _ws.get_top_validated_verdicts(user_id, domain, 3)
+            except Exception as exc:
+                logger.warning(
+                    "Lecture few-shot impossible pour user=%s domaine=%s : %s",
+                    user_id, domain, exc,
+                )
+                examples = []
+            _few_shot_cache[domain] = examples
+            return examples
+
+        few_shot_provider = _provider
+    except Exception as exc:
+        logger.warning(
+            "Enrichissement feedback indisponible (user=%s) : %s",
+            user_id, exc,
+        )
+
+    if source_boosts:
+        logger.info(
+            "RAG enrichi : %d source(s) boostée(s) chargée(s) pour user=%s",
+            len(source_boosts), user_id,
+        )
+
     tasks = [
         analyse_requirement(
-            req, user_id, llm, qdrant_url, semaphore, hyde_llm=hyde_llm,
+            req,
+            user_id,
+            llm,
+            qdrant_url,
+            semaphore,
+            hyde_llm=hyde_llm,
+            source_boosts=source_boosts,
+            few_shot_provider=few_shot_provider,
         )
         for req in requirements
     ]
@@ -1333,4 +1479,158 @@ async def run_gap_analysis(
         "requirements": analysed,
     }
     _write_cache(cache_path, report)
+    return report
+
+
+# ---------------------------------------------------------------------------
+# v3.11.0 — Re-pass ciblé en lot (batch)
+# ---------------------------------------------------------------------------
+
+
+def _summarise(requirements: list[dict[str, Any]]) -> dict[str, Any]:
+    """Recalcul ``summary`` (counts + coverage_percent) à partir de la liste
+    des requirements (utilisé après un re-pass batch pour rafraîchir le
+    rapport).
+    """
+    counts = {"covered": 0, "partial": 0, "missing": 0, "ambiguous": 0}
+    for r in requirements:
+        s = r.get("status", "ambiguous")
+        if s in counts:
+            counts[s] += 1
+    total = len(requirements)
+    coverage = (
+        (counts["covered"] + 0.5 * counts["partial"]) / total if total else 0.0
+    )
+    return {
+        "total": total,
+        **counts,
+        "coverage_percent": round(coverage * 100, 1),
+    }
+
+
+async def run_repass_batch(
+    *,
+    report: dict[str, Any],
+    requirement_ids: list[str],
+    user_id: str,
+    openai_api_key: str,
+    force: bool = False,
+) -> dict[str, Any]:
+    """Re-évalue UNIQUEMENT les exigences listées dans ``requirement_ids``
+    en réutilisant les chunks déjà retournés (pas de nouveau retrieval) et
+    en appelant directement le modèle re-pass (typiquement GPT-4o).
+
+    Garde-fou : par défaut, une exigence avec ``repass_applied=True`` n'est
+    PAS rejouée. Passer ``force=True`` pour forcer.
+
+    Returns:
+        Le rapport modifié in-place : ``requirements`` mis à jour, ``summary``
+        recalculé. Les champs added/modifiés sur les exigences re-passées :
+          - status, verdict, evidence, llm_confidence, retrieval_confidence,
+            confidence
+          - repass_applied = True
+          - repass_model
+          - repass_reason = "batch_user_request"
+    """
+    if not openai_api_key:
+        raise ValueError("Clé API OpenAI manquante.")
+    requirements = report.get("requirements") or []
+    if not requirements:
+        return report
+
+    target_ids = {str(rid) for rid in (requirement_ids or []) if rid}
+    if not target_ids:
+        return report
+
+    repass_model = _repass_model()
+    strong_llm = ChatOpenAI(
+        model=repass_model,
+        temperature=LLM_TEMPERATURE,
+        api_key=openai_api_key,
+        model_kwargs={
+            "response_format": {"type": "json_object"},
+            "seed": OPENAI_SEED,
+        },
+    )
+    semaphore = asyncio.Semaphore(REPASS_MAX_PARALLEL)
+
+    # Few-shot provider : on réutilise les exemples validés du même user.
+    _few_shot_cache: dict[str, list[dict[str, Any]]] = {}
+
+    def _provider(domain: str) -> list[dict[str, Any]]:
+        if domain in _few_shot_cache:
+            return _few_shot_cache[domain]
+        try:
+            from . import workspace as _ws
+            ex = _ws.get_top_validated_verdicts(user_id, domain, 3)
+        except Exception as exc:
+            logger.warning(
+                "Re-pass batch : few-shot indisponible (user=%s domaine=%s) : %s",
+                user_id, domain, exc,
+            )
+            ex = []
+        _few_shot_cache[domain] = ex
+        return ex
+
+    async def _redo_one(idx: int) -> tuple[int, dict[str, Any] | Exception]:
+        req = requirements[idx]
+        if not force and req.get("repass_applied"):
+            # Déjà re-passé du même type (batch) : on saute, on garde tel quel.
+            return idx, req
+        # Reconstruit le contexte à partir des sources stockées.
+        srcs = req.get("sources") or []
+        chunk_like = [
+            {
+                "text": s.get("text", ""),
+                "metadata": {
+                    "source": s.get("source", "?"),
+                    "page": s.get("page", "?"),
+                },
+            }
+            for s in srcs
+        ]
+        ctx = _format_context(chunk_like) if chunk_like else ""
+        few_shot = _provider(str(req.get("category") or "Autre"))
+        try:
+            rejudged = await _judge_requirement(
+                req, srcs, ctx, strong_llm, semaphore,
+                few_shot_examples=few_shot,
+            )
+        except Exception as exc:
+            return idx, exc
+        rejudged["repass_applied"] = True
+        rejudged["repass_model"] = repass_model
+        rejudged["repass_reason"] = "batch_user_request"
+        # Préserve les méta HyDE de l'analyse initiale.
+        if req.get("hyde_used"):
+            rejudged["hyde_used"] = True
+            rejudged["hypothesis"] = req.get("hypothesis", "")
+        # Marque l'enrichissement few-shot effectivement utilisé.
+        enrichment = rejudged.setdefault(
+            "enrichment_used", {"few_shot_count": 0, "boosted_sources": []}
+        )
+        enrichment["few_shot_count"] = len(few_shot)
+        # Pas de nouveau retrieval → on conserve le boost calculé à l'analyse
+        # initiale s'il existait.
+        previous = (req.get("enrichment_used") or {}).get("boosted_sources") or []
+        enrichment["boosted_sources"] = list(previous)
+        return idx, rejudged
+
+    indices = [i for i, r in enumerate(requirements) if str(r.get("id")) in target_ids]
+    if not indices:
+        return report
+
+    tasks = [_redo_one(i) for i in indices]
+    results = await asyncio.gather(*tasks)
+    for idx, value in results:
+        if isinstance(value, Exception):
+            logger.warning(
+                "Re-pass batch failed for req %s : %s",
+                requirements[idx].get("id", "?"), value,
+            )
+            continue
+        requirements[idx] = value
+
+    report["requirements"] = requirements
+    report["summary"] = _summarise(requirements)
     return report

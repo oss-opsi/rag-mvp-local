@@ -30,8 +30,8 @@ from rag.gap_analysis import (  # noqa: E402
 
 class TestPipelineVersion(unittest.TestCase):
     def test_pipeline_version_bumped(self) -> None:
-        """Le bump v3.10.0 doit être effectif."""
-        self.assertEqual(PIPELINE_VERSION, "v3.10.0")
+        """Le bump v3.11.0 doit être effectif."""
+        self.assertEqual(PIPELINE_VERSION, "v3.11.0")
 
 
 class TestTaxonomieSIRH(unittest.TestCase):

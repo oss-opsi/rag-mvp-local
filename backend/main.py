@@ -34,6 +34,10 @@ History endpoints (require auth):
 Evaluation endpoint (require auth):
   POST /evaluate         — RAGAS evaluation (CSV upload)
 
+Workspace v3.11.0 endpoints (require auth):
+  POST /workspace/analyses/{id}/repass            — enqueue a batch re-pass
+  GET  /workspace/analyses/{id}/feedback/export   — CSV export of feedback dataset
+
 System:
   GET  /health           — status + all indexed collections
 """
@@ -84,6 +88,7 @@ from rag.gap_analysis import (
     PIPELINE_VERSION as GAP_PIPELINE_VERSION,
     corpus_fingerprint as gap_corpus_fingerprint,
     run_gap_analysis,
+    run_repass_batch,
 )
 from rag import workspace, ingestion_jobs, gap_analysis_jobs
 from rag.config import (
@@ -364,7 +369,101 @@ async def _run_gap_analysis_for_job(
     return {"analysis_id": analysis_id, "report": report}
 
 
-gap_analysis_jobs.configure(run_callable=_run_gap_analysis_for_job)
+async def _run_repass_batch_for_job(
+    *,
+    analysis_id: int,
+    user_id: str,
+    openai_api_key: str,
+    requirement_ids: list[str],
+    force: bool,
+) -> dict:
+    """Callable injectée dans gap_analysis_jobs : exécute un re-pass batch
+    et persiste une NOUVELLE ligne ``analyses`` (l'ancienne reste, on garde
+    l'historique). Retourne {analysis_id, report}.
+    """
+    if not openai_api_key:
+        raise ValueError("Clé API OpenAI manquante.")
+    analysis = workspace.get_analysis_for_user(user_id, analysis_id)
+    if not analysis:
+        raise ValueError("Analyse introuvable.")
+    report = analysis.get("report") or {}
+    if not report.get("requirements"):
+        raise ValueError("Rapport vide ou non disponible.")
+
+    # Si le caller n'a fourni aucun requirement_id, on sélectionne
+    # automatiquement les exigences "à re-passer" : confidence < 0.5 OU
+    # vote 'down' du user courant.
+    target_ids: list[str] = list(requirement_ids or [])
+    if not target_ids:
+        down_voted = workspace.list_user_down_voted_requirements(
+            user_id, str(analysis_id)
+        )
+        for r in report.get("requirements") or []:
+            rid = str(r.get("id") or "")
+            if not rid:
+                continue
+            low_conf = float(r.get("confidence", 1.0) or 0.0) < 0.5
+            if low_conf or rid in down_voted:
+                target_ids.append(rid)
+
+    if not target_ids:
+        # Rien à re-passer : on persiste tel quel pour matérialiser le job
+        # (cohérence côté UI : un job done sans changement).
+        new_analysis_id = workspace.save_analysis_with_metadata(
+            cdc_id=analysis["cdc_id"],
+            report=report,
+            pipeline_version=GAP_PIPELINE_VERSION,
+            corpus_fingerprint=analysis.get("corpus_fingerprint") or "",
+        )
+        report["analysis_id"] = new_analysis_id
+        report["cdc_id"] = analysis["cdc_id"]
+        report["repass_batch_meta"] = {
+            "source_analysis_id": int(analysis_id),
+            "requirement_ids": [],
+            "force": bool(force),
+            "model": "n/a",
+            "skipped": True,
+            "reason": "Aucune exigence à re-passer (filtres vides).",
+        }
+        return {"analysis_id": new_analysis_id, "report": report}
+
+    new_report = await run_repass_batch(
+        report=report,
+        requirement_ids=target_ids,
+        user_id=user_id,
+        openai_api_key=openai_api_key,
+        force=force,
+    )
+
+    # Trace metadata du re-pass batch (audit côté report).
+    new_report["repass_batch_meta"] = {
+        "source_analysis_id": int(analysis_id),
+        "requirement_ids": target_ids,
+        "force": bool(force),
+        "model": _repass_model_name(),
+    }
+
+    new_analysis_id = workspace.save_analysis_with_metadata(
+        cdc_id=analysis["cdc_id"],
+        report=new_report,
+        pipeline_version=GAP_PIPELINE_VERSION,
+        corpus_fingerprint=analysis.get("corpus_fingerprint") or "",
+    )
+    new_report["analysis_id"] = new_analysis_id
+    new_report["cdc_id"] = analysis["cdc_id"]
+    return {"analysis_id": new_analysis_id, "report": new_report}
+
+
+def _repass_model_name() -> str:
+    """Retourne le modèle re-pass effectivement configuré (admin setting)."""
+    from rag.gap_analysis import _repass_model
+    return _repass_model()
+
+
+gap_analysis_jobs.configure(
+    run_callable=_run_gap_analysis_for_job,
+    run_repass_callable=_run_repass_batch_for_job,
+)
 
 
 @app.on_event("startup")
@@ -2283,6 +2382,109 @@ def workspace_quality_dashboard(
     """Stats agrégées pour le dashboard qualité d'une analyse."""
     _ensure_analysis_owned(user_id, analysis_id)
     return workspace.get_feedback_stats(analysis_id)
+
+
+# ---------------------------------------------------------------------------
+# Workspace — v3.11.0 : re-pass batch + export CSV feedback
+# ---------------------------------------------------------------------------
+
+
+class RepassBatchRequest(BaseModel):
+    """Body pour POST /workspace/analyses/{analysis_id}/repass."""
+    requirement_ids: Optional[list[str]] = None
+    openai_api_key: Optional[str] = None
+    force: bool = False
+
+
+@app.post(
+    "/workspace/analyses/{analysis_id}/repass",
+    tags=["Workspace"],
+    status_code=202,
+)
+def workspace_repass_analysis(
+    analysis_id: str,
+    req: RepassBatchRequest,
+    user_id: str = Depends(get_current_user),
+) -> dict:
+    """Lance un re-pass GPT-4o ciblé sur les exigences listées (ou auto-
+    sélectionnées si la liste est vide : confidence < 0.5 OU vote 'down').
+
+    Le job tourne en arrière-plan dans la même file que les analyses
+    complètes (un seul worker → sérialisation naturelle). Le client doit
+    poller ``/analysis-jobs/{job_id}`` jusqu'à status ``done`` ou ``error``.
+
+    Compatibilité : un user sans feedback obtient le comportement strict
+    v3.10 sur les exigences traitées (pas de few-shot, pas de boost) — le
+    re-pass se contente d'appeler le modèle re-pass sur les exigences
+    ciblées avec les chunks déjà retournés.
+    """
+    try:
+        aid = int(analysis_id)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="analysis_id invalide.")
+
+    analysis = workspace.get_analysis_for_user(user_id, aid)
+    if not analysis:
+        raise HTTPException(
+            status_code=404, detail="Analyse introuvable ou accès refusé."
+        )
+
+    effective_key = (req.openai_api_key or "").strip()
+    if not effective_key and user_id != "guest":
+        effective_key = get_user_api_key(user_id)
+    if not effective_key:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "La clé API OpenAI est requise (saisissez-la ou enregistrez-la "
+                "dans vos paramètres)."
+            ),
+        )
+
+    requirement_ids = [str(r) for r in (req.requirement_ids or []) if str(r).strip()]
+    try:
+        job = gap_analysis_jobs.enqueue_repass_batch(
+            user_id=user_id,
+            cdc_id=int(analysis["cdc_id"]),
+            analysis_id=aid,
+            requirement_ids=requirement_ids,
+            openai_api_key=effective_key,
+            force=bool(req.force),
+        )
+    except Exception as exc:
+        logger.exception("Re-pass batch enqueue failed for analysis %s", aid)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Impossible d'enfiler le re-pass : {exc}",
+        )
+    return job
+
+
+@app.get(
+    "/workspace/analyses/{analysis_id}/feedback/export",
+    tags=["Workspace"],
+)
+def workspace_export_feedback_csv(
+    analysis_id: str,
+    user_id: str = Depends(get_current_user),
+) -> StreamingResponse:
+    """Export CSV (UTF-8 BOM, séparateur ';') du dataset feedback de l'analyse.
+
+    Une ligne par exigence (avec ou sans feedback). Compatible Excel France.
+    """
+    _ensure_analysis_owned(user_id, analysis_id)
+    aid = str(analysis_id)
+    filename = f"feedback_{aid}.csv"
+    iterator = workspace.export_feedback_csv(aid)
+    headers = {
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "Cache-Control": "no-cache",
+    }
+    return StreamingResponse(
+        iterator,
+        media_type="text/csv; charset=utf-8",
+        headers=headers,
+    )
 
 
 # ---------------------------------------------------------------------------

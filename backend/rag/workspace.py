@@ -1,5 +1,5 @@
 """
-Workspace module (v3.6.0) — Espace de travail multi-clients pour l'analyse d'écarts.
+Workspace module (v3.11.0) — Espace de travail multi-clients pour l'analyse d'écarts.
 
 Stocke les clients, leurs cahiers des charges (CDC) et les rapports d'analyse
 dans une base SQLite, avec les fichiers originaux sur disque. Chaque utilisateur
@@ -13,7 +13,13 @@ Schéma :
            corpus_fingerprint, report_json)
   requirement_feedback(id, analysis_id, requirement_id, user_id, vote, comment,
                        created_at, updated_at)
-    — v3.10.0, vote utilisateur 👍/👎 sur les exigences d'une analyse.
+    — v3.10.0, vote utilisateur sur les exigences d'une analyse.
+
+Stratégie RAG enrichi par feedback (v3.11.0) :
+  - get_top_validated_verdicts(user_id, domain) — fournit jusqu'à 3 exemples
+    de verdicts validés (vote='up') du même domaine SIRH au prompt verdict.
+  - get_validated_source_boosts(user_id) — calcule un boost ∈ [1.0, 1.5] par
+    source citée dans des verdicts validés, appliqué post-RRF à l'analyse CDC.
 
 Statut d'un CDC (dérivé) :
   - "brouillon" : aucune analyse
@@ -29,7 +35,7 @@ import os
 import sqlite3
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 from rag.config import DATA_DIR
 
@@ -693,3 +699,377 @@ def user_owns_analysis(user_id: str, analysis_id: str) -> bool:
         return False
     with _connect() as conn:
         return _user_owns_analysis(conn, user_id, aid)
+
+
+# ---------------------------------------------------------------------------
+# v3.11.0 — RAG enrichi par feedback
+# ---------------------------------------------------------------------------
+
+# Plafond du facteur de boost. Avec 5 votes 'up' on atteint le plafond.
+_BOOST_MAX = 1.5
+_BOOST_PER_VOTE = 0.1
+_VALIDATED_SAMPLE_LIMIT = 3
+
+
+def _canonical_source_key(source: str | None) -> str:
+    """Clé canonique pour un boost : trim + lower-case.
+
+    Les sources des référentiels Opsidium sont des noms de fichiers ou
+    des URL ; un simple ``.strip().lower()`` suffit pour normaliser
+    `Opsidium_Methodologie.pdf` vs `opsidium_methodologie.pdf`.
+    """
+    return (source or "").strip().lower()
+
+
+def get_top_validated_verdicts(
+    user_id: str,
+    domain: str,
+    limit: int = _VALIDATED_SAMPLE_LIMIT,
+) -> list[dict[str, Any]]:
+    """Retourne jusqu'à ``limit`` verdicts validés (vote='up') du même domaine SIRH.
+
+    Source : table ``requirement_feedback`` JOIN ``analyses`` (via clients
+    de ``user_id``). On désérialise ``report_json`` pour retrouver l'exigence
+    et son verdict, puis on filtre sur ``category == domain`` et ``vote ==
+    'up'``. Les votes les plus récents sont prioritaires.
+
+    Renvoie une liste de dicts : ``{title, description, status, verdict, evidence}``.
+    Liste vide si aucun exemple disponible.
+    """
+    if not user_id or not domain:
+        return []
+    if limit <= 0:
+        return []
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT rf.requirement_id, rf.updated_at, a.report_json
+              FROM requirement_feedback rf
+              JOIN analyses a   ON CAST(a.id AS TEXT) = rf.analysis_id
+              JOIN cdcs           ON cdcs.id = a.cdc_id
+              JOIN clients        ON clients.id = cdcs.client_id
+             WHERE rf.user_id = ?
+               AND rf.vote    = 'up'
+               AND clients.user_id = ?
+             ORDER BY rf.updated_at DESC
+            """,
+            (user_id, user_id),
+        ).fetchall()
+
+    examples: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for r in rows:
+        if len(examples) >= limit:
+            break
+        try:
+            report = json.loads(r["report_json"]) if r["report_json"] else {}
+        except (TypeError, json.JSONDecodeError):
+            continue
+        reqs = report.get("requirements") or []
+        rid = r["requirement_id"]
+        match = next((q for q in reqs if q.get("id") == rid), None)
+        if not match:
+            continue
+        if (match.get("category") or "Autre") != domain:
+            continue
+        # Évite les doublons quand la même exigence a été validée plusieurs
+        # fois sur des analyses différentes.
+        dedup_key = f"{rid}|{(match.get('title') or '').strip().lower()}"
+        if dedup_key in seen_ids:
+            continue
+        seen_ids.add(dedup_key)
+        examples.append(
+            {
+                "title": str(match.get("title") or "")[:200],
+                "description": str(match.get("description") or "")[:600],
+                "status": str(match.get("status") or "ambiguous"),
+                "verdict": str(match.get("verdict") or "")[:600],
+                "evidence": [
+                    str(e)[:200] for e in (match.get("evidence") or [])
+                ][:3],
+            }
+        )
+    return examples
+
+
+def get_validated_source_boosts(user_id: str) -> dict[str, float]:
+    """Renvoie un dict ``{source_canonique: boost_factor}`` pour ce user.
+
+    ``boost_factor = 1 + count_up * 0.1``, plafonné à 1.5. Le décompte est
+    cumulé sur l'ensemble des verdicts validés (vote='up') de l'utilisateur,
+    en agrégeant les `sources[].source` de chaque requirement validé.
+
+    Si aucun feedback : dict vide → retriever non boosté (parité v3.10).
+    """
+    if not user_id:
+        return {}
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT rf.requirement_id, a.report_json
+              FROM requirement_feedback rf
+              JOIN analyses a   ON CAST(a.id AS TEXT) = rf.analysis_id
+              JOIN cdcs           ON cdcs.id = a.cdc_id
+              JOIN clients        ON clients.id = cdcs.client_id
+             WHERE rf.user_id = ?
+               AND rf.vote    = 'up'
+               AND clients.user_id = ?
+            """,
+            (user_id, user_id),
+        ).fetchall()
+
+    counts: dict[str, int] = {}
+    for r in rows:
+        try:
+            report = json.loads(r["report_json"]) if r["report_json"] else {}
+        except (TypeError, json.JSONDecodeError):
+            continue
+        rid = r["requirement_id"]
+        match = next(
+            (q for q in (report.get("requirements") or []) if q.get("id") == rid),
+            None,
+        )
+        if not match:
+            continue
+        for s in match.get("sources") or []:
+            key = _canonical_source_key(s.get("source"))
+            if not key:
+                continue
+            counts[key] = counts.get(key, 0) + 1
+
+    boosts: dict[str, float] = {}
+    for key, c in counts.items():
+        factor = 1.0 + _BOOST_PER_VOTE * c
+        if factor > _BOOST_MAX:
+            factor = _BOOST_MAX
+        boosts[key] = round(factor, 4)
+    return boosts
+
+
+# ---------------------------------------------------------------------------
+# v3.11.0 — Export CSV enrichi du dataset feedback
+# ---------------------------------------------------------------------------
+
+# Excel France attend un séparateur ';'. Le BOM UTF-8 garantit l'ouverture
+# correcte des accents sans avoir à choisir manuellement l'encodage.
+_CSV_SEP = ";"
+_CSV_BOM = "﻿"
+_CSV_NEWLINE = "\r\n"  # convention Excel
+_CSV_FIELD_TRUNCATE = 500
+
+_EXPORT_HEADERS = [
+    "analysis_id",
+    "cdc_filename",
+    "requirement_id",
+    "requirement_title",
+    "domain",
+    "subdomain",
+    "priority",
+    "status",
+    "confidence",
+    "verdict",
+    "evidence_concatenated",
+    "sources_concatenated",
+    "vote",
+    "comment",
+    "voted_at",
+    "voted_by",
+]
+
+
+def _csv_escape(value: Any) -> str:
+    """Échappe une cellule CSV (séparateur ';', guillemets ''-doublés)."""
+    if value is None:
+        return ""
+    s = str(value)
+    needs_quote = (
+        _CSV_SEP in s or '"' in s or "\n" in s or "\r" in s
+    )
+    if not needs_quote:
+        return s
+    return '"' + s.replace('"', '""') + '"'
+
+
+def _truncate(text: str, limit: int = _CSV_FIELD_TRUNCATE) -> str:
+    """Tronque un champ texte à ``limit`` caractères (suffixe « … » si tronqué)."""
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)] + "…"
+
+
+def _format_evidence(evidence: list[Any] | None) -> str:
+    if not evidence:
+        return ""
+    parts = [str(e).strip() for e in evidence if str(e).strip()]
+    return _truncate(" | ".join(parts))
+
+
+def _format_sources(sources: list[dict[str, Any]] | None) -> str:
+    if not sources:
+        return ""
+    parts: list[str] = []
+    for s in sources:
+        src = str(s.get("source") or "?").strip()
+        page = s.get("page")
+        page_part = f" p.{page}" if page not in (None, "", "?") else ""
+        score = s.get("score")
+        score_part = (
+            f" ({float(score):.3f})" if isinstance(score, (int, float)) else ""
+        )
+        parts.append(f"{src}{page_part}{score_part}")
+    return _truncate(" | ".join(parts))
+
+
+def export_feedback_csv(analysis_id: str) -> Iterator[str]:
+    """Itère les lignes CSV du dataset feedback pour une analyse.
+
+    Le générateur émet le BOM UTF-8 + l'en-tête, puis une ligne par exigence.
+    Les exigences sans feedback apparaissent quand même (colonnes vote /
+    comment / voted_at / voted_by vides) — l'objectif est d'avoir un dataset
+    utilisable pour comparer « ce que le LLM a produit » vs « ce que le
+    consultant a validé ».
+    """
+    aid = str(analysis_id)
+    with _connect() as conn:
+        analysis_row = conn.execute(
+            """
+            SELECT a.id, a.report_json, cdcs.filename AS cdc_filename
+              FROM analyses a
+              JOIN cdcs ON cdcs.id = a.cdc_id
+             WHERE a.id = ?
+            """,
+            (aid,),
+        ).fetchone()
+        feedback_rows = conn.execute(
+            """
+            SELECT requirement_id, vote, comment, updated_at, user_id
+              FROM requirement_feedback
+             WHERE analysis_id = ?
+            """,
+            (aid,),
+        ).fetchall()
+
+    yield _CSV_BOM + _CSV_SEP.join(_EXPORT_HEADERS) + _CSV_NEWLINE
+
+    if not analysis_row:
+        return
+
+    cdc_filename = analysis_row["cdc_filename"] or ""
+    try:
+        report = (
+            json.loads(analysis_row["report_json"])
+            if analysis_row["report_json"]
+            else {}
+        )
+    except (TypeError, json.JSONDecodeError):
+        report = {}
+    requirements = report.get("requirements") or []
+
+    feedback_by_req: dict[str, dict[str, Any]] = {}
+    for fb in feedback_rows:
+        rid = fb["requirement_id"]
+        # Si plusieurs users ont voté, on garde le plus récent (updated_at
+        # déjà ordonné par la requête côté Python).
+        existing = feedback_by_req.get(rid)
+        if existing is None or fb["updated_at"] > existing["updated_at"]:
+            feedback_by_req[rid] = dict(fb)
+
+    for req in requirements:
+        rid = str(req.get("id") or "")
+        fb = feedback_by_req.get(rid) or {}
+        row = [
+            aid,
+            cdc_filename,
+            rid,
+            str(req.get("title") or ""),
+            str(req.get("category") or "Autre"),
+            str(req.get("subdomain") or "") if req.get("subdomain") else "",
+            str(req.get("priority") or ""),
+            str(req.get("status") or ""),
+            f"{float(req.get('confidence', 0.0)):.3f}"
+            if isinstance(req.get("confidence"), (int, float))
+            else "",
+            str(req.get("verdict") or ""),
+            _format_evidence(req.get("evidence")),
+            _format_sources(req.get("sources")),
+            str(fb.get("vote") or ""),
+            str(fb.get("comment") or ""),
+            str(fb.get("updated_at") or ""),
+            str(fb.get("user_id") or ""),
+        ]
+        yield _CSV_SEP.join(_csv_escape(c) for c in row) + _CSV_NEWLINE
+
+
+# ---------------------------------------------------------------------------
+# v3.11.0 — Re-pass batch ciblé (helpers DB)
+# ---------------------------------------------------------------------------
+
+
+def list_user_down_voted_requirements(
+    user_id: str, analysis_id: str
+) -> set[str]:
+    """Renvoie les ``requirement_id`` votés 'down' par cet utilisateur sur
+    cette analyse (utilisé pour la sélection automatique du re-pass batch).
+    """
+    aid = str(analysis_id)
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT requirement_id FROM requirement_feedback
+             WHERE analysis_id = ? AND user_id = ? AND vote = 'down'
+            """,
+            (aid, user_id),
+        ).fetchall()
+    return {r["requirement_id"] for r in rows}
+
+
+def get_analysis_for_user(
+    user_id: str, analysis_id: int
+) -> Optional[dict[str, Any]]:
+    """Renvoie une analyse (avec report) si elle appartient à l'utilisateur.
+
+    Permet aux endpoints (re-pass batch, export feedback) de récupérer
+    l'analyse sans avoir à passer par le CDC.
+    """
+    with _connect() as conn:
+        if not _user_owns_analysis(conn, user_id, int(analysis_id)):
+            return None
+        row = conn.execute(
+            """
+            SELECT id, cdc_id, created_at, total, covered, partial, missing,
+                   ambiguous, coverage_percent, chunks_processed,
+                   pipeline_version, corpus_fingerprint, report_json
+              FROM analyses
+             WHERE id = ?
+            """,
+            (analysis_id,),
+        ).fetchone()
+        if not row:
+            return None
+        out = dict(row)
+        try:
+            out["report"] = json.loads(out.pop("report_json"))
+        except (TypeError, json.JSONDecodeError):
+            out["report"] = None
+        return out
+
+
+def save_analysis_with_metadata(
+    cdc_id: int,
+    report: dict[str, Any],
+    pipeline_version: str,
+    corpus_fingerprint: str,
+) -> int:
+    """Alias public de :func:`save_analysis` (signature stable, sémantique
+    explicite côté re-pass batch).
+
+    Persiste une nouvelle ligne dans ``analyses`` ; l'ancienne reste en
+    place — le frontend lira automatiquement la plus récente via
+    :func:`get_latest_analysis`.
+    """
+    return save_analysis(
+        cdc_id=cdc_id,
+        report=report,
+        pipeline_version=pipeline_version,
+        corpus_fingerprint=corpus_fingerprint,
+    )

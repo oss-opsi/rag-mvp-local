@@ -1,9 +1,10 @@
 """
-Gap-analysis jobs module (v4.2.0) — exécution asynchrone de l'analyse d'écarts.
+Gap-analysis jobs module (v3.11.0) — exécution asynchrone de l'analyse d'écarts.
 
-Permet de lancer `run_gap_analysis` en arrière-plan (thread worker) sans bloquer
-l'event loop FastAPI ni dépasser le timeout HTTP. Les jobs sont persistés dans
-SQLite, un seul job tourne à la fois (verrou), les autres restent en queue.
+Permet de lancer `run_gap_analysis` ou `run_repass_batch` en arrière-plan
+(thread worker) sans bloquer l'event loop FastAPI ni dépasser le timeout HTTP.
+Les jobs sont persistés dans SQLite, un seul job tourne à la fois (verrou),
+les autres restent en queue.
 
 Statuts :
   - queued  : en attente d'un worker libre
@@ -11,9 +12,15 @@ Statuts :
   - done    : terminé avec succès (analysis_id renseigné, report dans `report_json`)
   - error   : échec (error renseigné)
 
+Types de job (``kind``) :
+  - "full"          : analyse complète d'un CDC (v3.5+ historique)
+  - "repass_batch"  : re-évaluation ciblée d'exigences sur une analyse existante
+                       (v3.11.0). Le payload {analysis_id, requirement_ids,
+                       force} est sérialisé dans ``payload_json``.
+
 Schéma :
   gap_analysis_jobs(id, user_id, cdc_id, status, force_refresh, openai_api_key,
-                    analysis_id, report_json, error,
+                    analysis_id, report_json, error, kind, payload_json,
                     created_at, started_at, finished_at)
 
 NB : la clé OpenAI est stockée le temps du job (lifecycle court). Elle est
@@ -52,6 +59,8 @@ CREATE TABLE IF NOT EXISTS gap_analysis_jobs (
     analysis_id     INTEGER,
     report_json     TEXT,
     error           TEXT,
+    kind            TEXT    NOT NULL DEFAULT 'full',
+    payload_json    TEXT,
     created_at      TEXT    NOT NULL,
     started_at      TEXT,
     finished_at     TEXT
@@ -65,6 +74,13 @@ CREATE INDEX IF NOT EXISTS idx_gajobs_user_cdc
     ON gap_analysis_jobs(user_id, cdc_id, created_at DESC);
 """
 
+# Migration légère : ajoute les colonnes ``kind`` et ``payload_json`` aux DB
+# créées avec un schéma antérieur (v3.10 et avant).
+_MIGRATIONS = [
+    "ALTER TABLE gap_analysis_jobs ADD COLUMN kind TEXT NOT NULL DEFAULT 'full'",
+    "ALTER TABLE gap_analysis_jobs ADD COLUMN payload_json TEXT",
+]
+
 # Champs jamais renvoyés au client (clé API).
 _SENSITIVE_FIELDS = ("openai_api_key",)
 
@@ -76,10 +92,15 @@ _claim_lock = threading.Lock()
 _worker_started = False
 _worker_started_lock = threading.Lock()
 
-# Injecté à l'init (évite l'import circulaire avec main.py).
-# Signature attendue : async (cdc_id, user_id, openai_api_key, force_refresh)
-#                              -> {"analysis_id": int|None, "report": dict}
+# Injectés à l'init (évite l'import circulaire avec main.py).
+# Signatures :
+#   _run_callable        : async (cdc_id, user_id, openai_api_key, force_refresh)
+#                                     -> {"analysis_id", "report"}
+#   _run_repass_callable : async (analysis_id, user_id, openai_api_key,
+#                                  requirement_ids, force)
+#                                     -> {"analysis_id", "report"}
 _run_callable: Optional[Callable[..., Awaitable[dict[str, Any]]]] = None
+_run_repass_callable: Optional[Callable[..., Awaitable[dict[str, Any]]]] = None
 
 
 # ---------------------------------------------------------------------------
@@ -99,6 +120,17 @@ def init_db() -> None:
     """Créer la table gap_analysis_jobs. Sûr à chaque démarrage."""
     with _connect() as conn:
         conn.executescript(_SCHEMA)
+        # Migrations idempotentes (v3.11.0 : ``kind`` + ``payload_json``).
+        cur = conn.execute("PRAGMA table_info(gap_analysis_jobs)")
+        existing_cols = {row["name"] for row in cur.fetchall()}
+        for sql in _MIGRATIONS:
+            # extrait la colonne entre "ADD COLUMN <name>"
+            col = sql.split("ADD COLUMN", 1)[1].split()[0]
+            if col not in existing_cols:
+                try:
+                    conn.execute(sql)
+                except sqlite3.OperationalError as exc:
+                    logger.warning("Migration job DB skipped (%s) : %s", sql, exc)
         # Recovery : tout job laissé "running" suite à un crash est marqué error.
         conn.execute(
             """
@@ -133,6 +165,16 @@ def _row_to_public(row: dict[str, Any]) -> dict[str, Any]:
             out["report"] = None
     else:
         out["report"] = None
+    payload = out.pop("payload_json", None)
+    if payload:
+        try:
+            out["payload"] = json.loads(payload)
+        except (TypeError, ValueError):
+            out["payload"] = None
+    else:
+        out["payload"] = None
+    # Valeur par défaut si la colonne n'existait pas encore.
+    out.setdefault("kind", "full")
     return out
 
 
@@ -143,10 +185,17 @@ def _row_to_public(row: dict[str, Any]) -> dict[str, Any]:
 
 def configure(
     run_callable: Callable[..., Awaitable[dict[str, Any]]],
+    run_repass_callable: Callable[..., Awaitable[dict[str, Any]]] | None = None,
 ) -> None:
-    """Injecte la callable d'exécution (évite l'import circulaire)."""
-    global _run_callable
+    """Injecte les callables d'exécution (évite l'import circulaire).
+
+    - ``run_callable`` : analyse complète (kind='full').
+    - ``run_repass_callable`` : re-pass batch (kind='repass_batch').
+    """
+    global _run_callable, _run_repass_callable
     _run_callable = run_callable
+    if run_repass_callable is not None:
+        _run_repass_callable = run_repass_callable
 
 
 def enqueue_job(
@@ -155,13 +204,14 @@ def enqueue_job(
     openai_api_key: str,
     force_refresh: bool,
 ) -> dict[str, Any]:
-    """Insère un job 'queued' et réveille le worker. Retourne la ligne (publique)."""
+    """Insère un job 'queued' (analyse complète) et réveille le worker."""
     with _connect() as conn:
         cur = conn.execute(
             """
             INSERT INTO gap_analysis_jobs(
-                user_id, cdc_id, status, force_refresh, openai_api_key, created_at
-            ) VALUES (?,?,?,?,?,?)
+                user_id, cdc_id, status, force_refresh, openai_api_key,
+                kind, created_at
+            ) VALUES (?,?,?,?,?,?,?)
             """,
             (
                 user_id,
@@ -169,6 +219,55 @@ def enqueue_job(
                 "queued",
                 1 if force_refresh else 0,
                 openai_api_key,
+                "full",
+                _now_iso(),
+            ),
+        )
+        job_id = cur.lastrowid
+        row = conn.execute(
+            "SELECT * FROM gap_analysis_jobs WHERE id = ?", (job_id,)
+        ).fetchone()
+    _ensure_worker_running()
+    return _row_to_public(dict(row))
+
+
+def enqueue_repass_batch(
+    user_id: str,
+    cdc_id: int,
+    analysis_id: int,
+    requirement_ids: list[str],
+    openai_api_key: str,
+    force: bool,
+) -> dict[str, Any]:
+    """Insère un job 'queued' de type ``repass_batch`` et réveille le worker.
+
+    Le payload (analysis_id, requirement_ids, force) est sérialisé dans
+    ``payload_json``. La même file est utilisée que pour les analyses
+    complètes — un seul worker = sérialisation naturelle, pas de
+    contention OpenAI inattendue.
+    """
+    payload = {
+        "analysis_id": int(analysis_id),
+        "requirement_ids": [str(rid) for rid in (requirement_ids or [])],
+        "force": bool(force),
+    }
+    with _connect() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO gap_analysis_jobs(
+                user_id, cdc_id, status, force_refresh, openai_api_key,
+                analysis_id, kind, payload_json, created_at
+            ) VALUES (?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                user_id,
+                int(cdc_id),
+                "queued",
+                0,
+                openai_api_key,
+                int(analysis_id),
+                "repass_batch",
+                json.dumps(payload, ensure_ascii=False),
                 _now_iso(),
             ),
         )
@@ -291,36 +390,54 @@ def _finish_job(
 
 
 def _process_job(job: dict[str, Any]) -> None:
-    """Run run_gap_analysis pour un job claim et persiste le résultat."""
-    assert _run_callable is not None, (
-        "gap_analysis_jobs.configure() must be called at startup"
-    )
+    """Run le callable adéquat (full ou repass_batch) et persiste le résultat."""
     job_id = int(job["id"])
     user_id = job["user_id"]
     cdc_id = int(job["cdc_id"])
     api_key = job.get("openai_api_key") or ""
     force_refresh = bool(job.get("force_refresh"))
+    kind = (job.get("kind") or "full").strip() or "full"
+    payload_raw = job.get("payload_json")
+    try:
+        payload = json.loads(payload_raw) if payload_raw else {}
+    except (TypeError, ValueError):
+        payload = {}
 
     logger.info(
-        "Gap analysis worker: job %d starting — user=%s cdc=%d",
-        job_id,
-        user_id,
-        cdc_id,
+        "Gap analysis worker: job %d starting — kind=%s user=%s cdc=%d",
+        job_id, kind, user_id, cdc_id,
     )
     try:
-        # Le callable est async (run_gap_analysis l'est) → on le run dans
-        # une boucle dédiée à ce thread.
         loop = asyncio.new_event_loop()
         try:
             asyncio.set_event_loop(loop)
-            result = loop.run_until_complete(
-                _run_callable(
-                    cdc_id=cdc_id,
-                    user_id=user_id,
-                    openai_api_key=api_key,
-                    force_refresh=force_refresh,
+            if kind == "repass_batch":
+                if _run_repass_callable is None:
+                    raise RuntimeError(
+                        "gap_analysis_jobs : run_repass_callable non configuré."
+                    )
+                result = loop.run_until_complete(
+                    _run_repass_callable(
+                        analysis_id=int(payload.get("analysis_id") or 0),
+                        user_id=user_id,
+                        openai_api_key=api_key,
+                        requirement_ids=list(payload.get("requirement_ids") or []),
+                        force=bool(payload.get("force")),
+                    )
                 )
-            )
+            else:
+                if _run_callable is None:
+                    raise RuntimeError(
+                        "gap_analysis_jobs : run_callable non configuré."
+                    )
+                result = loop.run_until_complete(
+                    _run_callable(
+                        cdc_id=cdc_id,
+                        user_id=user_id,
+                        openai_api_key=api_key,
+                        force_refresh=force_refresh,
+                    )
+                )
         finally:
             try:
                 loop.close()
@@ -336,9 +453,8 @@ def _process_job(job: dict[str, Any]) -> None:
             error=None,
         )
         logger.info(
-            "Gap analysis worker: job %d done (analysis_id=%s)",
-            job_id,
-            analysis_id,
+            "Gap analysis worker: job %d done (kind=%s, analysis_id=%s)",
+            job_id, kind, analysis_id,
         )
     except Exception as exc:  # pragma: no cover
         logger.exception("Gap analysis worker: job %d failed", job_id)

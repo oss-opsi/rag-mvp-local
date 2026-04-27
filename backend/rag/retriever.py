@@ -463,6 +463,12 @@ class ReferentielsOnlyRetriever:
     corpus BM25 est dérivé d'un scroll Qdrant sur la collection référentiels
     (volumétrie faible, OK en mémoire). Si Qdrant est injoignable ou la
     collection est vide, on retombe sur du dense pur (pas de régression).
+
+    v3.11.0 — ``user_id`` optionnel + ``source_boosts`` : si l'utilisateur
+    a déjà validé des verdicts (vote='up'), les sources citées dans ces
+    verdicts reçoivent un boost (1.0 → 1.5) appliqué au score RRF, AVANT
+    le rerank. Comportement strict v3.10 si ``user_id`` est absent ou si
+    le boost map est vide.
     """
 
     def __init__(
@@ -470,10 +476,18 @@ class ReferentielsOnlyRetriever:
         qdrant_url: str = QDRANT_URL,
         rrf_k: int = RRF_K,
         collection: str = REFERENTIELS_COLLECTION,
+        user_id: str | None = None,
+        source_boosts: dict[str, float] | None = None,
     ) -> None:
         self.qdrant_url = qdrant_url
         self.rrf_k = rrf_k
         self.collection = collection
+        self.user_id = user_id
+        # Le caller peut soit injecter directement un mapping (utile pour
+        # les tests / le batch repass), soit laisser le retriever le charger
+        # à la volée depuis SQLite (lazy, première utilisation).
+        self._source_boosts: dict[str, float] | None = source_boosts
+        self._boosted_sources_last: list[str] = []
 
     def _dense_search(
         self, query: str, k_dense: int
@@ -582,6 +596,69 @@ class ReferentielsOnlyRetriever:
             })
         return out
 
+    # ------------------------------------------------------------------
+    # v3.11.0 — Boost source basé sur le feedback validé (vote='up')
+    # ------------------------------------------------------------------
+
+    def _resolve_source_boosts(self) -> dict[str, float]:
+        """Charge le mapping {source_canonique: boost} pour ``self.user_id``.
+
+        Lazy : appelé à chaque ``retrieve()`` (côté gap-analysis on construit
+        un retriever par requirement, pas grave). Si le caller a déjà fourni
+        ``source_boosts`` au constructeur, on le réutilise tel quel sans
+        ré-interroger SQLite.
+        """
+        if self._source_boosts is not None:
+            return self._source_boosts
+        if not self.user_id:
+            self._source_boosts = {}
+            return self._source_boosts
+        try:
+            # Import local pour éviter une dépendance circulaire au démarrage.
+            from .workspace import get_validated_source_boosts
+            self._source_boosts = get_validated_source_boosts(self.user_id)
+        except Exception as exc:
+            logger.warning(
+                "Boost feedback indisponible pour user=%s : %s",
+                self.user_id, exc,
+            )
+            self._source_boosts = {}
+        return self._source_boosts
+
+    @staticmethod
+    def _canonical_source(item: dict[str, Any]) -> str:
+        meta = item.get("metadata") or {}
+        return str(meta.get("source") or "").strip().lower()
+
+    def _apply_source_boosts(
+        self, ranked: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Multiplie ``rrf_score`` par le boost user pour les chunks dont la
+        ``source`` matche le mapping ``{source_canonique: boost_factor}``.
+
+        Re-trie ensuite par ``rrf_score`` desc. ``_boosted_sources_last`` est
+        mis à jour pour permettre au pipeline gap-analysis de logger ce qui
+        a effectivement bénéficié du boost.
+        """
+        boosts = self._resolve_source_boosts()
+        self._boosted_sources_last = []
+        if not boosts or not ranked:
+            return ranked
+        boosted_sources: list[str] = []
+        for r in ranked:
+            key = self._canonical_source(r)
+            factor = boosts.get(key)
+            if factor and factor > 1.0:
+                r["rrf_score"] = round(r["rrf_score"] * factor, 6)
+                if key not in boosted_sources:
+                    boosted_sources.append(key)
+        if boosted_sources:
+            self._boosted_sources_last = boosted_sources
+            ranked = sorted(
+                ranked, key=lambda x: x.get("rrf_score", 0.0), reverse=True
+            )
+        return ranked
+
     def retrieve(
         self,
         query: str,
@@ -595,6 +672,10 @@ class ReferentielsOnlyRetriever:
         Si le corpus BM25 n'est pas disponible (collection vide, Qdrant
         injoignable, etc.), retombe sur du dense pur — le pipeline n'est
         jamais cassé.
+
+        v3.11.0 — applique un boost user-spécifique aux scores RRF (post-RRF,
+        pré-rerank) si l'utilisateur a déjà validé des verdicts. Sinon
+        comportement strict v3.10.
         """
         rrf_k = _RERANK_CANDIDATE_K if rerank else k
         dense = self._dense_search(query, k_dense)
@@ -615,6 +696,9 @@ class ReferentielsOnlyRetriever:
                     "rrf_score": round(1.0 / (self.rrf_k + rank + 1), 6),
                     "_dense_score": round(score, 6),
                 })
+
+        # v3.11.0 — boost feedback (no-op si pas de feedback ou pas d'user_id).
+        ranked = self._apply_source_boosts(ranked)
 
         if rerank and ranked:
             from .reranker import CrossEncoderReranker
