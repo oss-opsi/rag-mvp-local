@@ -1,11 +1,14 @@
 # Procédure de rollback — Tell me
 
-## Tag de référence
+## Tags de référence
 
 **`v3.9.0-stable`** — commit `b1bd582`
 État stable de Tell me au 26 avril 2026, avant les chantiers v4 (sources publiques + bibliothèque + référentiel).
 
 URL GitHub : https://github.com/oss-opsi/rag-mvp-local/releases/tag/v3.9.0-stable
+
+**`ui-pre-modern-v1`** — commit `f3b1c35` (tag local sur la VM, non poussé sur GitHub tant que pas d'auth git)
+État de `main` avant la refonte UI moderne (chantier `feat/ui-modern-v4`). Inclut le PR #2 (KB partagée + retrieval hybride). Sert de point de retour ciblé pour rollback de la refonte UI uniquement, sans perdre les améliorations backend.
 
 ## Que contient ce tag
 
@@ -87,6 +90,25 @@ Pour limiter le risque :
 2. **Tag intermédiaire** à chaque étape clé : `v3.9.1-cleanup`, `v3.10.0-legifrance`, `v3.11.0-boss`, etc.
 3. **Tests manuels** avant merge sur `main` (au minimum : login, upload, chat, analyse CDC sur un CDC connu)
 4. **Rollback en 1 commande** : `git checkout v3.9.0-stable && docker compose up -d --build`
+
+## Rollback ciblé de la refonte UI
+
+La refonte UI moderne (`feat/ui-modern-v4`) est livrée en **commits granulaires, un par page** (chat, documents, login, settings, users, ragas). Trois niveaux de rollback :
+
+```bash
+# (a) Rollback complet de la refonte UI (garde les améliorations backend récentes) :
+git checkout ui-pre-modern-v1
+docker compose up -d --build frontend
+
+# (b) Revert d'une seule page (par exemple si /chat pose problème mais le reste va) :
+git log --oneline main..feat/ui-modern-v4   # repérer le commit ciblé
+git revert <sha>
+docker compose up -d --build frontend
+
+# (c) Rollback total (UI + backend) vers l'état stable d'avril :
+git checkout v3.9.0-stable
+docker compose up -d --build
+```
 
 ## Contact / responsable
 
