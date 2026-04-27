@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Loader2, ThumbsDown, ThumbsUp, Trash2 } from "lucide-react";
+import { Loader2, ThumbsDown, ThumbsUp, Trash2, Wand2 } from "lucide-react";
 import {
   Sheet,
   SheetContent,
@@ -27,7 +27,7 @@ import {
 } from "@/components/requirement-row";
 import { api } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
-import type { Requirement, RequirementFeedback } from "@/lib/types";
+import type { AnalysisJob, Requirement, RequirementFeedback } from "@/lib/types";
 
 function formatDate(iso?: string): string {
   if (!iso) return "";
@@ -43,6 +43,7 @@ export function RequirementSheet({
   open,
   onOpenChange,
   onFeedbackChange,
+  onAnalysisRefreshed,
 }: {
   requirement: Requirement | null;
   analysisId?: number | string | null;
@@ -50,6 +51,7 @@ export function RequirementSheet({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onFeedbackChange?: () => void | Promise<void>;
+  onAnalysisRefreshed?: () => void | Promise<void>;
 }) {
   const { toast } = useToast();
   const [vote, setVote] = React.useState<"up" | "down" | null>(null);
@@ -57,6 +59,7 @@ export function RequirementSheet({
   const [busy, setBusy] = React.useState(false);
   const [editing, setEditing] = React.useState(false);
   const [showBreakdown, setShowBreakdown] = React.useState(false);
+  const [repassBusy, setRepassBusy] = React.useState(false);
 
   // Reset local state quand on change d'exigence ou que le feedback change.
   React.useEffect(() => {
@@ -65,6 +68,44 @@ export function RequirementSheet({
     setEditing(false);
     setShowBreakdown(false);
   }, [requirement?.id, feedback?.vote, feedback?.comment]);
+
+  const launchRepass = async () => {
+    if (!requirement || !analysisId) return;
+    setRepassBusy(true);
+    try {
+      const job = await api.repassAnalysis(analysisId, {
+        requirementIds: [requirement.id],
+      });
+      const POLL_INTERVAL_MS = 3000;
+      let final: AnalysisJob | null = null;
+      while (true) {
+        const j = await api.analysisJob(job.id);
+        if (j.status === "done" || j.status === "error") {
+          final = j;
+          break;
+        }
+        await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+      }
+      if (final.status === "error") {
+        toast({
+          title: "Échec du re-pass",
+          description: final.error || "Erreur inconnue",
+          variant: "destructive",
+        });
+        return;
+      }
+      toast({
+        title: "Re-pass terminé",
+        description: `Verdict re-passé pour ${requirement.id}`,
+      });
+      if (onAnalysisRefreshed) await onAnalysisRefreshed();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Erreur de re-pass";
+      toast({ title: "Erreur", description: msg, variant: "destructive" });
+    } finally {
+      setRepassBusy(false);
+    }
+  };
 
   const canEdit = analysisId !== null && analysisId !== undefined;
   const hasSavedFeedback = !!feedback;
@@ -414,6 +455,43 @@ export function RequirementSheet({
                           </div>
                         </div>
                       ) : null}
+                    </section>
+
+                    <Separator />
+
+                    <section>
+                      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                        Re-pass GPT-4o
+                      </h3>
+                      <div className="flex flex-wrap items-center gap-2">
+                        {requirement.repass_applied ? (
+                          <Badge variant="outline" className="text-[10px]">
+                            {requirement.repass_reason === "batch_user_request"
+                              ? "Verdict re-passé à votre demande"
+                              : "Verdict re-passé avec gpt-4o"}
+                            {requirement.repass_model
+                              ? ` · ${requirement.repass_model}`
+                              : ""}
+                          </Badge>
+                        ) : null}
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => void launchRepass()}
+                          disabled={repassBusy}
+                        >
+                          {repassBusy ? (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          ) : (
+                            <Wand2 className="mr-2 h-4 w-4" />
+                          )}
+                          Re-passer cette exigence
+                        </Button>
+                      </div>
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        Relance un verdict GPT-4o sur cette seule exigence.
+                        L'historique précédent reste consultable.
+                      </p>
                     </section>
                   </>
                 ) : null}

@@ -568,6 +568,11 @@ export default function AnalysePage() {
         pipelineVersion={report.pipeline_version || currentState?.pipelineVersion}
         onReanalyse={() => handleAnalyse(true)}
         onDelete={handleDeleteCdc}
+        onRefresh={async () => {
+          if (selectedCdcId !== null) {
+            await reloadCdcDetail(selectedCdcId);
+          }
+        }}
         reanalysing={analysing}
       />
     </>

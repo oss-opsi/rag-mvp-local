@@ -400,6 +400,60 @@ export const api = {
     return handle<QualityDashboard>(res);
   },
 
+  async repassAnalysis(
+    analysisId: number | string,
+    options?: { requirementIds?: string[]; force?: boolean },
+  ): Promise<AnalysisJob> {
+    const body: Record<string, unknown> = {};
+    if (options?.requirementIds && options.requirementIds.length > 0) {
+      body.requirement_ids = options.requirementIds;
+    }
+    if (options?.force) body.force = true;
+    const res = await fetch(
+      `/api/workspace/analyses/${encodeURIComponent(
+        String(analysisId),
+      )}/repass`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    );
+    return handle<AnalysisJob>(res);
+  },
+
+  /**
+   * Déclenche le téléchargement du CSV feedback (UTF-8 BOM, séparateur ';').
+   */
+  async exportFeedbackCsv(analysisId: number | string): Promise<void> {
+    const url = `/api/workspace/analyses/${encodeURIComponent(
+      String(analysisId),
+    )}/feedback/export`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      let detail = `Erreur ${res.status}`;
+      try {
+        const j = (await res.json()) as { detail?: string };
+        if (j.detail) detail = j.detail;
+      } catch {
+        // ignore
+      }
+      throw new Error(detail);
+    }
+    const blob = await res.blob();
+    const disposition = res.headers.get("content-disposition") || "";
+    const match = disposition.match(/filename="([^"]+)"/);
+    const filename = match ? match[1] : `feedback_${analysisId}.csv`;
+    const objUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = objUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(objUrl), 1000);
+  },
+
   async analysisJob(id: number): Promise<AnalysisJob> {
     const res = await fetch(`/api/analysis-jobs/${id}`);
     return handle<AnalysisJob>(res);

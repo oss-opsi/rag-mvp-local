@@ -111,6 +111,7 @@ export function CdcReport({
   pipelineVersion,
   onReanalyse,
   onDelete,
+  onRefresh,
   reanalysing,
 }: {
   cdcId: number | null;
@@ -121,6 +122,7 @@ export function CdcReport({
   pipelineVersion?: string;
   onReanalyse: () => void | Promise<void>;
   onDelete: () => void | Promise<void>;
+  onRefresh?: () => void | Promise<void>;
   reanalysing?: boolean;
 }) {
   const { toast } = useToast();
@@ -383,6 +385,10 @@ export function CdcReport({
             analysisId={analysisId}
             requirements={requirements}
             onOpenRequirement={openRequirementById}
+            onAnalysisRefreshed={async () => {
+              if (onRefresh) await onRefresh();
+              await reloadFeedback();
+            }}
           />
         </div>
       ) : (
@@ -681,6 +687,10 @@ export function CdcReport({
         open={sheetOpen}
         onOpenChange={setSheetOpen}
         onFeedbackChange={reloadFeedback}
+        onAnalysisRefreshed={async () => {
+          if (onRefresh) await onRefresh();
+          await reloadFeedback();
+        }}
       />
     </div>
   );

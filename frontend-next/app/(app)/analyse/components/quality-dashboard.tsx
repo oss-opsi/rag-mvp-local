@@ -1,12 +1,19 @@
 "use client";
 
 import * as React from "react";
-import { Loader2, RefreshCcw } from "lucide-react";
+import {
+  Download,
+  Loader2,
+  RefreshCcw,
+  Sparkles,
+  Wand2,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/use-toast";
 import { api } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 import type {
+  AnalysisJob,
   QualityDashboard as QualityDashboardData,
   Requirement,
   RequirementFeedback,
@@ -19,6 +26,8 @@ const BUCKETS = [
   { label: "60-80%", min: 0.6, max: 0.8 },
   { label: "80-100%", min: 0.8, max: 1.0001 },
 ];
+
+const POLL_INTERVAL_MS = 3000;
 
 function bucketColorClass(idx: number): string {
   if (idx >= 4) return "bg-success";
@@ -56,19 +65,45 @@ function avgConfidence(requirements: Requirement[]): number | null {
   return n > 0 ? sum / n : null;
 }
 
+function feedbackThisMonth(feedbackList: RequirementFeedback[]): number {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = now.getMonth();
+  let n = 0;
+  for (const f of feedbackList) {
+    if (f.vote !== "up") continue;
+    const iso = f.updated_at || f.created_at;
+    if (!iso) continue;
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) continue;
+    if (d.getFullYear() === y && d.getMonth() === m) n += 1;
+  }
+  return n;
+}
+
 export function QualityDashboard({
   analysisId,
   requirements,
   onOpenRequirement,
+  onAnalysisRefreshed,
 }: {
   analysisId: number | string;
   requirements: Requirement[];
   onOpenRequirement?: (requirementId: string) => void;
+  onAnalysisRefreshed?: () => void | Promise<void>;
 }) {
   const { toast } = useToast();
   const [data, setData] = React.useState<QualityDashboardData | null>(null);
   const [feedbackList, setFeedbackList] = React.useState<RequirementFeedback[]>([]);
   const [loading, setLoading] = React.useState(true);
+
+  // Re-pass state : un seul re-pass à la fois pour cette analyse.
+  // - mode "batch" : repassingId = "__batch__"
+  // - mode unitaire : repassingId = id de l'exigence
+  const [repassingId, setRepassingId] = React.useState<string | null>(null);
+  const repassCancelRef = React.useRef<{ cancelled: boolean } | null>(null);
+
+  const [exportingCsv, setExportingCsv] = React.useState(false);
 
   const reload = React.useCallback(async () => {
     setLoading(true);
@@ -90,6 +125,13 @@ export function QualityDashboard({
   React.useEffect(() => {
     void reload();
   }, [reload]);
+
+  // Annule tout polling en cours si on change d'analyse ou démonte.
+  React.useEffect(() => {
+    return () => {
+      if (repassCancelRef.current) repassCancelRef.current.cancelled = true;
+    };
+  }, [analysisId]);
 
   const requirementsById = React.useMemo(() => {
     const m = new Map<string, Requirement>();
@@ -156,6 +198,115 @@ export function QualityDashboard({
     ...domainEntries.map((d) => d.up + d.down),
   );
 
+  const upThisMonth = React.useMemo(
+    () => feedbackThisMonth(feedbackList),
+    [feedbackList],
+  );
+
+  const repassBusy = repassingId !== null;
+  const candidatesCount = repassCandidates.length;
+  const exportDisabled = totalVotes === 0 || exportingCsv;
+
+  // Polling identique à pollAnalysisJob (analyse/page.tsx) : 3 s.
+  const pollJob = React.useCallback(
+    async (jobId: number): Promise<AnalysisJob | null> => {
+      const ref = { cancelled: false };
+      repassCancelRef.current = ref;
+      while (!ref.cancelled) {
+        try {
+          const job = await api.analysisJob(jobId);
+          if (ref.cancelled) return null;
+          if (job.status === "done" || job.status === "error") {
+            return job;
+          }
+        } catch (err) {
+          throw err;
+        }
+        await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+      }
+      return null;
+    },
+    [],
+  );
+
+  const launchRepass = React.useCallback(
+    async (
+      mode: "batch" | "single",
+      requirementIds: string[] | undefined,
+      label: string,
+    ) => {
+      const tag = mode === "batch" ? "__batch__" : requirementIds?.[0] || "";
+      setRepassingId(tag);
+      const t = toast({
+        title: "Re-pass en cours",
+        description: label,
+      });
+      try {
+        const job = await api.repassAnalysis(analysisId, { requirementIds });
+        const final = await pollJob(job.id);
+        if (!final) {
+          // annulé silencieusement
+          return;
+        }
+        if (final.status === "error") {
+          toast({
+            title: "Échec du re-pass",
+            description: final.error || "Erreur inconnue",
+            variant: "destructive",
+          });
+          return;
+        }
+        // status === "done"
+        toast({ title: "Re-pass terminé", description: label });
+        if (onAnalysisRefreshed) {
+          await onAnalysisRefreshed();
+        }
+        await reload();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Erreur de re-pass";
+        toast({ title: "Erreur", description: msg, variant: "destructive" });
+      } finally {
+        setRepassingId(null);
+        // Le toast initial s'efface naturellement après son timeout.
+        void t;
+      }
+    },
+    [analysisId, onAnalysisRefreshed, pollJob, reload, toast],
+  );
+
+  const handleRepassAll = React.useCallback(() => {
+    if (candidatesCount === 0) return;
+    void launchRepass(
+      "batch",
+      undefined,
+      `Re-pass GPT-4o sur ${candidatesCount} exigence${candidatesCount > 1 ? "s" : ""}…`,
+    );
+  }, [candidatesCount, launchRepass]);
+
+  const handleRepassOne = React.useCallback(
+    (req: Requirement) => {
+      void launchRepass(
+        "single",
+        [req.id],
+        `Re-pass GPT-4o sur ${req.id}…`,
+      );
+    },
+    [launchRepass],
+  );
+
+  const handleExportCsv = React.useCallback(async () => {
+    if (totalVotes === 0) return;
+    setExportingCsv(true);
+    try {
+      await api.exportFeedbackCsv(analysisId);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Erreur d'export";
+      toast({ title: "Échec de l'export", description: msg, variant: "destructive" });
+    } finally {
+      setExportingCsv(false);
+    }
+  }, [analysisId, totalVotes, toast]);
+
   if (loading && !data) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
@@ -167,12 +318,32 @@ export function QualityDashboard({
 
   return (
     <div className="flex h-full flex-col overflow-auto">
-      <div className="flex items-center justify-between border-b border-border bg-background px-4 py-3 md:px-6">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-background px-4 py-3 md:px-6">
         <h2 className="text-base font-semibold">Tableau de bord qualité</h2>
-        <Button variant="outline" size="sm" onClick={() => void reload()}>
-          <RefreshCcw className="mr-2 h-4 w-4" />
-          Rafraîchir
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void handleExportCsv()}
+            disabled={exportDisabled}
+            title={
+              totalVotes === 0
+                ? "Aucun feedback à exporter"
+                : "Télécharger un CSV (séparateur ;) compatible Excel"
+            }
+          >
+            {exportingCsv ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <Download className="mr-2 h-4 w-4" />
+            )}
+            Exporter le feedback (CSV)
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => void reload()}>
+            <RefreshCcw className="mr-2 h-4 w-4" />
+            Rafraîchir
+          </Button>
+        </div>
       </div>
 
       <div className="flex flex-col gap-6 p-4 md:p-6">
@@ -206,7 +377,7 @@ export function QualityDashboard({
           />
           <KpiTile
             label="Verdicts à re-passer"
-            value={String(repassCandidates.length)}
+            value={String(candidatesCount)}
             sub="Confiance < 50% ou avis négatif"
           />
         </div>
@@ -256,7 +427,7 @@ export function QualityDashboard({
                     <div className="flex items-center justify-between text-xs">
                       <span className="font-medium">{d.domain}</span>
                       <span className="text-muted-foreground tabular-nums">
-                        {d.up} 👍 · {d.down} 👎
+                        {d.up} pertinents · {d.down} à revoir
                       </span>
                     </div>
                     <div className="relative h-3 w-full overflow-hidden rounded-md bg-muted">
@@ -323,57 +494,117 @@ export function QualityDashboard({
         </section>
 
         <section className="rounded-md border border-border bg-background p-4">
-          <h3 className="mb-3 text-sm font-semibold">
-            Suggestions de re-pass automatique
-          </h3>
-          {repassCandidates.length === 0 ? (
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-sm font-semibold">
+              Suggestions de re-pass automatique
+            </h3>
+            {candidatesCount > 0 ? (
+              <Button
+                size="sm"
+                onClick={handleRepassAll}
+                disabled={repassBusy}
+                title="Lancer un re-pass GPT-4o sur toutes les exigences à confiance faible ou avec feedback négatif"
+              >
+                {repassingId === "__batch__" ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Wand2 className="mr-2 h-4 w-4" />
+                )}
+                {`Re-passer toutes les suggestions (${candidatesCount})`}
+              </Button>
+            ) : null}
+          </div>
+          {repassBusy ? (
+            <div className="mb-3 flex items-center gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              <span>
+                Re-pass en cours.
+                {" "}Vous pouvez continuer à consulter le rapport pendant le traitement.
+              </span>
+            </div>
+          ) : null}
+          {candidatesCount === 0 ? (
             <p className="text-xs text-muted-foreground">
               Aucun verdict ne nécessite de re-pass à ce stade.
             </p>
           ) : (
             <ul className="divide-y divide-border">
-              {repassCandidates.slice(0, 20).map(({ req, reasons }) => (
-                <li
-                  key={req.id}
-                  className="flex flex-wrap items-center justify-between gap-3 py-2"
-                >
-                  <div className="flex min-w-0 flex-col">
-                    <span className="font-mono text-xs text-muted-foreground">
-                      {req.id}
-                    </span>
-                    <span className="truncate text-sm">{req.title}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {reasons.join(" · ")}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {onOpenRequirement ? (
+              {repassCandidates.slice(0, 20).map(({ req, reasons }) => {
+                const isThisRowBusy = repassingId === req.id;
+                return (
+                  <li
+                    key={req.id}
+                    className="flex flex-wrap items-center justify-between gap-3 py-2"
+                  >
+                    <div className="flex min-w-0 flex-col">
+                      <span className="font-mono text-xs text-muted-foreground">
+                        {req.id}
+                      </span>
+                      <span className="truncate text-sm">{req.title}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {reasons.join(" · ")}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {onOpenRequirement ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => onOpenRequirement(req.id)}
+                          disabled={repassBusy}
+                        >
+                          Voir l'exigence
+                        </Button>
+                      ) : null}
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={() => onOpenRequirement(req.id)}
+                        onClick={() => handleRepassOne(req)}
+                        disabled={repassBusy}
                       >
-                        Voir l'exigence
+                        {isThisRowBusy ? (
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        ) : (
+                          <Wand2 className="mr-2 h-4 w-4" />
+                        )}
+                        Lancer un re-pass GPT-4o
                       </Button>
-                    ) : null}
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() =>
-                        toast({
-                          title: "Re-pass non disponible dans cette version",
-                          description:
-                            "Le déclenchement manuel du re-pass GPT-4o sera ajouté ultérieurement.",
-                        })
-                      }
-                    >
-                      Lancer un re-pass GPT-4o
-                    </Button>
-                  </div>
-                </li>
-              ))}
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
           )}
+        </section>
+
+        <section className="rounded-md border border-border bg-background p-4">
+          <div className="flex items-start gap-3">
+            <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-accent" aria-hidden />
+            <div className="flex flex-col gap-1">
+              <h3 className="text-sm font-semibold">
+                Apprentissage continu activé
+              </h3>
+              <p className="text-xs text-muted-foreground">
+                Vos verdicts validés enrichissent automatiquement les analyses
+                suivantes sur les mêmes domaines SIRH (exemples + sources
+                priorisées).
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Verdicts validés ce mois-ci sur cette analyse :{" "}
+                <span className="font-semibold text-foreground tabular-nums">
+                  {upThisMonth}
+                </span>
+                {down > 0 ? (
+                  <>
+                    {" "}· avis négatifs pris en compte :{" "}
+                    <span className="font-semibold text-foreground tabular-nums">
+                      {down}
+                    </span>
+                  </>
+                ) : null}
+              </p>
+            </div>
+          </div>
         </section>
       </div>
     </div>

@@ -176,6 +176,13 @@ export type Requirement = {
   llm_confidence?: number | null;
   retrieval_confidence?: number | null;
   subdomain?: string | null;
+  repass_applied?: boolean;
+  repass_model?: string | null;
+  repass_reason?: string | null;
+  enrichment_used?: {
+    few_shot_count: number;
+    boosted_sources: string[];
+  } | null;
 };
 
 export type RequirementFeedback = {
