@@ -567,6 +567,16 @@ def mark_all_notifications_read(user: str) -> int:
         return cur.rowcount
 
 
+def delete_notification(notification_id: int, user: str) -> bool:
+    """Supprime définitivement une notification de l'utilisateur courant."""
+    with _connect() as conn:
+        cur = conn.execute(
+            "DELETE FROM app_notifications WHERE id = ? AND user = ?",
+            (notification_id, user),
+        )
+        return cur.rowcount > 0
+
+
 __all__ = [
     "SCHEDULER_DB_PATH",
     "VALID_SOURCES",

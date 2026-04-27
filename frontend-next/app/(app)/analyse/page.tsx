@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { UploadDropzone } from "@/components/upload-dropzone";
 import { ContextPanel } from "@/components/context-panel";
+import { NotificationsBell } from "@/components/notifications-bell";
 import { useToast } from "@/components/ui/use-toast";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api-client";
@@ -366,7 +367,7 @@ export default function AnalysePage() {
       <>
         {contextPanelContent}
         <div className="flex h-full flex-col">
-          <header className="flex h-14 shrink-0 items-center border-b border-border px-4 md:px-6">
+          <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-4 md:px-6">
             <div className="text-sm font-semibold">
               Analyse
               <span className="mx-1.5 text-muted-foreground">—</span>
@@ -374,6 +375,7 @@ export default function AnalysePage() {
                 Aucun client sélectionné
               </span>
             </div>
+            <NotificationsBell />
           </header>
           <div className="flex flex-1 items-center justify-center p-6 md:p-10">
             <div className="max-w-md text-center">
@@ -406,11 +408,14 @@ export default function AnalysePage() {
                 "Client"}
             </span>
           </div>
-          <PipelineBadges
-            version={currentState?.pipelineVersion}
-            compact
-            className="hidden md:flex"
-          />
+          <div className="flex items-center gap-2">
+            <PipelineBadges
+              version={currentState?.pipelineVersion}
+              compact
+              className="hidden md:flex"
+            />
+            <NotificationsBell />
+          </div>
         </header>
 
         <div className="flex-1 overflow-auto p-4 md:p-6">
@@ -529,7 +534,10 @@ export default function AnalysePage() {
                 {cdcDetail.cdc.filename}
               </span>
             </div>
-            <StatusPill status={cdcDetail.status} />
+            <div className="flex items-center gap-2">
+              <StatusPill status={cdcDetail.status} />
+              <NotificationsBell />
+            </div>
           </header>
           <div className="flex flex-1 items-center justify-center p-6 md:p-10">
             <div className="max-w-md text-center">

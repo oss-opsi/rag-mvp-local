@@ -23,6 +23,7 @@ import { ContextPanel } from "@/components/context-panel";
 import { useAppShell } from "@/components/app-shell-context";
 import { useToast } from "@/components/ui/use-toast";
 import { LlmModelsCard } from "@/components/llm-models-card";
+import { NotificationsBell } from "@/components/notifications-bell";
 import { PublicSourcesCard } from "@/components/public-sources-card";
 import { api } from "@/lib/api-client";
 import type { ApiKeyInfo } from "@/lib/types";
@@ -139,7 +140,7 @@ export default function SettingsPage() {
           </nav>
         </div>
       </ContextPanel>
-      <header className="flex h-14 shrink-0 items-center border-b border-border px-4 md:px-6">
+      <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-4 md:px-6">
         <div className="text-sm font-semibold">
           Paramètres
           {user?.name ? (
@@ -151,6 +152,7 @@ export default function SettingsPage() {
             </>
           ) : null}
         </div>
+        <NotificationsBell />
       </header>
 
       <div className="flex-1 overflow-auto">

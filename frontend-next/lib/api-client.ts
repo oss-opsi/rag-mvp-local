@@ -816,4 +816,9 @@ export const api = {
     const res = await fetch("/api/notifications/read-all", { method: "POST" });
     return handle(res);
   },
+
+  async deleteNotification(id: number): Promise<unknown> {
+    const res = await fetch(`/api/notifications/${id}`, { method: "DELETE" });
+    return handle(res);
+  },
 };

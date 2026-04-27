@@ -2986,6 +2986,16 @@ def notifications_mark_all_read(
     return {"marked": n}
 
 
+@app.delete("/notifications/{notification_id}", tags=["Notifications"])
+def notifications_delete(
+    notification_id: int,
+    user_id: str = Depends(get_current_user),
+) -> dict:
+    """Supprime définitivement une notification."""
+    ok = scheduler_db.delete_notification(notification_id, user_id)
+    return {"removed": ok}
+
+
 # ---------------------------------------------------------------------------
 # Entry point (for local dev without Docker)
 # ---------------------------------------------------------------------------

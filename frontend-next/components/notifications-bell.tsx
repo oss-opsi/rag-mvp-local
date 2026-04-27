@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Bell, Loader2, Check } from "lucide-react";
+import { Bell, Loader2, Check, X } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -82,6 +82,18 @@ export function NotificationsBell() {
     }
   };
 
+  const handleDelete = async (id: number) => {
+    // Optimistic UI : on retire localement avant l'AR backend.
+    setItems((prev) => prev.filter((n) => n.id !== id));
+    try {
+      await api.deleteNotification(id);
+      await reloadItems();
+    } catch {
+      // En cas d'échec, on recharge pour resynchroniser.
+      await reloadItems();
+    }
+  };
+
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger asChild>
@@ -136,46 +148,55 @@ export function NotificationsBell() {
               Aucune notification.
             </div>
           ) : (
-            <ul className="divide-y divide-border">
+            <ul className="divide-y divide-soft">
               {items.map((n) => (
                 <li
                   key={n.id}
                   className={cn(
-                    "px-3 py-2.5 text-xs",
-                    !n.read_at && "bg-accent/5",
+                    "group relative flex items-start gap-2 px-3 py-2.5 text-xs",
+                    !n.read_at && "bg-accent-soft/40",
                   )}
                 >
                   <button
                     type="button"
                     onClick={() => void handleMarkOne(n.id)}
-                    className="w-full text-left"
+                    className="flex min-w-0 flex-1 items-start gap-2 text-left"
                   >
-                    <div className="flex items-start justify-between gap-2">
-                      <span
-                        className={cn(
-                          "mt-0.5 inline-block h-2 w-2 shrink-0 rounded-full",
-                          n.level === "error"
-                            ? "bg-danger"
-                            : n.level === "warn"
-                              ? "bg-warning"
-                              : "bg-success",
-                        )}
-                        aria-hidden
-                      />
-                      <div className="min-w-0 flex-1">
-                        <div className="font-medium text-foreground">
-                          {n.title}
+                    <span
+                      className={cn(
+                        "mt-1 inline-block h-2 w-2 shrink-0 rounded-full",
+                        n.level === "error"
+                          ? "bg-danger"
+                          : n.level === "warn"
+                            ? "bg-warning"
+                            : "bg-success",
+                      )}
+                      aria-hidden
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="font-medium text-foreground">
+                        {n.title}
+                      </div>
+                      {n.body ? (
+                        <div className="mt-0.5 text-muted-foreground">
+                          {n.body}
                         </div>
-                        {n.body ? (
-                          <div className="mt-0.5 text-muted-foreground">
-                            {n.body}
-                          </div>
-                        ) : null}
-                        <div className="mt-1 text-[10px] text-muted-foreground">
-                          {formatDateTime(n.created_at)}
-                        </div>
+                      ) : null}
+                      <div className="mt-1 text-[10px] text-muted-foreground">
+                        {formatDateTime(n.created_at)}
                       </div>
                     </div>
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Supprimer la notification"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void handleDelete(n.id);
+                    }}
+                    className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-all hover:bg-danger-soft hover:text-danger group-hover:opacity-100 focus-visible:opacity-100"
+                  >
+                    <X className="h-3.5 w-3.5" />
                   </button>
                 </li>
               ))}

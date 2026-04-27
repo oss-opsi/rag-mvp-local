@@ -36,6 +36,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { CoverageDonut } from "@/components/coverage-donut";
 import { ConfidenceGauge } from "@/components/confidence";
+import { NotificationsBell } from "@/components/notifications-bell";
 import { RequirementRow } from "@/components/requirement-row";
 import { RequirementSheet } from "@/components/requirement-sheet";
 import { useToast } from "@/components/ui/use-toast";
@@ -458,6 +459,7 @@ export function CdcReport({
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+          <NotificationsBell />
         </div>
       </header>
 

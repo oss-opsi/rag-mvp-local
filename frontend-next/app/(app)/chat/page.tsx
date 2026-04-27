@@ -38,6 +38,7 @@ import { MessageBubble } from "@/components/chat/message-bubble";
 import { Composer } from "@/components/chat/composer";
 import { ContextPanel } from "@/components/context-panel";
 import { MaintenanceBanner } from "@/components/maintenance-banner";
+import { NotificationsBell } from "@/components/notifications-bell";
 import { useToast } from "@/components/ui/use-toast";
 import { api } from "@/lib/api-client";
 import { cn, formatDateTime } from "@/lib/utils";
@@ -467,47 +468,50 @@ export default function ChatPage() {
               (selectedId ? "Conversation" : "Nouvelle conversation")}
           </span>
         </div>
-        {selectedId !== null ? (
-          <div className="flex items-center gap-2">
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label="Renommer"
-              onClick={() => {
-                setRenameValue(detail?.title || "");
-                setRenameOpen(true);
-              }}
-            >
-              <Pencil className="h-4 w-4" />
-            </Button>
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
-                <Button variant="ghost" size="icon" aria-label="Supprimer">
-                  <Trash2 className="h-4 w-4" />
-                </Button>
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Supprimer la conversation ?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    Cette action est irréversible.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>Annuler</AlertDialogCancel>
-                  <AlertDialogAction
-                    onClick={() =>
-                      selectedId !== null && void handleDelete(selectedId)
-                    }
-                    className="bg-danger text-danger-foreground hover:bg-danger/90"
-                  >
-                    Supprimer
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
-          </div>
-        ) : null}
+        <div className="flex items-center gap-2">
+          {selectedId !== null ? (
+            <>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Renommer"
+                onClick={() => {
+                  setRenameValue(detail?.title || "");
+                  setRenameOpen(true);
+                }}
+              >
+                <Pencil className="h-4 w-4" />
+              </Button>
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button variant="ghost" size="icon" aria-label="Supprimer">
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Supprimer la conversation ?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      Cette action est irréversible.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Annuler</AlertDialogCancel>
+                    <AlertDialogAction
+                      onClick={() =>
+                        selectedId !== null && void handleDelete(selectedId)
+                      }
+                      className="bg-danger text-danger-foreground hover:bg-danger/90"
+                    >
+                      Supprimer
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </>
+          ) : null}
+          <NotificationsBell />
+        </div>
       </header>
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto overflow-x-hidden">

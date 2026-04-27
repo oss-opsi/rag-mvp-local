@@ -38,9 +38,8 @@ type NavItem = {
   icon: React.ComponentType<{ className?: string }>;
 };
 
-// Tell me v4.3 — ordre validé : Indexation → Chat → Analyse → RAGAS
+// Tell me v4.5 — page d'accueil = Chat. Indexation passe en admin.
 const PRIMARY_NAV: NavItem[] = [
-  { href: "/documents", label: "Indexation", icon: LayoutGrid },
   { href: "/chat", label: "Chat", icon: MessageCircle },
   { href: "/analyse", label: "Analyse d'écarts", icon: FileSearch },
   { href: "/ragas", label: "RAGAS", icon: LineChart },
@@ -53,6 +52,7 @@ const SECONDARY_NAV: NavItem[] = [
 
 // Admin-only — injecté conditionnellement dans la nav secondaire.
 const ADMIN_NAV: NavItem[] = [
+  { href: "/documents", label: "Indexation", icon: LayoutGrid },
   { href: "/referentiels", label: "Référentiels", icon: BookMarked },
   { href: "/scheduler", label: "Planificateur", icon: CalendarClock },
 ];
@@ -101,7 +101,7 @@ export function LeftRailContent({
         {/* Logo Ω */}
         <div className="flex h-16 w-full items-center justify-center border-b border-border">
           <Link
-            href="/documents"
+            href="/chat"
             onClick={onNavigate}
             aria-label="Tell me — Accueil"
             className="rounded-xl outline-none ring-offset-background transition-transform hover:scale-105 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
