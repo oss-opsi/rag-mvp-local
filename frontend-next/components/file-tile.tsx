@@ -90,6 +90,7 @@ export function getExt(filename: string): string {
   const ext = m[1];
   if (ext === "pdf") return "PDF";
   if (ext === "doc" || ext === "docx") return "DOC";
+  if (ext === "xlsx" || ext === "xls") return "XLS";
   if (ext === "txt") return "TXT";
   if (ext === "md") return "MD";
   return ext.toUpperCase().slice(0, 4);
@@ -98,6 +99,7 @@ export function getExt(filename: string): string {
 const ICON_STYLES: Record<string, string> = {
   PDF: "bg-gradient-to-br from-danger-soft to-warning-soft text-danger",
   DOC: "bg-gradient-to-br from-accent-soft to-violet-soft text-accent",
+  XLS: "bg-gradient-to-br from-success-soft to-warning-soft text-success",
   TXT: "bg-muted/60 text-muted-foreground",
   MD: "bg-muted/60 text-muted-foreground",
 };

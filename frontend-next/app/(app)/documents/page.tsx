@@ -345,7 +345,7 @@ export default function DocumentsPage() {
           ref={fileInputRef}
           type="file"
           className="hidden"
-          accept=".pdf,.docx,.txt,.md"
+          accept=".pdf,.docx,.txt,.md,.xlsx,.xls"
           onChange={(e) => {
             const f = e.target.files?.[0];
             if (f) void handleUpload(f);
@@ -365,12 +365,12 @@ export default function DocumentsPage() {
               Ajouter des documents
             </h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              PDF, DOCX, TXT, MD — 200 Mo max par fichier
+              PDF, DOCX, TXT, MD, XLSX, XLS — 200 Mo max par fichier
             </p>
           </div>
 
           <UploadDropzone
-            accept=".pdf,.docx,.txt,.md"
+            accept=".pdf,.docx,.txt,.md,.xlsx,.xls"
             disabled={uploading}
             onFile={(f) => void handleUpload(f)}
             title="Glisser-déposer vos fichiers ici"

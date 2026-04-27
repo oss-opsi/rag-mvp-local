@@ -11,7 +11,6 @@ Le module ne sait rien d'APScheduler : c'est ``manager.py`` qui orchestre.
 """
 from __future__ import annotations
 
-import json
 import logging
 import os
 import sqlite3

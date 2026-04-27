@@ -46,7 +46,7 @@ from .semantic_chunker import (
 logger = logging.getLogger(__name__)
 
 # Supported file extensions
-SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".txt", ".md"}
+SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".txt", ".md", ".xlsx", ".xls"}
 
 # ---------------------------------------------------------------------------
 # Shared singletons (lazy initialisation)
@@ -171,7 +171,6 @@ def load_bm25_corpus(user_id: str = "default") -> list[dict[str, Any]]:
     Load and return the BM25 corpus for the given user.
     Loads from disk on first call; subsequent calls use in-memory cache.
     """
-    global _bm25_corpora
     if user_id in _bm25_corpora:
         return _bm25_corpora[user_id]
 
@@ -206,7 +205,6 @@ def save_bm25_corpus(user_id: str = "default") -> None:
 
 def reset_bm25_corpus(user_id: str = "default") -> None:
     """Clear in-memory and on-disk BM25 corpus for a user."""
-    global _bm25_corpora
     _bm25_corpora[user_id] = []
     pkl_path = bm25_file(user_id)
     if Path(pkl_path).exists():
@@ -218,7 +216,57 @@ def reset_bm25_corpus(user_id: str = "default") -> None:
 # ---------------------------------------------------------------------------
 
 
-def _load_documents(file_path: str, ext: str):
+def _load_excel_document(file_path: str, ext: str, source_name: str):
+    """Extrait le texte d'un classeur Excel (xlsx/xls) en concaténant les lignes.
+
+    Pour chaque feuille, émet un en-tête `## Feuille : {nom}` puis chaque ligne
+    sous forme `cell1 | cell2 | ...` (cellules vides ignorées). Retourne un
+    Document unique : le chunker sémantique le découpera ensuite par taille.
+    """
+    from langchain.schema import Document
+
+    parts: list[str] = []
+    if ext == ".xlsx":
+        from openpyxl import load_workbook
+
+        wb = load_workbook(file_path, data_only=True, read_only=True)
+        try:
+            for sheet_name in wb.sheetnames:
+                ws = wb[sheet_name]
+                parts.append(f"## Feuille : {sheet_name}")
+                for row in ws.iter_rows(values_only=True):
+                    cells = [
+                        str(c).strip()
+                        for c in row
+                        if c is not None and str(c).strip()
+                    ]
+                    if cells:
+                        parts.append(" | ".join(cells))
+        finally:
+            wb.close()
+    elif ext == ".xls":
+        import xlrd
+
+        wb = xlrd.open_workbook(file_path)
+        for sheet in wb.sheets():
+            parts.append(f"## Feuille : {sheet.name}")
+            for row_idx in range(sheet.nrows):
+                row = sheet.row_values(row_idx)
+                cells = [
+                    str(c).strip()
+                    for c in row
+                    if c is not None and str(c).strip() != ""
+                ]
+                if cells:
+                    parts.append(" | ".join(cells))
+    else:
+        raise ValueError(f"Extension Excel non gérée : {ext}")
+
+    text = "\n".join(parts)
+    return [Document(page_content=text, metadata={"source": source_name, "page": 1})]
+
+
+def _load_documents(file_path: str, ext: str, source_name: str | None = None):
     """
     Load a document using the appropriate loader for the file extension.
     Returns a list of LangChain Document objects.
@@ -233,6 +281,8 @@ def _load_documents(file_path: str, ext: str):
     elif ext in {".txt", ".md"}:
         from langchain_community.document_loaders import TextLoader
         loader = TextLoader(file_path, encoding="utf-8")
+    elif ext in {".xlsx", ".xls"}:
+        return _load_excel_document(file_path, ext, source_name or file_path)
     else:
         raise ValueError(
             f"Format non supporté : '{ext}'. "
@@ -256,12 +306,10 @@ def ingest_file(
     Ingest a document file into the user's Qdrant collection (dense) and
     their BM25 corpus (sparse).
 
-    Supported formats: PDF, DOCX, TXT, MD.
+    Supported formats: PDF, DOCX, TXT, MD, XLSX, XLS.
 
     Returns the number of chunks indexed.
     """
-    global _bm25_corpora
-
     collection_name = _collection_for_user(user_id)
 
     # Ensure corpus is loaded
@@ -273,7 +321,7 @@ def ingest_file(
         ext = Path(file_path).suffix.lower()
 
     # 1. Load document
-    pages = _load_documents(file_path, ext)
+    pages = _load_documents(file_path, ext, source_name)
     logger.info("Loaded %d page(s)/section(s) from '%s'.", len(pages), source_name)
 
     # 2. Split into chunks — semantic (v3.9.0 default) or legacy size-based

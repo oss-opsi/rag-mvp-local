@@ -19,13 +19,13 @@ import os
 from pathlib import Path
 from typing import Any
 
-from langchain_core.documents import Document
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client.http import models as qmodels
 
 from .config import EMBEDDING_DIM, QDRANT_URL
 from .ingest import (
     _load_documents,
+    _load_excel_document,
     ensure_collection,
     get_embeddings,
     get_qdrant_client,
@@ -45,54 +45,6 @@ REFERENTIELS_COLLECTION: str = os.getenv(
 #: Format attendu côté client. On reste strict pour éviter d'embarquer du HTML
 #: ou des fichiers texte mal formés dans une collection « doctrine interne ».
 SUPPORTED_REFERENTIEL_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".xls"}
-
-
-def _load_excel_document(file_path: str, ext: str, source_name: str) -> list[Document]:
-    """Extrait le texte d'un classeur Excel (xlsx/xls) en concaténant les lignes.
-
-    Stratégie : pour chaque feuille, on émet un en-tête `## Feuille : {nom}`
-    puis chaque ligne sous forme `cell1 | cell2 | ...` (cellules vides ignorées).
-    On retourne un Document unique (le chunker découpera ensuite par taille).
-    """
-    parts: list[str] = []
-    if ext == ".xlsx":
-        from openpyxl import load_workbook
-
-        wb = load_workbook(file_path, data_only=True, read_only=True)
-        try:
-            for sheet_name in wb.sheetnames:
-                ws = wb[sheet_name]
-                parts.append(f"## Feuille : {sheet_name}")
-                for row in ws.iter_rows(values_only=True):
-                    cells = [
-                        str(c).strip()
-                        for c in row
-                        if c is not None and str(c).strip()
-                    ]
-                    if cells:
-                        parts.append(" | ".join(cells))
-        finally:
-            wb.close()
-    elif ext == ".xls":
-        import xlrd
-
-        wb = xlrd.open_workbook(file_path)
-        for sheet in wb.sheets():
-            parts.append(f"## Feuille : {sheet.name}")
-            for row_idx in range(sheet.nrows):
-                row = sheet.row_values(row_idx)
-                cells = [
-                    str(c).strip()
-                    for c in row
-                    if c is not None and str(c).strip() != ""
-                ]
-                if cells:
-                    parts.append(" | ".join(cells))
-    else:
-        raise ValueError(f"Extension Excel non gérée : {ext}")
-
-    text = "\n".join(parts)
-    return [Document(page_content=text, metadata={"source": source_name, "page": 1})]
 
 
 def _ensure_referentiels_collection() -> None:

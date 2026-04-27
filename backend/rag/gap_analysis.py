@@ -48,7 +48,7 @@ def _repass_model() -> str:
     """Return the LLM model selected for the re-pass on ambiguous verdicts."""
     return get_setting("llm_repass", "gpt-4o")
 from .ingest import _load_documents, get_embeddings
-from .retriever import ReferentielsOnlyRetriever, get_retriever_for_user  # noqa: F401
+from .retriever import ReferentielsOnlyRetriever
 
 # Deterministic seed passed to OpenAI for best-effort reproducibility
 # (same seed + same prompt + same model = same output, most of the time).
