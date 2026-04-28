@@ -144,29 +144,34 @@ export default function ClientCdcsPage() {
             </div>
           ) : (
             <div>
-              <div className="mb-4 flex items-center justify-between gap-3">
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                 <h2 className="text-base font-semibold tracking-tight">
                   {cdcs.length} CDC{cdcs.length > 1 ? "s" : ""}
                 </h2>
-                <label
-                  className={cn(
-                    "inline-flex cursor-pointer items-center gap-2 rounded-md border border-soft bg-card px-3 py-1.5 text-sm transition-colors hover:bg-accent-soft hover:text-accent",
-                    uploading && "pointer-events-none opacity-60",
-                  )}
-                >
-                  <Upload className="h-4 w-4" />
-                  {uploading ? "Import…" : "Ajouter un CDC"}
-                  <input
-                    type="file"
-                    className="hidden"
-                    accept=".pdf,.docx,.txt,.md,.xlsx,.xls"
-                    onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      if (f) void handleUploadCdc(f);
-                      e.target.value = "";
-                    }}
-                  />
-                </label>
+                <div className="flex flex-wrap items-center gap-3">
+                  <span className="text-[11px] text-muted-foreground">
+                    PDF · DOCX · XLSX · XLS · TXT · MD · 50 Mo max
+                  </span>
+                  <label
+                    className={cn(
+                      "inline-flex cursor-pointer items-center gap-2 rounded-md border border-soft bg-card px-3 py-1.5 text-sm transition-colors hover:bg-accent-soft hover:text-accent",
+                      uploading && "pointer-events-none opacity-60",
+                    )}
+                  >
+                    <Upload className="h-4 w-4" />
+                    {uploading ? "Import…" : "Ajouter un CDC"}
+                    <input
+                      type="file"
+                      className="hidden"
+                      accept=".pdf,.docx,.txt,.md,.xlsx,.xls"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) void handleUploadCdc(f);
+                        e.target.value = "";
+                      }}
+                    />
+                  </label>
+                </div>
               </div>
               <ul className="grid gap-3">
                 {cdcs.map((c) => (

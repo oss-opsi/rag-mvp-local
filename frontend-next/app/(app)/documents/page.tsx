@@ -330,6 +330,12 @@ export default function DocumentsPage() {
           />
           <span className="hidden sm:inline">Actualiser</span>
         </Button>
+        <span
+          className="hidden text-[11px] text-muted-foreground md:inline"
+          title="Formats supportés"
+        >
+          PDF · DOCX · XLSX · XLS · TXT · MD
+        </span>
         <Button
           size="sm"
           onClick={openPicker}
