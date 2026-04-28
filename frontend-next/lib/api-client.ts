@@ -455,6 +455,38 @@ export const api = {
     await handle(res);
   },
 
+  async deleteAllCorrections(
+    analysisId: number | string,
+  ): Promise<{ removed: number }> {
+    const res = await fetch(
+      `/api/workspace/analyses/${encodeURIComponent(
+        String(analysisId),
+      )}/corrections`,
+      { method: "DELETE" },
+    );
+    return handle<{ removed: number }>(res);
+  },
+
+  async importCorrections(
+    analysisId: number | string,
+    file: File,
+  ): Promise<{
+    applied: number;
+    ignored: { requirement_id?: string; raw_id?: string; reason: string }[];
+    errors: { requirement_id?: string; reason: string }[];
+    analysis_id: number;
+  }> {
+    const fd = new FormData();
+    fd.append("file", file);
+    const res = await fetch(
+      `/api/workspace/analyses/${encodeURIComponent(
+        String(analysisId),
+      )}/import-corrections`,
+      { method: "POST", body: fd },
+    );
+    return handle(res);
+  },
+
   async getQualityDashboard(
     analysisId: number | string,
   ): Promise<QualityDashboard> {

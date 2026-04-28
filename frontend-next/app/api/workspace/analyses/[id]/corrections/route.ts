@@ -10,3 +10,11 @@ export async function GET(_req: Request, ctx: Ctx): Promise<Response> {
     `/workspace/analyses/${encodeURIComponent(id)}/corrections`,
   );
 }
+
+export async function DELETE(_req: Request, ctx: Ctx): Promise<Response> {
+  const { id } = await ctx.params;
+  return proxyJson(
+    `/workspace/analyses/${encodeURIComponent(id)}/corrections`,
+    { method: "DELETE" },
+  );
+}

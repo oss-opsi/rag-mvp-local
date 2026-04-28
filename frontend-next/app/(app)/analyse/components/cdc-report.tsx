@@ -16,6 +16,7 @@ import {
   ShieldCheck,
   ThumbsUp,
   ThumbsDown,
+  Upload,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -42,6 +43,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { CoverageDonut } from "@/components/coverage-donut";
 import { ConfidenceGauge } from "@/components/confidence";
+import { ImportCorrectionsDialog } from "@/components/import-corrections-dialog";
 import { NotificationsBell } from "@/components/notifications-bell";
 import { RequirementRow } from "@/components/requirement-row";
 import { RequirementSheet } from "@/components/requirement-sheet";
@@ -168,6 +170,9 @@ export function CdcReport({
     key: TableSortKey;
     dir: TableSortDir;
   } | null>(null);
+  const [importOpen, setImportOpen] = React.useState(false);
+  const [showOnlyCorrected, setShowOnlyCorrected] = React.useState(false);
+  const [deletingAll, setDeletingAll] = React.useState(false);
   const [openDomains, setOpenDomains] = React.useState<Set<string>>(new Set());
   const [view, setView] = React.useState<ViewMode>("report");
   const [feedbackList, setFeedbackList] = React.useState<RequirementFeedback[]>([]);
@@ -278,6 +283,7 @@ export function CdcReport({
         return false;
       if (q && !`${r.id} ${r.title} ${r.description}`.toLowerCase().includes(q))
         return false;
+      if (showOnlyCorrected && !correctionByRequirement.has(r.id)) return false;
       return true;
     });
     if (sortByConfidence) {
@@ -288,7 +294,15 @@ export function CdcReport({
       });
     }
     return list;
-  }, [requirementsView, statusFilter, search, selectedCategories, sortByConfidence]);
+  }, [
+    requirementsView,
+    statusFilter,
+    search,
+    selectedCategories,
+    sortByConfidence,
+    showOnlyCorrected,
+    correctionByRequirement,
+  ]);
 
   // Counts per status, applied AFTER category + search filters so chips reflect
   // what the user would see after each toggle.
@@ -489,9 +503,96 @@ export function CdcReport({
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+          {analysisId ? (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setImportOpen(true)}
+              title="Importer les corrections depuis un fichier Excel"
+            >
+              <Upload className="mr-2 h-4 w-4" />
+              Importer corrections
+            </Button>
+          ) : null}
           <NotificationsBell />
         </div>
       </header>
+
+      {/* Bandeau corrections : visible quand au moins une correction existe.
+          Permet à l'utilisateur de filtrer, supprimer en bloc, ou ré-importer. */}
+      {correctionList.length > 0 && analysisId ? (
+        <div className="flex flex-wrap items-center gap-3 border-b border-accent/20 bg-accent-soft/40 px-4 py-2 text-sm md:px-6">
+          <span className="inline-flex items-center gap-1.5 font-medium text-accent">
+            <ShieldCheck className="h-4 w-4" />
+            {correctionList.length} correction
+            {correctionList.length > 1 ? "s" : ""} validée
+            {correctionList.length > 1 ? "s" : ""}
+          </span>
+          <button
+            type="button"
+            onClick={() => setShowOnlyCorrected((v) => !v)}
+            className={cn(
+              "inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors",
+              showOnlyCorrected
+                ? "border-accent bg-accent text-accent-foreground"
+                : "border-soft bg-card hover:border-accent/30 hover:text-accent",
+            )}
+          >
+            {showOnlyCorrected
+              ? "✓ Uniquement les corrigées"
+              : "Voir uniquement les corrigées"}
+          </button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => setImportOpen(true)}
+            className="ml-auto h-7 px-2 text-xs"
+          >
+            <Upload className="mr-1 h-3.5 w-3.5" />
+            Réimporter
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={deletingAll}
+            onClick={async () => {
+              if (
+                !window.confirm(
+                  `Supprimer les ${correctionList.length} corrections de cette analyse ?\n\nCette action est irréversible.`,
+                )
+              ) {
+                return;
+              }
+              setDeletingAll(true);
+              try {
+                await api.deleteAllCorrections(analysisId);
+                await reloadCorrections();
+                toast({ title: "Corrections supprimées" });
+              } catch (err) {
+                const msg =
+                  err instanceof Error ? err.message : "Erreur de suppression";
+                toast({
+                  title: "Erreur",
+                  description: msg,
+                  variant: "destructive",
+                });
+              } finally {
+                setDeletingAll(false);
+              }
+            }}
+            className="h-7 px-2 text-xs text-danger hover:text-danger"
+          >
+            {deletingAll ? (
+              <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Trash2 className="mr-1 h-3.5 w-3.5" />
+            )}
+            Tout supprimer
+          </Button>
+        </div>
+      ) : null}
 
       {view === "quality" && analysisId ? (
         <div className="min-h-0 flex-1">
@@ -836,6 +937,18 @@ export function CdcReport({
           await reloadCorrections();
         }}
       />
+
+      {analysisId ? (
+        <ImportCorrectionsDialog
+          open={importOpen}
+          onOpenChange={setImportOpen}
+          analysisId={analysisId}
+          onApplied={async () => {
+            await reloadCorrections();
+            if (onRefresh) await onRefresh();
+          }}
+        />
+      ) : null}
     </div>
   );
 }
