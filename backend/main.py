@@ -358,6 +358,7 @@ async def _run_gap_analysis_for_job(
         openai_api_key=openai_api_key,
         qdrant_url=QDRANT_URL,
         force_refresh=force_refresh,
+        cdc_id=cdc_id,
     )
     analysis_id: Optional[int] = None
     try:

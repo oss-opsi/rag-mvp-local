@@ -742,6 +742,23 @@ RÈGLE IMPORTANTE : tu ne dois JAMAIS halluciner. Si un critère n'est pas
 explicitement couvert par le contexte, ne l'affirme pas couvert. Mieux vaut
 classer "ambiguous" que surestimer la couverture.
 
+PRISE EN COMPTE DE L'HISTORIQUE (si présent) :
+Un bloc « HISTORIQUE » peut t'être fourni avec : la correction humaine
+validée pour cette exigence (verdict + description), le verdict que tu avais
+rendu lors d'une analyse précédente, et un éventuel vote utilisateur (👍
+verdict pertinent / 👎 verdict à revoir).
+
+- CORRECTION HUMAINE VALIDÉE : tu DOIS aligner ton verdict sur le statut
+  validé par l'humain, SAUF si les chunks actuels contredisent
+  matériellement ce verdict. Dans ce cas exceptionnel, justifie le
+  désaccord dans `verdict` et baisse `confidence` à ≤ 0.5.
+- VERDICT PRÉCÉDENT SANS CORRECTION : prends-le comme référence de cohérence
+  inter-analyses. Reproduis le verdict si les chunks le supportent encore.
+  Sinon, motive le changement.
+- VOTE 👎 sur l'ancien verdict : c'est un signal négatif fort, le verdict
+  précédent est probablement à revoir — re-juge sans biais d'ancrage.
+- ABSENCE D'HISTORIQUE : juge normalement, ignore cette section.
+
 SCORE DE CONFIANCE :
 Tu dois également fournir un score de confiance (`confidence`) entre 0.0 et
 1.0 reflétant à quel point tu es sûr de ton verdict, indépendamment du statut
@@ -760,7 +777,7 @@ FORMAT DE SORTIE (JSON strict, sans markdown) :
   "confidence": 0.0 à 1.0
 }"""
 
-_VERDICT_HUMAN = """{few_shot_block}Exigence à évaluer
+_VERDICT_HUMAN = """{few_shot_block}{historical_block}Exigence à évaluer
 ------------------
 ID : {req_id}
 Titre : {title}
@@ -851,6 +868,214 @@ def _compute_retrieval_confidence(sources: list[dict[str, Any]]) -> float:
     return round(norm, 6)
 
 
+# ---------------------------------------------------------------------------
+# Historique par exigence (option A — bloc inline dans le judge)
+# ---------------------------------------------------------------------------
+
+
+def _norm_title(title: str | None) -> str:
+    """Normalise un titre pour matching (lowercase + strip + espaces compactés)."""
+    return " ".join((title or "").strip().lower().split())
+
+
+def _load_history_indexes(
+    user_id: str, cdc_id: int | str | None
+) -> dict[str, Any]:
+    """Pré-charge en mémoire ce qu'il faut savoir sur l'historique de cet
+    utilisateur pour ce CDC. Appelé UNE fois par analyse complète.
+
+    Renvoie un dict avec :
+    - ``corr_by_ck`` : map content_key → correction validée
+    - ``corr_by_title`` : map title_norm → correction validée (fallback)
+    - ``prev_by_title`` : map title_norm → {status, verdict, llm_confidence,
+      requirement_id, analysis_id} extrait de la dernière analyse du même CDC
+    - ``feedback_by_req_in_prev`` : map prev_requirement_id → vote
+      ("up" / "down") pour cet utilisateur sur l'analyse précédente
+    """
+    out: dict[str, Any] = {
+        "corr_by_ck": {},
+        "corr_by_title": {},
+        "prev_by_title": {},
+        "feedback_by_req_in_prev": {},
+    }
+    if not user_id:
+        return out
+    try:
+        from . import workspace as _ws
+    except Exception as exc:
+        logger.warning("History : import workspace impossible : %s", exc)
+        return out
+
+    # 1. Toutes les corrections du user
+    try:
+        all_corrs = _ws.list_all_corrections_for_user(user_id)
+    except Exception as exc:
+        logger.warning("History : corrections illisibles : %s", exc)
+        all_corrs = []
+
+    # Indexer par content_key (déjà stocké) et par title_norm via lookup analysis
+    analyses_cache: dict[str, dict[str, Any]] = {}
+    for corr in all_corrs:
+        ck = corr.get("content_key")
+        if ck and ck not in out["corr_by_ck"]:
+            out["corr_by_ck"][ck] = corr
+        # Pour le fallback titre : retrouver le titre original
+        aid = str(corr.get("analysis_id") or "")
+        rid = str(corr.get("requirement_id") or "")
+        if not aid or not rid:
+            continue
+        try:
+            if aid not in analyses_cache:
+                analyses_cache[aid] = _ws.get_analysis_for_user(user_id, int(aid)) or {}
+            analysis = analyses_cache[aid]
+        except Exception:
+            continue
+        report = (analysis or {}).get("report") or {}
+        for src_req in report.get("requirements") or []:
+            if str(src_req.get("id")) == rid:
+                tnorm = _norm_title(src_req.get("title"))
+                if tnorm and tnorm not in out["corr_by_title"]:
+                    out["corr_by_title"][tnorm] = corr
+                break
+
+    # 2. Dernière analyse du même CDC : verdicts + feedback user
+    if cdc_id is not None:
+        try:
+            prev = _ws.get_latest_analysis(user_id, int(cdc_id))
+        except Exception:
+            prev = None
+        if prev:
+            prev_aid = str(prev.get("id") or "")
+            report = prev.get("report") or {}
+            for src_req in report.get("requirements") or []:
+                tnorm = _norm_title(src_req.get("title"))
+                if not tnorm:
+                    continue
+                out["prev_by_title"][tnorm] = {
+                    "status": src_req.get("status"),
+                    "verdict": src_req.get("verdict"),
+                    "llm_confidence": src_req.get("llm_confidence")
+                    or src_req.get("confidence"),
+                    "requirement_id": src_req.get("id"),
+                    "analysis_id": prev_aid,
+                }
+            # Feedbacks user sur cette analyse
+            try:
+                fbs = _ws.list_feedback_for_analysis(prev_aid)
+                for fb in fbs:
+                    if fb.get("user_id") != user_id:
+                        continue
+                    rid = str(fb.get("requirement_id") or "")
+                    if rid:
+                        out["feedback_by_req_in_prev"][rid] = fb.get("vote")
+            except Exception:
+                pass
+
+    if (
+        out["corr_by_ck"]
+        or out["corr_by_title"]
+        or out["prev_by_title"]
+        or out["feedback_by_req_in_prev"]
+    ):
+        logger.info(
+            "History : %d correction(s), %d verdict(s) précédent(s), "
+            "%d feedback(s) chargés pour user=%s cdc=%s",
+            len(out["corr_by_ck"]),
+            len(out["prev_by_title"]),
+            len(out["feedback_by_req_in_prev"]),
+            user_id,
+            cdc_id,
+        )
+    return out
+
+
+def _format_historical_block(
+    requirement: dict[str, Any],
+    indexes: dict[str, Any] | None,
+) -> str:
+    """Construit le bloc HISTORIQUE à injecter avant la question, ou "" si
+    aucune donnée pertinente pour cette exigence. Format pensé pour être
+    lisible par le LLM (gpt-4o-mini) sans gaspillage de tokens.
+    """
+    if not indexes:
+        return ""
+
+    # Match correction : strict (content_key) puis fallback (title_norm)
+    correction: dict[str, Any] | None = None
+    try:
+        from . import workspace as _ws
+        ck = _ws.compute_content_key(
+            category=requirement.get("category"),
+            subdomain=requirement.get("subdomain"),
+            title=requirement.get("title"),
+        )
+    except Exception:
+        ck = None
+    if ck:
+        correction = indexes.get("corr_by_ck", {}).get(ck)
+    if not correction:
+        correction = indexes.get("corr_by_title", {}).get(
+            _norm_title(requirement.get("title"))
+        )
+
+    # Verdict précédent du LLM par titre
+    prev = indexes.get("prev_by_title", {}).get(
+        _norm_title(requirement.get("title"))
+    )
+
+    # Vote user sur le verdict précédent (mapping par requirement_id de la
+    # précédente analyse — pas de l'extraction courante)
+    vote = None
+    if prev:
+        vote = indexes.get("feedback_by_req_in_prev", {}).get(
+            str(prev.get("requirement_id") or "")
+        )
+
+    if not correction and not prev:
+        return ""
+
+    lines = ["# HISTORIQUE (à prendre en compte selon les règles du système)"]
+    if correction:
+        verdict_label = {
+            "covered": "COUVERT",
+            "partial": "PARTIEL",
+            "missing": "MANQUANT",
+        }.get(correction.get("verdict") or "", correction.get("verdict") or "?")
+        updated = correction.get("updated_at") or "?"
+        ans = (correction.get("answer") or "").strip()
+        if len(ans) > 600:
+            ans = ans[:600] + "…"
+        lines.append(
+            f"- CORRECTION HUMAINE VALIDÉE (le {updated[:10]}) : "
+            f"{verdict_label}"
+        )
+        lines.append(f"  Description validée : {ans}")
+        notes = (correction.get("notes") or "").strip()
+        if notes:
+            if len(notes) > 200:
+                notes = notes[:200] + "…"
+            lines.append(f"  Notes : {notes}")
+    if prev:
+        prev_status = (prev.get("status") or "?").upper()
+        conf = prev.get("llm_confidence")
+        conf_str = f" (confiance LLM {conf:.2f})" if isinstance(conf, (int, float)) else ""
+        prev_verdict = (prev.get("verdict") or "").strip()
+        if len(prev_verdict) > 400:
+            prev_verdict = prev_verdict[:400] + "…"
+        lines.append(
+            f"- VERDICT PRÉCÉDENT (analyse #{prev.get('analysis_id') or '?'}): "
+            f"{prev_status}{conf_str}"
+        )
+        if prev_verdict:
+            lines.append(f"  Justification précédente : {prev_verdict}")
+    if vote == "down":
+        lines.append("- VOTE UTILISATEUR sur l'ancien verdict : 👎 (à revoir)")
+    elif vote == "up":
+        lines.append("- VOTE UTILISATEUR sur l'ancien verdict : 👍 (pertinent)")
+    lines.append("")  # blank line before next section
+    return "\n".join(lines) + "\n"
+
+
 async def _judge_requirement(
     requirement: dict[str, Any],
     sources: list[dict[str, Any]],
@@ -858,6 +1083,7 @@ async def _judge_requirement(
     llm: ChatOpenAI,
     semaphore: asyncio.Semaphore,
     few_shot_examples: list[dict[str, Any]] | None = None,
+    historical_block: str = "",
 ) -> dict[str, Any]:
     """Ask the LLM to classify coverage for one requirement.
 
@@ -868,6 +1094,11 @@ async def _judge_requirement(
     v3.11.0 — accepte ``few_shot_examples`` (≤ 3 verdicts validés du même
     domaine SIRH) qui sont injectés AVANT la question pour guider le LLM
     sur le style et le niveau de rigueur attendus.
+
+    v4.6.0 — accepte ``historical_block`` : un bloc texte agrégeant pour
+    cette exigence la correction humaine validée, le verdict de l'analyse
+    précédente, et le vote utilisateur. Permet au LLM de converger dès le
+    premier pass sur les exigences déjà évaluées (évite re-pass coûteux).
     """
     retrieval_conf = _compute_retrieval_confidence(sources)
     few_shot_count = len(few_shot_examples) if few_shot_examples else 0
@@ -898,6 +1129,7 @@ async def _judge_requirement(
                 "role": "user",
                 "content": _VERDICT_HUMAN.format(
                     few_shot_block=few_shot_block,
+                    historical_block=historical_block,
                     req_id=requirement.get("id", ""),
                     title=requirement["title"],
                     category=requirement.get("category", "Autre"),
@@ -1043,6 +1275,7 @@ async def analyse_requirement(
     hyde_llm: ChatOpenAI | None = None,
     source_boosts: dict[str, float] | None = None,
     few_shot_provider: "Callable[[str], list[dict[str, Any]]] | None" = None,
+    history_indexes: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Retrieve + judge one requirement (thread-safe).
 
@@ -1057,6 +1290,13 @@ async def analyse_requirement(
       - ``few_shot_provider`` : callable ``(domain) -> [{title, ...}]`` qui
         retourne 0..3 exemples de verdicts validés du même domaine SIRH ;
         utilisé pour enrichir le prompt verdict.
+
+    v4.6.0:
+      - ``history_indexes`` : dict pré-calculé par _load_history_indexes
+        contenant corrections / verdicts précédents / votes user. Si
+        fourni, un bloc historique est injecté avant la question pour
+        que le LLM aligne dès le 1er pass son verdict sur les corrections
+        humaines validées.
     """
     # Build the raw query (title + description + acceptance criteria)
     criteria_text = " ".join(requirement.get("acceptance_criteria") or [])
@@ -1125,6 +1365,7 @@ async def analyse_requirement(
             )
             few_shot_examples = []
 
+    historical_block = _format_historical_block(requirement, history_indexes)
     judged = await _judge_requirement(
         requirement,
         sources,
@@ -1132,11 +1373,13 @@ async def analyse_requirement(
         llm,
         semaphore,
         few_shot_examples=few_shot_examples,
+        historical_block=historical_block,
     )
     enrichment = judged.setdefault(
         "enrichment_used", {"few_shot_count": 0, "boosted_sources": []}
     )
     enrichment["boosted_sources"] = boosted_used
+    enrichment["history_used"] = bool(historical_block)
     if hyde_used:
         judged["hyde_used"] = True
         judged["hypothesis"] = hypothesis
@@ -1361,6 +1604,7 @@ async def run_gap_analysis(
     openai_api_key: str,
     qdrant_url: str = QDRANT_URL,
     force_refresh: bool = False,
+    cdc_id: int | None = None,
 ) -> dict[str, Any]:
     """
     Full pipeline: parse CDC → extract requirements → analyse each → summary.
@@ -1492,6 +1736,11 @@ async def run_gap_analysis(
             len(source_boosts), user_id,
         )
 
+    # v4.6.0 — Pré-charge l'historique (corrections, verdicts précédents,
+    # votes) une seule fois pour toute l'analyse. Le bloc historique sera
+    # injecté par exigence dans le prompt judge.
+    history_indexes = _load_history_indexes(user_id, cdc_id)
+
     tasks = [
         analyse_requirement(
             req,
@@ -1502,6 +1751,7 @@ async def run_gap_analysis(
             hyde_llm=hyde_llm,
             source_boosts=source_boosts,
             few_shot_provider=few_shot_provider,
+            history_indexes=history_indexes,
         )
         for req in requirements
     ]
