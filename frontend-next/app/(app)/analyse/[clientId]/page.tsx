@@ -133,10 +133,10 @@ export default function ClientCdcsPage() {
                 Importer un cahier des charges
               </h2>
               <p className="mb-4 text-sm text-muted-foreground">
-                Formats acceptés : PDF, DOCX, TXT, MD. Taille maximale 50 Mo.
+                Formats acceptés : PDF, DOCX, TXT, MD, XLSX, XLS. Taille maximale 50 Mo.
               </p>
               <UploadDropzone
-                accept=".pdf,.docx,.txt,.md"
+                accept=".pdf,.docx,.txt,.md,.xlsx,.xls"
                 disabled={uploading}
                 onFile={(f) => void handleUploadCdc(f)}
                 title={uploading ? "Import en cours…" : "Déposez le CDC ici"}
@@ -159,7 +159,7 @@ export default function ClientCdcsPage() {
                   <input
                     type="file"
                     className="hidden"
-                    accept=".pdf,.docx,.txt,.md"
+                    accept=".pdf,.docx,.txt,.md,.xlsx,.xls"
                     onChange={(e) => {
                       const f = e.target.files?.[0];
                       if (f) void handleUploadCdc(f);
