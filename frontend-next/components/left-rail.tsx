@@ -30,7 +30,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useAppShell } from "@/components/app-shell-context";
 import { api } from "@/lib/api-client";
-import { BrandMark } from "@/components/brand-logo";
 
 type NavItem = {
   href: string;
@@ -107,18 +106,6 @@ export function LeftRailContent({
   return (
     <TooltipProvider delayDuration={200}>
       <div className="flex h-full w-full flex-col items-center">
-        {/* Logo Ω */}
-        <div className="flex h-16 w-full items-center justify-center border-b border-soft">
-          <Link
-            href="/chat"
-            onClick={onNavigate}
-            aria-label="Tell me — Accueil"
-            className="rounded-xl outline-none ring-offset-background transition-transform hover:scale-105 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
-          >
-            <BrandMark size={36} />
-          </Link>
-        </div>
-
         {/* Navigation principale */}
         <nav className="flex flex-1 flex-col items-center gap-1 py-3">
           {PRIMARY_NAV.map((item) => {
