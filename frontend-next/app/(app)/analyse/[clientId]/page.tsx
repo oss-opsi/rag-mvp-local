@@ -4,6 +4,8 @@ import * as React from "react";
 import Link from "next/link";
 import { useParams, useRouter, notFound } from "next/navigation";
 import { ChevronLeft, ChevronRight, Loader2, Upload } from "lucide-react";
+
+const LAST_CLIENT_KEY = "tellme.analyse.lastClientId";
 import { Button } from "@/components/ui/button";
 import { UploadDropzone } from "@/components/upload-dropzone";
 import { NotificationsBell } from "@/components/notifications-bell";
@@ -55,6 +57,15 @@ export default function ClientCdcsPage() {
     void reload();
   }, [reload]);
 
+  // Mémorise le dernier client visité pour l'auto-redirect depuis /analyse.
+  React.useEffect(() => {
+    try {
+      window.localStorage.setItem(LAST_CLIENT_KEY, String(clientIdNum));
+    } catch {
+      /* ignore */
+    }
+  }, [clientIdNum]);
+
   const handleUploadCdc = async (file: File) => {
     setUploading(true);
     try {
@@ -75,7 +86,7 @@ export default function ClientCdcsPage() {
       <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-soft px-4 md:px-6">
         <nav className="flex min-w-0 flex-1 items-center gap-2 text-sm">
           <Link
-            href="/analyse"
+            href="/analyse?stay=1"
             className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-muted-foreground transition-colors hover:bg-accent-soft hover:text-accent"
           >
             <ChevronLeft className="h-3.5 w-3.5" />

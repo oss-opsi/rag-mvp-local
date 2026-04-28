@@ -111,15 +111,17 @@ export function ContextPanelProvider({
           ref={(el) => {
             if (el && el !== target) setTarget(el);
           }}
-          aria-hidden={desktopCollapsed ? true : undefined}
+          aria-hidden={!hasContent || desktopCollapsed ? true : undefined}
           className={cn(
             // Mobile : drawer à gauche, par-dessus le contenu (mais sous la barre mobile)
             "absolute inset-y-0 left-0 z-40 flex w-[280px] max-w-[85vw] shrink-0 flex-col overflow-y-auto border-r border-soft bg-background transition-transform duration-200",
             mobileOpen ? "translate-x-0" : "-translate-x-full",
             // Desktop : panneau dans le flux, position relative
             "md:static md:z-auto md:translate-x-0 md:transition-[width,border] md:duration-200 md:overflow-hidden",
-            // Repli desktop : largeur 0, contenu masqué, bordure off
-            desktopCollapsed && "md:w-0 md:border-r-0 md:opacity-0 md:pointer-events-none",
+            // Repli desktop demandé par l'utilisateur OU page sans contenu
+            // contextuel : largeur 0, bordure off, pas de pointer events.
+            (!hasContent || desktopCollapsed) &&
+              "md:w-0 md:border-r-0 md:opacity-0 md:pointer-events-none",
           )}
         />
         <div className="relative flex h-full min-w-0 flex-1 flex-col">

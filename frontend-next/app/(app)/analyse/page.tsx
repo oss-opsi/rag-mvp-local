@@ -2,7 +2,8 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { Building2, FileText, Loader2, Plus, Trash2, TrendingUp } from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Building2, FileText, Loader2, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -30,12 +31,21 @@ import { useToast } from "@/components/ui/use-toast";
 import { api } from "@/lib/api-client";
 import type { Client } from "@/lib/types";
 
+const LAST_CLIENT_KEY = "tellme.analyse.lastClientId";
+
 export default function ClientsIndexPage() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const { toast } = useToast();
+
+  // ?stay=1 désactive l'auto-redirect (utile quand on revient via le breadcrumb
+  // depuis /analyse/[clientId] et qu'on veut volontairement voir la grille).
+  const stayHere = searchParams.get("stay") === "1";
 
   const [clients, setClients] = React.useState<Client[]>([]);
   const [cdcCounts, setCdcCounts] = React.useState<Record<number, number>>({});
   const [loading, setLoading] = React.useState(true);
+  const [autoRedirected, setAutoRedirected] = React.useState(false);
 
   const [createOpen, setCreateOpen] = React.useState(false);
   const [newName, setNewName] = React.useState("");
@@ -46,6 +56,36 @@ export default function ClientsIndexPage() {
     try {
       const list = await api.clients();
       setClients(list);
+
+      // Auto-redirect vers le dernier client visité (ou unique client) :
+      //   - 1 seul client → redirect direct
+      //   - sinon, si un last-visited valide est en localStorage → redirect
+      //   - sauf si ?stay=1 (retour explicite depuis breadcrumb)
+      if (!stayHere && !autoRedirected && list.length > 0) {
+        let target: number | null = null;
+        if (list.length === 1) {
+          target = list[0]!.id;
+        } else {
+          try {
+            const raw = window.localStorage.getItem(LAST_CLIENT_KEY);
+            const parsed = raw ? Number(raw) : NaN;
+            if (
+              Number.isFinite(parsed) &&
+              list.some((c) => c.id === parsed)
+            ) {
+              target = parsed;
+            }
+          } catch {
+            /* ignore */
+          }
+        }
+        if (target !== null) {
+          setAutoRedirected(true);
+          router.replace(`/analyse/${target}`);
+          return;
+        }
+      }
+
       // Charger les comptes CDC en parallèle (best-effort, silencieux)
       const counts: Record<number, number> = {};
       await Promise.all(
@@ -65,7 +105,7 @@ export default function ClientsIndexPage() {
     } finally {
       setLoading(false);
     }
-  }, [toast]);
+  }, [autoRedirected, router, stayHere, toast]);
 
   React.useEffect(() => {
     void reload();
