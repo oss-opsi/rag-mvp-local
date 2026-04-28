@@ -389,6 +389,27 @@ def _finish_job(
         )
 
 
+def _notify(user_id: str, level: str, title: str, body: str | None) -> None:
+    """Best-effort : insère une notification, swallow toute erreur."""
+    try:
+        from .scheduler import db as _sdb
+        _sdb.insert_notification(user=user_id, level=level, title=title, body=body)
+    except Exception as exc:  # pragma: no cover
+        logger.warning("Notification non envoyée (%s): %s", title, exc)
+
+
+def _cdc_filename(user_id: str, cdc_id: int) -> str:
+    """Best-effort : récupère le nom du CDC pour l'afficher dans la notif."""
+    try:
+        from . import workspace as _ws
+        cdc = _ws.get_cdc(user_id, cdc_id)
+        if cdc:
+            return cdc.get("filename") or f"CDC #{cdc_id}"
+    except Exception:
+        pass
+    return f"CDC #{cdc_id}"
+
+
 def _process_job(job: dict[str, Any]) -> None:
     """Run le callable adéquat (full ou repass_batch) et persiste le résultat."""
     job_id = int(job["id"])
@@ -456,6 +477,26 @@ def _process_job(job: dict[str, Any]) -> None:
             "Gap analysis worker: job %d done (kind=%s, analysis_id=%s)",
             job_id, kind, analysis_id,
         )
+        # Notification utilisateur (succès)
+        filename = _cdc_filename(user_id, cdc_id)
+        if kind == "repass_batch":
+            n_reqs = len(payload.get("requirement_ids") or [])
+            _notify(
+                user_id,
+                "info",
+                f"Re-pass terminé · {filename}",
+                f"{n_reqs} exigence(s) re-jugée(s)." if n_reqs else "Re-pass batch terminé.",
+            )
+        else:
+            summary = (report or {}).get("summary") or {}
+            cov = summary.get("coverage_percent")
+            total = summary.get("total")
+            body = (
+                f"{total} exigences évaluées · couverture {cov:.0f} %"
+                if isinstance(cov, (int, float)) and total
+                else "Analyse terminée."
+            )
+            _notify(user_id, "info", f"Analyse terminée · {filename}", body)
     except Exception as exc:  # pragma: no cover
         logger.exception("Gap analysis worker: job %d failed", job_id)
         _finish_job(
@@ -464,6 +505,14 @@ def _process_job(job: dict[str, Any]) -> None:
             analysis_id=None,
             report=None,
             error=str(exc)[:500],
+        )
+        # Notification utilisateur (échec)
+        filename = _cdc_filename(user_id, cdc_id)
+        _notify(
+            user_id,
+            "error",
+            f"Analyse échouée · {filename}",
+            str(exc)[:300] or "Erreur inconnue",
         )
 
 

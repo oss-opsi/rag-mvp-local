@@ -228,6 +228,15 @@ def _finish_job(
         )
 
 
+def _notify(user_id: str, level: str, title: str, body: str | None) -> None:
+    """Best-effort : notification utilisateur sans bloquer le worker."""
+    try:
+        from .scheduler import db as _sdb
+        _sdb.insert_notification(user=user_id, level=level, title=title, body=body)
+    except Exception as exc:  # pragma: no cover
+        logger.warning("Notification non envoyée (%s): %s", title, exc)
+
+
 def _process_job(job: dict[str, Any]) -> None:
     """Run ingest_file for a claimed job and persist the outcome."""
     assert _ingest_callable is not None and _qdrant_url is not None, (
@@ -257,10 +266,22 @@ def _process_job(job: dict[str, Any]) -> None:
         logger.info(
             "Ingestion worker: job %d done (%d chunks)", job_id, chunk_count
         )
+        _notify(
+            user_id,
+            "info",
+            f"Indexation terminée · {filename}",
+            f"{chunk_count} chunks indexés.",
+        )
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception("Ingestion worker: job %d failed", job_id)
         _finish_job(
             job_id, success=False, chunk_count=None, error=str(exc)[:500]
+        )
+        _notify(
+            user_id,
+            "error",
+            f"Indexation échouée · {filename}",
+            str(exc)[:300] or "Erreur inconnue",
         )
     finally:
         # Best-effort cleanup of the temp file

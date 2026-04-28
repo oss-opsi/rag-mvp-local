@@ -1162,7 +1162,7 @@ async def admin_referentiels_upload(
         ...,
         description="Référentiel méthodologie Opsidium (PDF, DOCX, XLSX, XLS)",
     ),
-    _: str = Depends(require_admin),
+    admin_id: str = Depends(require_admin),
 ) -> dict:
     """Indexe un référentiel méthodologie interne.
 
@@ -1179,6 +1179,7 @@ async def admin_referentiels_upload(
         delete_referentiel,
         ingest_referentiel,
     )
+    from rag.scheduler import db as _sdb
     import pathlib
 
     if not file.filename:
@@ -1216,9 +1217,27 @@ async def admin_referentiels_upload(
         # Indexation synchrone (volumétrie attendue faible : méthodo interne).
         result = ingest_referentiel(tmp_path, file.filename)
     except ValueError as exc:
+        try:
+            _sdb.insert_notification(
+                user=admin_id,
+                level="error",
+                title=f"Référentiel refusé · {file.filename}",
+                body=str(exc)[:300],
+            )
+        except Exception:
+            pass
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         logger.exception("[referentiels] upload failed for '%s'", file.filename)
+        try:
+            _sdb.insert_notification(
+                user=admin_id,
+                level="error",
+                title=f"Indexation référentiel échouée · {file.filename}",
+                body=str(exc)[:300] or "Erreur inconnue",
+            )
+        except Exception:
+            pass
         raise HTTPException(
             status_code=500,
             detail=f"Indexation du référentiel échouée : {exc}",
@@ -1228,6 +1247,16 @@ async def admin_referentiels_upload(
             os.unlink(tmp_path)
         except OSError:
             pass
+
+    try:
+        _sdb.insert_notification(
+            user=admin_id,
+            level="info",
+            title=f"Référentiel indexé · {result['source']}",
+            body=f"{result['chunks']} chunks ajoutés à referentiels_opsidium.",
+        )
+    except Exception:
+        pass
 
     return {
         "source": result["source"],
