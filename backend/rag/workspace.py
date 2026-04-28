@@ -893,6 +893,26 @@ def get_corrections_by_requirement_id(
     }
 
 
+def list_all_corrections_for_user(user_id: str) -> list[dict[str, Any]]:
+    """Toutes les corrections enregistrées par l'utilisateur, triées par
+    updated_at desc. Utilisé par le fallback de matching titre-seul dans
+    _apply_corrections_overrides — quand le content_key strict ne matche
+    pas (ex: la ré-analyse a paraphrasé la category ou le subdomain).
+    """
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, analysis_id, requirement_id, user_id, content_key,
+                   verdict, answer, notes, created_at, updated_at
+            FROM requirement_corrections
+            WHERE user_id = ?
+            ORDER BY updated_at DESC
+            """,
+            (user_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def get_corrections_by_content_key(
     user_id: str, content_keys: list[str]
 ) -> dict[str, dict[str, Any]]:

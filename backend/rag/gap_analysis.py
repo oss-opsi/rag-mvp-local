@@ -1223,9 +1223,19 @@ def _apply_corrections_overrides(
     """Écrase status + verdict des exigences pour lesquelles l'utilisateur a
     enregistré une correction validée.
 
-    Lookup par ``content_key`` (sha256 normalisé de category+subdomain+title)
-    pour que la correction d'une exigence faite sur un CDC précédent s'applique
-    automatiquement à un nouveau CDC qui contient la même exigence.
+    Stratégie de matching à 2 niveaux pour résister aux paraphrases du
+    LLM lors d'une ré-extraction :
+
+    1. ``content_key`` strict (sha256 de category+subdomain+title normalisés)
+       → matche tant que les 3 champs sont identiques modulo casse/espaces.
+    2. Fallback ``title_key`` (sha256 du title seul normalisé) → matche
+       même si la category ou le subdomain a changé entre extractions.
+       Utile car le LLM peut classer une exigence "Hébergement SaaS"
+       tantôt en "Architecture", tantôt en "Autre".
+
+    Quand plusieurs corrections candidates pour le même titre (cas rare),
+    on retient la plus récente (max updated_at — déjà trié par la requête
+    list_all_corrections_for_user).
 
     Renvoie la liste avec les requirements corrigés in-place.
     """
@@ -1237,7 +1247,7 @@ def _apply_corrections_overrides(
         logger.warning("Corrections : import workspace impossible : %s", exc)
         return analysed
 
-    # 1. Calculer la content_key pour chaque exigence
+    # ---- 1. Lookup strict par content_key ----
     keys: list[str] = []
     for r in analysed:
         keys.append(
@@ -1248,39 +1258,97 @@ def _apply_corrections_overrides(
             )
         )
     unique_keys = list({k for k in keys if k})
-    if not unique_keys:
-        return analysed
 
-    # 2. Bulk lookup
-    try:
-        corrections = _ws.get_corrections_by_content_key(user_id, unique_keys)
-    except Exception as exc:
-        logger.warning(
-            "Corrections : lecture impossible (user=%s) : %s", user_id, exc
-        )
-        return analysed
-    if not corrections:
-        return analysed
+    corrections_by_ck: dict[str, dict[str, Any]] = {}
+    if unique_keys:
+        try:
+            corrections_by_ck = _ws.get_corrections_by_content_key(
+                user_id, unique_keys
+            )
+        except Exception as exc:
+            logger.warning(
+                "Corrections : lecture content_key impossible (user=%s) : %s",
+                user_id, exc,
+            )
 
-    # 3. Override
-    overridden = 0
-    for req, key in zip(analysed, keys):
-        corr = corrections.get(key)
+    # ---- 2. Fallback : index par title_key ----
+    # On charge toutes les corrections du user et on les indexe par
+    # title_key calculé depuis l'analysis source. Lazy : seulement si
+    # au moins une exigence n'a pas matché en strict.
+    corrections_by_title: dict[str, dict[str, Any]] = {}
+    title_index_built = False
+    analyses_cache: dict[str, dict[str, Any]] = {}
+
+    def _norm_title(t: str | None) -> str:
+        return " ".join((t or "").strip().lower().split())
+
+    def _build_title_index() -> None:
+        nonlocal title_index_built
+        if title_index_built:
+            return
+        title_index_built = True
+        try:
+            all_corrs = _ws.list_all_corrections_for_user(user_id)
+        except Exception as exc:
+            logger.warning(
+                "Corrections : lecture all-corrections impossible (user=%s) : %s",
+                user_id, exc,
+            )
+            return
+        for corr in all_corrs:
+            aid = str(corr.get("analysis_id") or "")
+            rid = str(corr.get("requirement_id") or "")
+            if not aid or not rid:
+                continue
+            # Charge l'analysis source (cache)
+            try:
+                if aid not in analyses_cache:
+                    a = _ws.get_analysis_for_user(user_id, int(aid))
+                    analyses_cache[aid] = a or {}
+                analysis = analyses_cache[aid]
+            except Exception:
+                continue
+            report = (analysis or {}).get("report") or {}
+            for src_req in report.get("requirements") or []:
+                if str(src_req.get("id")) == rid:
+                    tnorm = _norm_title(src_req.get("title"))
+                    if tnorm and tnorm not in corrections_by_title:
+                        # 1ère = plus récente (all_corrs trié desc)
+                        corrections_by_title[tnorm] = corr
+                    break
+
+    # ---- 3. Override ----
+    overridden_strict = 0
+    overridden_title = 0
+    for req, ck in zip(analysed, keys):
+        corr = corrections_by_ck.get(ck)
+        match_kind = "content_key"
+        if not corr:
+            # Fallback : matching titre-seul.
+            _build_title_index()
+            corr = corrections_by_title.get(_norm_title(req.get("title")))
+            if corr:
+                match_kind = "title"
         if not corr:
             continue
         req["status"] = corr["verdict"]
         req["verdict"] = corr["answer"]
         req["correction_applied"] = True
+        req["correction_match_kind"] = match_kind  # audit
         req["correction_source_analysis_id"] = corr.get("analysis_id")
         req["correction_updated_at"] = corr.get("updated_at")
-        # Confiance maximale sur un verdict humain validé.
         req["confidence"] = 1.0
         req["llm_confidence"] = 1.0
-        overridden += 1
-    if overridden:
+        if match_kind == "content_key":
+            overridden_strict += 1
+        else:
+            overridden_title += 1
+    total = overridden_strict + overridden_title
+    if total:
         logger.info(
-            "Corrections : %d exigence(s) écrasée(s) par verdict humain (user=%s)",
-            overridden, user_id,
+            "Corrections : %d écrasée(s) par verdict humain "
+            "(content_key=%d title-fallback=%d, user=%s)",
+            total, overridden_strict, overridden_title, user_id,
         )
     return analysed
 
