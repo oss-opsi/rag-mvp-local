@@ -3,18 +3,50 @@
 import * as React from "react";
 import Link from "next/link";
 import { useParams, useRouter, notFound } from "next/navigation";
-import { ChevronLeft, ChevronRight, Loader2, Upload } from "lucide-react";
-
-const LAST_CLIENT_KEY = "tellme.analyse.lastClientId";
+import {
+  CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
+  Loader2,
+  Trash2,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { UploadDropzone } from "@/components/upload-dropzone";
+import { FileIcon, getExt } from "@/components/file-tile";
 import { NotificationsBell } from "@/components/notifications-bell";
 import { PipelineBadges } from "@/components/pipeline-badges";
 import { useToast } from "@/components/ui/use-toast";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api-client";
-import { StatusPill, CoverageBadge } from "../_helpers";
+import { StatusPill } from "../_helpers";
 import type { Cdc, Client } from "@/lib/types";
+
+const LAST_CLIENT_KEY = "tellme.analyse.lastClientId";
+
+function relativeDate(iso?: string | null): string {
+  if (!iso) return "";
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "";
+  const ageMs = Date.now() - t;
+  const min = Math.round(ageMs / 60_000);
+  if (min < 60) return min <= 1 ? "à l'instant" : `il y a ${min} min`;
+  const h = Math.round(min / 60);
+  if (h < 24) return `il y a ${h} h`;
+  const d = Math.round(h / 24);
+  if (d < 30) return `il y a ${d} j`;
+  return new Date(t).toLocaleDateString("fr-FR");
+}
 
 export default function ClientCdcsPage() {
   const params = useParams<{ clientId: string }>();
@@ -28,6 +60,7 @@ export default function ClientCdcsPage() {
   const [pipelineVersion, setPipelineVersion] = React.useState<string | undefined>();
   const [loading, setLoading] = React.useState(true);
   const [uploading, setUploading] = React.useState(false);
+  const [deleting, setDeleting] = React.useState<number | null>(null);
 
   const reload = React.useCallback(async () => {
     setLoading(true);
@@ -38,7 +71,6 @@ export default function ClientCdcsPage() {
       ]);
       const c = allClients.find((x) => x.id === clientIdNum);
       if (!c) {
-        // Client supprimé ou introuvable → retour à la liste.
         router.replace("/analyse");
         return;
       }
@@ -57,7 +89,6 @@ export default function ClientCdcsPage() {
     void reload();
   }, [reload]);
 
-  // Mémorise le dernier client visité pour l'auto-redirect depuis /analyse.
   React.useEffect(() => {
     try {
       window.localStorage.setItem(LAST_CLIENT_KEY, String(clientIdNum));
@@ -71,13 +102,26 @@ export default function ClientCdcsPage() {
     try {
       const created = await api.uploadCdc(clientIdNum, file);
       toast({ title: "CDC importé", description: file.name });
-      // Naviguer directement vers le rapport (URL = source de vérité).
       router.push(`/analyse/${clientIdNum}/${created.id}`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Erreur d'upload";
       toast({ title: "Erreur", description: msg, variant: "destructive" });
     } finally {
       setUploading(false);
+    }
+  };
+
+  const handleDeleteCdc = async (cdcId: number) => {
+    setDeleting(cdcId);
+    try {
+      await api.deleteCdc(cdcId);
+      toast({ title: "CDC supprimé" });
+      await reload();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Erreur suppression CDC";
+      toast({ title: "Erreur", description: msg, variant: "destructive" });
+    } finally {
+      setDeleting(null);
     }
   };
 
@@ -107,8 +151,8 @@ export default function ClientCdcsPage() {
         </div>
       </header>
 
-      <div className="flex-1 overflow-auto">
-        <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-4 py-5 md:p-6">
+      <div className="flex flex-1 flex-col gap-6 overflow-y-auto p-6">
+        <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
           <div>
             <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-accent">
               Cahiers des charges
@@ -117,88 +161,145 @@ export default function ClientCdcsPage() {
               {client?.name || "Client"}
             </h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              Sélectionnez un CDC pour afficher son rapport, ou importez-en un
-              nouveau.
+              Cahiers des charges importés pour ce client. Cliquez sur un CDC
+              pour afficher son rapport d&apos;analyse.
             </p>
           </div>
 
-          {loading ? (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Chargement…
-            </div>
-          ) : cdcs.length === 0 ? (
-            <div>
-              <h2 className="mb-3 text-base font-semibold tracking-tight">
-                Importer un cahier des charges
-              </h2>
-              <p className="mb-4 text-sm text-muted-foreground">
-                Formats acceptés : PDF, DOCX, TXT, MD, XLSX, XLS. Taille maximale 50 Mo.
-              </p>
-              <UploadDropzone
-                accept=".pdf,.docx,.txt,.md,.xlsx,.xls"
-                disabled={uploading}
-                onFile={(f) => void handleUploadCdc(f)}
-                title={uploading ? "Import en cours…" : "Déposez le CDC ici"}
-              />
-            </div>
-          ) : (
-            <div>
-              <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-                <h2 className="text-base font-semibold tracking-tight">
-                  {cdcs.length} CDC{cdcs.length > 1 ? "s" : ""}
-                </h2>
-                <div className="flex flex-wrap items-center gap-3">
-                  <span className="text-[11px] text-muted-foreground">
-                    PDF · DOCX · XLSX · XLS · TXT · MD · 50 Mo max
+          <UploadDropzone
+            accept=".pdf,.docx,.txt,.md,.xlsx,.xls"
+            disabled={uploading}
+            onFile={handleUploadCdc}
+            title={
+              uploading ? "Import en cours…" : "Déposer un cahier des charges"
+            }
+            hint="Formats admis : PDF, DOCX, XLSX, XLS, TXT, MD — 50 Mo max"
+          />
+
+          <section>
+            <div className="mb-3 flex items-baseline justify-between">
+              <h2 className="text-sm font-semibold tracking-tight">
+                CDCs importés
+                {!loading && cdcs.length > 0 ? (
+                  <span className="ml-2 text-xs font-normal text-muted-foreground tabular-nums">
+                    ({cdcs.length})
                   </span>
-                  <label
-                    className={cn(
-                      "inline-flex cursor-pointer items-center gap-2 rounded-md border border-soft bg-card px-3 py-1.5 text-sm transition-colors hover:bg-accent-soft hover:text-accent",
-                      uploading && "pointer-events-none opacity-60",
-                    )}
-                  >
-                    <Upload className="h-4 w-4" />
-                    {uploading ? "Import…" : "Ajouter un CDC"}
-                    <input
-                      type="file"
-                      className="hidden"
-                      accept=".pdf,.docx,.txt,.md,.xlsx,.xls"
-                      onChange={(e) => {
-                        const f = e.target.files?.[0];
-                        if (f) void handleUploadCdc(f);
-                        e.target.value = "";
-                      }}
-                    />
-                  </label>
-                </div>
-              </div>
-              <ul className="grid gap-3">
-                {cdcs.map((c) => (
-                  <li key={c.id}>
-                    <Link
-                      href={`/analyse/${clientIdNum}/${c.id}`}
-                      className="group flex items-center gap-3 rounded-2xl border border-soft bg-card p-4 shadow-tinted-sm transition-all hover:-translate-y-0.5 hover:border-accent/30 hover:shadow-tinted-md"
-                    >
-                      <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-danger-soft to-warning-soft text-[10px] font-bold tracking-wider text-danger">
-                        {(c.filename.split(".").pop() || "FIC").toUpperCase().slice(0, 4)}
-                      </span>
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate text-sm font-semibold tracking-tight">
-                          {c.filename}
-                        </div>
-                        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                          <StatusPill status={c.status} />
-                        </div>
-                      </div>
-                      <CoverageBadge percent={c.coverage_percent} size="sm" />
-                      <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground transition-all group-hover:translate-x-0.5 group-hover:text-accent" />
-                    </Link>
-                  </li>
-                ))}
-              </ul>
+                ) : null}
+              </h2>
             </div>
-          )}
+
+            {loading ? (
+              <div className="flex items-center gap-2 rounded-2xl border border-soft bg-card p-6 text-sm text-muted-foreground shadow-tinted-sm">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Chargement…
+              </div>
+            ) : cdcs.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-soft bg-muted/20 p-8 text-center text-sm text-muted-foreground">
+                Aucun CDC pour ce client. Déposez un document ci-dessus pour
+                démarrer.
+              </div>
+            ) : (
+              <ul className="grid gap-3">
+                {cdcs.map((c) => {
+                  const cov = c.coverage_percent;
+                  const covCls =
+                    typeof cov === "number"
+                      ? cov >= 70
+                        ? "border-success/25 bg-success-soft text-success"
+                        : cov >= 40
+                        ? "border-warning/25 bg-warning-soft text-warning"
+                        : "border-danger/25 bg-danger-soft text-danger"
+                      : "";
+                  return (
+                    <li key={c.id}>
+                      <Link
+                        href={`/analyse/${clientIdNum}/${c.id}`}
+                        className="group flex items-center gap-3 rounded-2xl border border-soft bg-card p-3.5 shadow-tinted-sm transition-all hover:-translate-y-0.5 hover:border-accent/30 hover:shadow-tinted-md"
+                      >
+                        <FileIcon ext={getExt(c.filename)} />
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-sm font-semibold tracking-tight">
+                            {c.filename}
+                          </div>
+                          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                            <StatusPill status={c.status} />
+                            {typeof cov === "number" ? (
+                              <>
+                                <span
+                                  className="h-1 w-1 rounded-full bg-border"
+                                  aria-hidden
+                                />
+                                <span
+                                  className={cn(
+                                    "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium tabular-nums",
+                                    covCls,
+                                  )}
+                                >
+                                  <CheckCircle2 className="h-3 w-3" />
+                                  {cov.toFixed(0)}% couvert
+                                </span>
+                              </>
+                            ) : null}
+                            {c.uploaded_at ? (
+                              <>
+                                <span
+                                  className="h-1 w-1 rounded-full bg-border"
+                                  aria-hidden
+                                />
+                                <span>{relativeDate(c.uploaded_at)}</span>
+                              </>
+                            ) : null}
+                          </div>
+                        </div>
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              aria-label="Supprimer"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                              }}
+                              className="h-8 w-8 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 hover:text-danger"
+                              disabled={deleting === c.id}
+                            >
+                              {deleting === c.id ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-4 w-4" />
+                              )}
+                            </Button>
+                          </AlertDialogTrigger>
+                          <AlertDialogContent>
+                            <AlertDialogHeader>
+                              <AlertDialogTitle>
+                                Supprimer ce CDC ?
+                              </AlertDialogTitle>
+                              <AlertDialogDescription>
+                                <strong>{c.filename}</strong> et son analyse
+                                seront supprimés. Cette action est
+                                irréversible.
+                              </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                              <AlertDialogCancel>Annuler</AlertDialogCancel>
+                              <AlertDialogAction
+                                onClick={() => void handleDeleteCdc(c.id)}
+                                className="bg-danger text-danger-foreground hover:bg-danger/90"
+                              >
+                                Supprimer
+                              </AlertDialogAction>
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
+                      </Link>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </section>
         </div>
       </div>
     </div>
