@@ -71,7 +71,12 @@ PIPELINE_VERSION = "v3.11.0"
 GAP_CACHE_DIR = os.path.join(DATA_DIR, "gap_cache")
 
 # Concurrency cap for OpenAI calls (extraction + verdicts).
-MAX_PARALLEL_LLM = 5
+# Réduit de 5 → 2 (2026-04-28) : avec le reranker BGE-M3 sur CPU, plus de
+# 2 jugements en parallèle font tourner trop d'instances reranker simultanées
+# qui se battent pour les cœurs CPU. Chaque batch passe alors de ~30 s à
+# 14+ minutes. Avec 2 en parallèle, le reranker reste fluide et le throughput
+# total est meilleur (cf. analyse perf job 18).
+MAX_PARALLEL_LLM = 2
 # Max chars of CDC sent to the extractor LLM (~60k tokens worst case, safely
 # under gpt-4o-mini's 128k window).
 MAX_CDC_CHARS = 180_000
@@ -97,7 +102,9 @@ HYDE_MAX_CHARS = 600  # cap on hypothesis length to keep latency low
 # The actual model is read at runtime via _repass_model() (admin setting,
 # defaults to gpt-4o). Kept here as a doc/reference fallback only.
 REPASS_ENABLED = True
-REPASS_MAX_PARALLEL = 3
+# Réduit de 3 → 1 pour la même raison que MAX_PARALLEL_LLM (cf. ci-dessus) :
+# le re-pass passe aussi par le reranker BGE-M3, donc même contention CPU.
+REPASS_MAX_PARALLEL = 1
 
 VALID_STATUSES = {"covered", "partial", "missing", "ambiguous"}
 VALID_PRIORITIES = {"must", "should", "could", "wont"}

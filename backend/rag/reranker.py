@@ -6,18 +6,27 @@ Uses the model configured in :data:`rag.config.RERANKER_MODEL`
 
 Singleton pattern: the model is loaded lazily on first use to avoid
 blocking the application at import time.
+
+Concurrency : un mutex (threading.Lock) sérialise tous les appels à
+``CrossEncoder.predict`` entre threads. BGE-M3 sur CPU sature les cœurs ;
+faire tourner N appels en parallèle (via asyncio.to_thread) divise les
+threads BLAS en N parts et chaque batch passe de ~30 s à 14+ minutes.
+Sérialiser garantit que chaque batch a tout le CPU et finit en temps
+constant.
 """
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any
 
 from .config import RERANKER_MODEL as _RERANKER_MODEL
 
 logger = logging.getLogger(__name__)
 
-# Singleton instance
+# Singleton instance + mutex de sérialisation des appels predict().
 _cross_encoder = None
+_predict_lock = threading.Lock()
 
 
 def _get_cross_encoder():
@@ -67,8 +76,11 @@ class CrossEncoderReranker:
         # Build (query, passage) pairs
         pairs = [(query, doc["text"]) for doc in docs]
 
-        # Score all pairs — returns a numpy array of floats
-        scores = cross_encoder.predict(pairs)
+        # Score all pairs — returns a numpy array of floats.
+        # Mutex global pour éviter la contention CPU multi-threads sur
+        # BGE-M3 (cf. docstring du module).
+        with _predict_lock:
+            scores = cross_encoder.predict(pairs)
 
         # Attach score to each doc (copy metadata to avoid mutating the original)
         scored = []
