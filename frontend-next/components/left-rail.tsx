@@ -61,14 +61,33 @@ const ADMIN_NAV: NavItem[] = [
  * le bouton hamburger de la barre mobile (cf. `MobileNavBar`), qui réutilise
  * <LeftRailContent /> pour afficher la nav dans un Sheet.
  */
+// Tokens de la sidebar foncée bleu-violet (locaux à ce composant pour ne pas
+// affecter le reste du site).
+const RAIL_BG = "bg-[hsl(255_35%_26%)]";
+const RAIL_GRADIENT_FROM = "from-[hsl(260_40%_30%)]";
+const RAIL_BORDER = "border-r-[hsl(255_25%_35%)]";
+const RAIL_ICON_DEFAULT = "text-[hsl(255_15%_78%)]";
+const RAIL_ICON_HOVER =
+  "hover:bg-[hsl(255_35%_33%)] hover:text-white hover:shadow-tinted-sm";
+const RAIL_ICON_ACTIVE =
+  "bg-[hsl(255_40%_38%)] text-white shadow-tinted-sm";
+const RAIL_SEPARATOR = "bg-[hsl(255_25%_35%)]";
+
 export function LeftRail() {
   return (
     <aside
-      className="relative hidden h-full w-[80px] shrink-0 flex-col items-center border-r border-soft bg-gradient-to-b from-accent-soft/60 via-surface-2 to-surface-2 md:flex"
+      className={cn(
+        "relative hidden h-full w-[80px] shrink-0 flex-col items-center border-r md:flex",
+        RAIL_BG,
+        RAIL_BORDER,
+        "bg-gradient-to-b",
+        RAIL_GRADIENT_FROM,
+        "to-[hsl(255_35%_26%)]",
+      )}
     >
-      {/* Halo très doux en haut, façon hero du mockup */}
+      {/* Halo très doux en haut, accent qui transparait sur le fond foncé */}
       <div
-        className="pointer-events-none absolute inset-x-0 top-0 h-40 bg-[radial-gradient(ellipse_at_top,_hsl(var(--accent)/0.12),_transparent_70%)]"
+        className="pointer-events-none absolute inset-x-0 top-0 h-40 bg-[radial-gradient(ellipse_at_top,_hsl(var(--accent)/0.20),_transparent_70%)]"
         aria-hidden
       />
       <div className="relative z-10 flex h-full w-full flex-col items-center">
@@ -119,10 +138,10 @@ export function LeftRailContent({
                     aria-label={item.label}
                     onClick={onNavigate}
                     className={cn(
-                      "relative flex h-11 w-11 items-center justify-center rounded-xl text-muted-foreground transition-all",
+                      "relative flex h-11 w-11 items-center justify-center rounded-xl transition-all",
                       active
-                        ? "bg-accent-soft text-accent shadow-tinted-sm"
-                        : "hover:bg-card/80 hover:text-foreground hover:shadow-tinted-sm",
+                        ? RAIL_ICON_ACTIVE
+                        : cn(RAIL_ICON_DEFAULT, RAIL_ICON_HOVER),
                     )}
                   >
                     {active ? (
@@ -137,7 +156,7 @@ export function LeftRailContent({
           })}
 
           {/* Séparateur */}
-          <div className="my-2 h-px w-8 bg-[hsl(var(--border-soft))]" aria-hidden />
+          <div className={cn("my-2 h-px w-8", RAIL_SEPARATOR)} aria-hidden />
 
           {/* Navigation secondaire */}
           {secondaryNav.map((item) => {
@@ -151,10 +170,10 @@ export function LeftRailContent({
                     aria-label={item.label}
                     onClick={onNavigate}
                     className={cn(
-                      "relative flex h-11 w-11 items-center justify-center rounded-xl text-muted-foreground transition-all",
+                      "relative flex h-11 w-11 items-center justify-center rounded-xl transition-all",
                       active
-                        ? "bg-accent-soft text-accent shadow-tinted-sm"
-                        : "hover:bg-card/80 hover:text-foreground hover:shadow-tinted-sm",
+                        ? RAIL_ICON_ACTIVE
+                        : cn(RAIL_ICON_DEFAULT, RAIL_ICON_HOVER),
                     )}
                   >
                     {active ? (
@@ -175,7 +194,7 @@ export function LeftRailContent({
             <DropdownMenuTrigger asChild>
               <button
                 aria-label="Menu utilisateur"
-                className="flex h-10 w-10 items-center justify-center rounded-full bg-muted text-sm font-medium text-foreground hover:bg-muted/70"
+                className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-accent to-violet text-sm font-semibold text-white shadow-tinted-sm transition-transform hover:scale-105"
               >
                 {initialsOf(user?.name || "?")}
               </button>
