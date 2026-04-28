@@ -7,7 +7,6 @@ import {
   Clock,
   Loader2,
   RefreshCw,
-  Upload,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -49,8 +48,6 @@ export default function DocumentsPage() {
   const toastedRef = React.useRef<Set<number>>(new Set());
   const initializedRef = React.useRef(false);
   const [jobsLoaded, setJobsLoaded] = React.useState(false);
-  const fileInputRef = React.useRef<HTMLInputElement | null>(null);
-
   const username = user?.name || user?.user_id || "moi";
   const initial = (username.charAt(0) || "·").toUpperCase();
 
@@ -186,11 +183,6 @@ export default function DocumentsPage() {
       const msg = err instanceof Error ? err.message : "Erreur";
       toast({ title: "Erreur", description: msg, variant: "destructive" });
     }
-  };
-
-  const openPicker = () => {
-    if (uploading) return;
-    fileInputRef.current?.click();
   };
 
   // Jobs to show: all active + finished within COMPLETED_WINDOW_MIN minutes.
@@ -330,34 +322,6 @@ export default function DocumentsPage() {
           />
           <span className="hidden sm:inline">Actualiser</span>
         </Button>
-        <span
-          className="hidden text-[11px] text-muted-foreground md:inline"
-          title="Formats supportés"
-        >
-          PDF · DOCX · XLSX · XLS · TXT · MD
-        </span>
-        <Button
-          size="sm"
-          onClick={openPicker}
-          disabled={uploading}
-          aria-label="Importer"
-        >
-          <Upload className="h-3.5 w-3.5 sm:mr-1.5" />
-          <span className="hidden sm:inline">
-            {uploading ? "Envoi..." : "Importer"}
-          </span>
-        </Button>
-        <input
-          ref={fileInputRef}
-          type="file"
-          className="hidden"
-          accept=".pdf,.docx,.txt,.md,.xlsx,.xls"
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) void handleUpload(f);
-            e.target.value = "";
-          }}
-        />
       </Topbar>
 
       {/* ──────────── Zone de travail ──────────── */}
