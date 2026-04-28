@@ -2565,6 +2565,134 @@ def workspace_list_requirement_corrections(
     return {"analysis_id": analysis_id, "corrections": items}
 
 
+@app.delete(
+    "/workspace/analyses/{analysis_id}/corrections",
+    tags=["Workspace"],
+)
+def workspace_delete_all_corrections(
+    analysis_id: str,
+    user_id: str = Depends(get_current_user),
+) -> dict:
+    """Supprime TOUTES les corrections de l'utilisateur pour cette analyse.
+
+    Utilisé par le bouton "Tout supprimer" du bandeau d'import (workflow
+    Excel : on importe → bandeau apparaît → l'utilisateur peut tout effacer
+    et ré-importer un nouveau fichier sans avoir à supprimer chaque
+    correction une par une dans le sheet).
+    """
+    _ensure_analysis_owned(user_id, analysis_id)
+    removed = workspace.delete_all_corrections_for_analysis(
+        analysis_id=analysis_id, user_id=user_id
+    )
+    return {"removed": removed}
+
+
+@app.post(
+    "/workspace/analyses/{analysis_id}/import-corrections",
+    tags=["Workspace"],
+)
+async def workspace_import_corrections(
+    analysis_id: str,
+    file: UploadFile = File(...),
+    user_id: str = Depends(get_current_user),
+) -> dict:
+    """Importe les corrections depuis un fichier Excel exporté par
+    /workspace/cdcs/{id}/export/xlsx.
+
+    Le parser lit les 3 dernières colonnes (Verdict humain, Description
+    corrigée, Notes internes) et upsert une correction par ligne valide.
+    Les lignes avec ID inconnu, verdict invalide ou description vide sont
+    ignorées et reportées dans la réponse.
+
+    Retour :
+      {
+        applied: int,
+        ignored: [{requirement_id, reason}, ...],
+        errors:  [{requirement_id?, reason}, ...],
+        analysis_id: int,
+      }
+    """
+    _ensure_analysis_owned(user_id, analysis_id)
+    aid = int(analysis_id)
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Nom de fichier manquant.")
+    if not file.filename.lower().endswith(".xlsx"):
+        raise HTTPException(
+            status_code=400,
+            detail="Seul le format .xlsx est accepté.",
+        )
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Le fichier est vide.")
+
+    from rag.export import parse_corrections_xlsx
+    try:
+        parsed = parse_corrections_xlsx(data)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.exception("[import-corrections] parse failed")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Lecture du fichier impossible : {exc}",
+        )
+
+    # Construit la map id → requirement de l'analyse cible pour valider les IDs
+    analysis = workspace.get_analysis_for_user(user_id, aid)
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Analyse introuvable.")
+    report = (analysis.get("report") or {})
+    reqs_by_id: dict[str, dict] = {}
+    for r in report.get("requirements") or []:
+        rid = str(r.get("id") or "").strip()
+        if rid:
+            reqs_by_id[rid] = r
+
+    applied = 0
+    ignored: list[dict] = list(parsed.get("skipped") or [])  # parse-time skips
+    errors: list[dict] = []
+
+    for row in parsed.get("rows") or []:
+        rid = str(row.get("requirement_id") or "").strip()
+        req = reqs_by_id.get(rid)
+        if not req:
+            ignored.append({
+                "requirement_id": rid,
+                "reason": "ID inconnu dans cette analyse.",
+            })
+            continue
+        try:
+            content_key = workspace.compute_content_key(
+                category=req.get("category"),
+                subdomain=req.get("subdomain"),
+                title=req.get("title"),
+            )
+            workspace.upsert_correction(
+                analysis_id=aid,
+                requirement_id=rid,
+                user_id=user_id,
+                content_key=content_key,
+                verdict=row["verdict"],
+                answer=row["answer"],
+                notes=row.get("notes"),
+            )
+            applied += 1
+        except ValueError as exc:
+            errors.append({"requirement_id": rid, "reason": str(exc)})
+        except Exception as exc:  # pragma: no cover
+            logger.exception("[import-corrections] upsert failed for %s", rid)
+            errors.append({"requirement_id": rid, "reason": str(exc)})
+
+    return {
+        "applied": applied,
+        "ignored": ignored,
+        "errors": errors,
+        "analysis_id": aid,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Workspace — v3.11.0 : re-pass batch + export CSV feedback
 # ---------------------------------------------------------------------------

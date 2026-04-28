@@ -893,6 +893,25 @@ def get_corrections_by_requirement_id(
     }
 
 
+def delete_all_corrections_for_analysis(
+    *, analysis_id: str | int, user_id: str
+) -> int:
+    """Supprime toutes les corrections de l'utilisateur pour cette analyse.
+
+    Renvoie le nombre de lignes effectivement supprimées. Utile pour
+    réinitialiser un import Excel raté (bouton "Tout supprimer" du bandeau).
+    """
+    with _connect() as conn:
+        cur = conn.execute(
+            """
+            DELETE FROM requirement_corrections
+            WHERE analysis_id = ? AND user_id = ?
+            """,
+            (str(analysis_id), user_id),
+        )
+        return cur.rowcount
+
+
 def list_all_corrections_for_user(user_id: str) -> list[dict[str, Any]]:
     """Toutes les corrections enregistrées par l'utilisateur, triées par
     updated_at desc. Utilisé par le fallback de matching titre-seul dans
