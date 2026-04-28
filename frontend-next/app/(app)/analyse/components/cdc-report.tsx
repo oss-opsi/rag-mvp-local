@@ -11,6 +11,11 @@ import {
   ChevronLeft,
   BarChart3,
   ArrowDownNarrowWide,
+  ArrowUp,
+  ArrowDown,
+  ShieldCheck,
+  ThumbsUp,
+  ThumbsDown,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -53,8 +58,10 @@ import type {
 import { QualityDashboard } from "./quality-dashboard";
 
 type StatusFilter = "all" | RequirementStatus;
-type GroupMode = "flat" | "domain";
+type GroupMode = "flat" | "domain" | "table";
 type ViewMode = "report" | "quality";
+type TableSortKey = "title" | "category" | "status" | "confidence";
+type TableSortDir = "asc" | "desc";
 
 const SIRH_DOMAIN_ORDER = [
   "Paie",
@@ -157,6 +164,10 @@ export function CdcReport({
   const [exporting, setExporting] = React.useState<"xlsx" | "md" | null>(null);
   const [groupMode, setGroupMode] = React.useState<GroupMode>("flat");
   const [sortByConfidence, setSortByConfidence] = React.useState(false);
+  const [tableSort, setTableSort] = React.useState<{
+    key: TableSortKey;
+    dir: TableSortDir;
+  } | null>(null);
   const [openDomains, setOpenDomains] = React.useState<Set<string>>(new Set());
   const [view, setView] = React.useState<ViewMode>("report");
   const [feedbackList, setFeedbackList] = React.useState<RequirementFeedback[]>([]);
@@ -655,7 +666,7 @@ export function CdcReport({
                       : "text-muted-foreground hover:text-accent",
                   )}
                 >
-                  Vue plate
+                  Liste
                 </button>
                 <button
                   type="button"
@@ -667,7 +678,19 @@ export function CdcReport({
                       : "text-muted-foreground hover:text-accent",
                   )}
                 >
-                  Vue par domaine
+                  Par domaine
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setGroupMode("table")}
+                  className={cn(
+                    "rounded-full px-3 py-1 font-medium transition-all",
+                    groupMode === "table"
+                      ? "bg-accent-soft text-accent shadow-tinted-sm"
+                      : "text-muted-foreground hover:text-accent",
+                  )}
+                >
+                  Tableau
                 </button>
               </div>
 
@@ -732,6 +755,15 @@ export function CdcReport({
                     onClick={() => openRow(r)}
                   />
                 ))
+              ) : groupMode === "table" ? (
+                <RequirementsTable
+                  requirements={filtered}
+                  feedbackByRequirement={feedbackByRequirement}
+                  correctionByRequirement={correctionByRequirement}
+                  sort={tableSort}
+                  onSortChange={setTableSort}
+                  onRowClick={openRow}
+                />
               ) : (
                 groupedByDomain.map(([domain, reqs]) => {
                   const isOpen = openDomains.size === 0
@@ -827,5 +859,231 @@ function DomainStatusBar({
         style={{ width: seg(counts.ambiguous) }}
       />
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Vue Tableau (option 2) — exigences en tableau triable, dense, comparable
+// ---------------------------------------------------------------------------
+
+const STATUS_TABLE_META: Record<
+  RequirementStatus,
+  { label: string; cls: string; rank: number }
+> = {
+  covered: {
+    label: "Couvert",
+    cls: "border-success/25 bg-success-soft text-success",
+    rank: 0,
+  },
+  partial: {
+    label: "Partiel",
+    cls: "border-warning/25 bg-warning-soft text-warning",
+    rank: 1,
+  },
+  missing: {
+    label: "Manquant",
+    cls: "border-danger/25 bg-danger-soft text-danger",
+    rank: 2,
+  },
+  ambiguous: {
+    label: "Ambigu",
+    cls: "border-soft bg-muted/40 text-muted-foreground",
+    rank: 3,
+  },
+};
+
+function RequirementsTable({
+  requirements,
+  feedbackByRequirement,
+  correctionByRequirement,
+  sort,
+  onSortChange,
+  onRowClick,
+}: {
+  requirements: Requirement[];
+  feedbackByRequirement: Map<string, RequirementFeedback>;
+  correctionByRequirement: Map<string, RequirementCorrection>;
+  sort: { key: TableSortKey; dir: TableSortDir } | null;
+  onSortChange: (
+    s: { key: TableSortKey; dir: TableSortDir } | null,
+  ) => void;
+  onRowClick: (r: Requirement) => void;
+}) {
+  const sorted = React.useMemo(() => {
+    if (!sort) return requirements;
+    const dir = sort.dir === "asc" ? 1 : -1;
+    const arr = [...requirements];
+    arr.sort((a, b) => {
+      const get = (r: Requirement): number | string => {
+        switch (sort.key) {
+          case "title":
+            return (r.title || "").toLowerCase();
+          case "category":
+            return (r.category || "").toLowerCase();
+          case "status":
+            return STATUS_TABLE_META[r.status as RequirementStatus]?.rank ?? 99;
+          case "confidence":
+            return typeof r.confidence === "number" ? r.confidence : -1;
+        }
+      };
+      const va = get(a);
+      const vb = get(b);
+      if (va < vb) return -1 * dir;
+      if (va > vb) return 1 * dir;
+      return 0;
+    });
+    return arr;
+  }, [requirements, sort]);
+
+  const toggle = (key: TableSortKey) => {
+    if (!sort || sort.key !== key) {
+      onSortChange({ key, dir: key === "title" || key === "category" ? "asc" : "desc" });
+    } else if (sort.dir === "asc") {
+      onSortChange({ key, dir: "desc" });
+    } else {
+      onSortChange(null);
+    }
+  };
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead className="sticky top-0 z-[1] bg-muted/40 text-[11px] uppercase tracking-wide text-muted-foreground backdrop-blur-md">
+          <tr>
+            <Th label="Exigence" k="title" sort={sort} onToggle={toggle} className="px-4 py-2.5" />
+            <Th label="Domaine" k="category" sort={sort} onToggle={toggle} className="px-3 py-2.5" />
+            <Th label="Statut" k="status" sort={sort} onToggle={toggle} className="px-3 py-2.5" />
+            <Th label="Confiance" k="confidence" sort={sort} onToggle={toggle} className="px-3 py-2.5 text-right" align="right" />
+            <th className="px-3 py-2.5 text-left font-medium">Signaux</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((r) => {
+            const status = (r.status as RequirementStatus) || "ambiguous";
+            const meta = STATUS_TABLE_META[status];
+            const conf = typeof r.confidence === "number" ? r.confidence : null;
+            const fb = feedbackByRequirement.get(r.id);
+            const corrected = correctionByRequirement.has(r.id);
+            return (
+              <tr
+                key={r.id}
+                onClick={() => onRowClick(r)}
+                className="cursor-pointer border-t border-soft transition-colors hover:bg-accent-soft/30"
+              >
+                <td className="max-w-[420px] px-4 py-3">
+                  <div className="font-medium leading-snug">
+                    {r.title || "(sans titre)"}
+                  </div>
+                  <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                    {r.id}
+                  </div>
+                </td>
+                <td className="px-3 py-3 text-xs text-muted-foreground">
+                  <div className="truncate">{r.category || "—"}</div>
+                  {r.subdomain ? (
+                    <div className="truncate text-[10px] opacity-70">
+                      {r.subdomain}
+                    </div>
+                  ) : null}
+                </td>
+                <td className="px-3 py-3">
+                  <span
+                    className={cn(
+                      "inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium",
+                      meta.cls,
+                    )}
+                  >
+                    {meta.label}
+                  </span>
+                </td>
+                <td className="px-3 py-3 text-right">
+                  {conf !== null ? (
+                    <span
+                      className={cn(
+                        "inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium tabular-nums",
+                        conf >= 0.8
+                          ? "border-success/25 bg-success-soft text-success"
+                          : conf >= 0.5
+                          ? "border-warning/25 bg-warning-soft text-warning"
+                          : "border-danger/25 bg-danger-soft text-danger",
+                      )}
+                    >
+                      {(conf * 100).toFixed(0)}%
+                    </span>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">—</span>
+                  )}
+                </td>
+                <td className="px-3 py-3">
+                  <div className="flex items-center gap-1.5">
+                    {corrected ? (
+                      <span
+                        className="inline-flex h-5 items-center gap-0.5 rounded-full border border-accent/25 bg-accent-soft px-1.5 text-[10px] font-medium text-accent"
+                        title="Verdict humain validé"
+                      >
+                        <ShieldCheck className="h-3 w-3" />
+                      </span>
+                    ) : null}
+                    {fb?.vote === "up" ? (
+                      <ThumbsUp className="h-3.5 w-3.5 text-success" />
+                    ) : fb?.vote === "down" ? (
+                      <ThumbsDown className="h-3.5 w-3.5 text-danger" />
+                    ) : null}
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function Th({
+  label,
+  k,
+  sort,
+  onToggle,
+  className,
+  align,
+}: {
+  label: string;
+  k: TableSortKey;
+  sort: { key: TableSortKey; dir: TableSortDir } | null;
+  onToggle: (k: TableSortKey) => void;
+  className?: string;
+  align?: "right";
+}) {
+  const active = sort?.key === k;
+  return (
+    <th
+      className={cn(
+        "text-left font-medium",
+        align === "right" && "text-right",
+        className,
+      )}
+    >
+      <button
+        type="button"
+        onClick={() => onToggle(k)}
+        className={cn(
+          "inline-flex items-center gap-1 transition-colors hover:text-accent",
+          active && "text-accent",
+          align === "right" && "flex-row-reverse",
+        )}
+      >
+        {label}
+        {active ? (
+          sort.dir === "asc" ? (
+            <ArrowUp className="h-3 w-3" />
+          ) : (
+            <ArrowDown className="h-3 w-3" />
+          )
+        ) : (
+          <span className="inline-block h-3 w-3" aria-hidden />
+        )}
+      </button>
+    </th>
   );
 }
