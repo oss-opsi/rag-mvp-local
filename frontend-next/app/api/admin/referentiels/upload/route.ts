@@ -5,10 +5,19 @@ export const runtime = "nodejs";
 export const maxDuration = 300;
 
 export async function POST(request: Request): Promise<Response> {
-  const formData = await request.formData();
+  // Streaming proxy : on transmet le body brut au backend sans appeler
+  // request.formData() (qui plante au-delà de 10 MB par défaut côté
+  // Next.js). Le backend FastAPI parse le multipart lui-même.
+  const contentType = request.headers.get("content-type") || "";
+  const contentLength = request.headers.get("content-length") || "";
+  const headers: Record<string, string> = {};
+  if (contentType) headers["content-type"] = contentType;
+  if (contentLength) headers["content-length"] = contentLength;
+
   const res = await fetchBackend("/admin/referentiels/upload", {
     method: "POST",
-    body: formData as unknown as BodyInit,
+    body: request.body,
+    headers,
     timeoutMs: 300_000,
   });
   const text = await res.text();

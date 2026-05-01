@@ -9,12 +9,19 @@ type Ctx = { params: Promise<{ id: string }> };
 
 export async function POST(request: Request, ctx: Ctx): Promise<Response> {
   const { id } = await ctx.params;
-  const formData = await request.formData();
+  // Streaming proxy : pas de request.formData() (limite 10 MB côté Next.js).
+  const contentType = request.headers.get("content-type") || "";
+  const contentLength = request.headers.get("content-length") || "";
+  const headers: Record<string, string> = {};
+  if (contentType) headers["content-type"] = contentType;
+  if (contentLength) headers["content-length"] = contentLength;
+
   const res = await fetchBackend(
     `/workspace/cdcs/${encodeURIComponent(id)}/analyse`,
     {
       method: "POST",
-      body: formData as unknown as BodyInit,
+      body: request.body,
+      headers,
       timeoutMs: 60_000,
     }
   );

@@ -4,11 +4,17 @@ export const runtime = "nodejs";
 export const maxDuration = 900;
 
 export async function POST(request: Request): Promise<Response> {
-  // Re-forward the multipart body to the backend without buffering the file in memory twice.
-  const formData = await request.formData();
+  // Streaming proxy : pas de request.formData() (limite 10 MB côté Next.js).
+  const contentType = request.headers.get("content-type") || "";
+  const contentLength = request.headers.get("content-length") || "";
+  const headers: Record<string, string> = {};
+  if (contentType) headers["content-type"] = contentType;
+  if (contentLength) headers["content-length"] = contentLength;
+
   const res = await fetchBackend("/upload", {
     method: "POST",
-    body: formData as unknown as BodyInit,
+    body: request.body,
+    headers,
     timeoutMs: 900_000,
   });
 
