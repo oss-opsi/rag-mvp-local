@@ -12,8 +12,10 @@
 |---|---|
 | **Indexation** | Upload de documents (PDF, DOCX, TXT, MD), jobs d'ingestion async, gestion du corpus utilisateur |
 | **Chat** | Conversations avec RAG hybride (dense + sparse + reranker), citations, streaming SSE, feedback ±1 |
-| **Analyse d'écarts** | Workspace clients/CDCs, lancement d'analyse async, rapport de couverture (donut, filtres, qualification slide-over), export xlsx/md |
+| **Analyse d'écarts** | Workspace clients/CDCs (routing par URL), lancement d'analyse async, rapport (donut, filtres, qualification slide-over, vue Tableau), export xlsx/md, **import de corrections humaines** (Excel enrichi 3 colonnes : verdict, description corrigée, notes) |
+| **Référentiels** *(admin)* | Méthodologie interne Opsidium ; upload PDF/DOCX/XLSX (jusqu'à 50 MB) avec **indexation async sérialisée** (queue 1 job en parallèle, bandeau d'avancement, notification de fin) — collection `referentiels_opsidium` interrogée par le pipeline d'analyse CDC uniquement |
 | **Évaluation RAGAS** | Évaluation de la qualité du RAG sur un CSV `question, ground_truth` (4 métriques) |
+| **Notifications** | Cloche temps-réel (succès/erreur des jobs longs : ingestion CDC, analyse, indexation référentiels, import corrections) |
 | **Paramètres** | Clé API OpenAI chiffrée, sélection des modèles LLM (admin), informations pipeline |
 | **Utilisateurs** | Gestion des comptes (self-service mot de passe + admin CRUD utilisateurs) |
 
@@ -21,18 +23,19 @@
 
 ## Stack technique
 
-### Pipeline RAG (`v3.9.0`)
-- **Embeddings** : `BAAI/bge-m3` (multilingue, 1024 dim)
+### Pipeline RAG (`v4.7.0`)
+- **Embeddings** : `BAAI/bge-m3` (multilingue, 1024 dim, mutex CPU pour éviter saturation)
 - **Reranker** : `BAAI/bge-reranker-v2-m3`
 - **Chunking** : sémantique + structure-aware (`v2`)
+- **Parsers** : PDF (PyMuPDF), DOCX (`python-docx` — préserve paragraphes + tableaux), XLSX/XLS, TXT, MD
 - **Retrieval hybride** : dense Qdrant + BM25 → RRF (k=60) → top-K rerank
-- **Gap analysis** : extraction d'exigences map-reduce, dedup sémantique, HyDE, re-pass GPT-4o sur les ambigus, cache disque
+- **Gap analysis** : extraction d'exigences map-reduce, dedup sémantique, HyDE, re-pass GPT-4o sur les ambigus, cache disque, **overrides corrections humaines** (matching par content_key + fallback sur titre)
 
 ### Architecture
-- **Frontend** : Next.js 15 + TypeScript + Tailwind + Radix UI
-- **Backend** : FastAPI + LangChain (LCEL) + LangSmith-compatible
-- **Stockage vectoriel** : Qdrant (collection per-user `rag_<user_id>`)
-- **Stockage relationnel** : SQLite (users, conversations, workspace, jobs)
+- **Frontend** : Next.js 15 + TypeScript + Tailwind + Radix UI ; middleware en runtime `nodejs` (pour uploads >10 MB)
+- **Backend** : FastAPI + LangChain (LCEL) + LangSmith-compatible ; workers async (`gap_analysis_jobs`, `ingestion_jobs`) + queue sérialisée pour indexation référentiels
+- **Stockage vectoriel** : Qdrant (collection per-user `rag_<user_id>` + collection partagée `referentiels_opsidium` admin uniquement)
+- **Stockage relationnel** : SQLite (users, conversations, workspace, jobs, corrections, notifications)
 - **Auth** : JWT HS256 (cookie session) + rôles `admin` / `user`
 - **LLM** : OpenAI GPT-4o-mini par défaut (clé fournie par l'utilisateur, chiffrée Fernet)
 
@@ -154,7 +157,7 @@ docker compose down -v
 
 ## Rollback
 
-En cas de problème, voir [ROLLBACK.md](./ROLLBACK.md) — tag stable de référence : **`v3.9.0-stable`**.
+En cas de problème, voir [ROLLBACK.md](./ROLLBACK.md) — tag stable de référence : **`v4.7.0-corrections-uploads`**.
 
 ---
 

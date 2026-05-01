@@ -2,6 +2,23 @@
 
 ## Tags de référence
 
+**`v4.7.0-corrections-uploads`** — branche `feat/ui-modern-v4` (1 mai 2026)
+État stable courant. 17 commits depuis `v4.6.0-history-judge`, regroupés en deux chantiers majeurs :
+
+- **Corrections humaines validées** : export Excel enrichi (3 colonnes verdict / description corrigée / notes), endpoint d'import avec matching par `content_key` + fallback titre, overrides automatiquement réappliqués lors des re-pass et ré-extractions, UI bouton « Importer corrections » + bandeau persistant
+- **Uploads >10 MB robustes** : middleware Next.js en runtime `nodejs` (lève la limite des 10 MB sur Edge), suppression du `Content-Length` dans tous les proxys streaming (collision avec chunked encoding), bufferisation du body sur la route référentiels (le streaming via `node:fetch` corrompait le multipart côté uvicorn), endpoint backend en **fire-and-forget sérialisé** (queue avec un seul worker, BGE-M3 jamais en concurrence), bandeau d'avancement + polling côté UI
+
+Inclut aussi : refonte routing `/analyse` par URL (clients → CDCs → rapport), vue Tableau pour les exigences, parser DOCX `python-docx` (préserve paragraphes + tableaux), sidebar bleu-violet sombre, fix import `langchain_core.documents`.
+
+Rollback rapide :
+```bash
+git fetch --tags
+git checkout v4.7.0-corrections-uploads
+docker compose up -d --build --force-recreate
+```
+
+---
+
 **`v3.9.0-stable`** — commit `b1bd582`
 État stable de Tell me au 26 avril 2026, avant les chantiers v4 (sources publiques + bibliothèque + référentiel).
 
