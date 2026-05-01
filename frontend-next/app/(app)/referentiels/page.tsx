@@ -4,6 +4,7 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import {
   CheckCircle2,
+  Hourglass,
   Loader2,
   ShieldAlert,
   Trash2,
@@ -31,6 +32,12 @@ type ReferentielDoc = {
   chunks: number;
 };
 
+type QueueStatus = {
+  running: { filename: string; started_at: number } | null;
+  pending: number;
+  active_total: number;
+};
+
 const ACCEPT = ".pdf,.docx,.xlsx,.xls";
 const MAX_BYTES = 50 * 1024 * 1024;
 const SUPPORTED_EXT = [".pdf", ".docx", ".xlsx", ".xls"];
@@ -45,6 +52,12 @@ export default function ReferentielsPage() {
   const [loading, setLoading] = React.useState(true);
   const [uploading, setUploading] = React.useState(false);
   const [deleting, setDeleting] = React.useState<string | null>(null);
+  const [queue, setQueue] = React.useState<QueueStatus>({
+    running: null,
+    pending: 0,
+    active_total: 0,
+  });
+  const lastActiveTotalRef = React.useRef(0);
 
   const reload = React.useCallback(async () => {
     if (!isAdmin) {
@@ -70,6 +83,39 @@ export default function ReferentielsPage() {
   React.useEffect(() => {
     void reload();
   }, [reload]);
+
+  // Polling de l'état de la queue d'indexation. Tant qu'un job tourne ou
+  // attend, on rafraîchit toutes les 5 s. Quand la queue se vide, on
+  // recharge la liste pour faire apparaître les nouveaux référentiels.
+  const pollQueue = React.useCallback(async () => {
+    if (!isAdmin) return;
+    try {
+      const res = await fetch("/api/admin/referentiels/queue-status", {
+        cache: "no-store",
+      });
+      if (!res.ok) return;
+      const data = (await res.json()) as QueueStatus;
+      setQueue(data);
+      const prev = lastActiveTotalRef.current;
+      if (prev > 0 && data.active_total === 0) {
+        void reload();
+      }
+      lastActiveTotalRef.current = data.active_total;
+    } catch {
+      // silent
+    }
+  }, [isAdmin, reload]);
+
+  React.useEffect(() => {
+    if (!isAdmin) return;
+    void pollQueue();
+    const id = window.setInterval(() => {
+      if (queue.active_total > 0 || lastActiveTotalRef.current > 0) {
+        void pollQueue();
+      }
+    }, 5000);
+    return () => window.clearInterval(id);
+  }, [isAdmin, pollQueue, queue.active_total]);
 
   const handleUpload = async (file: File) => {
     if (uploading) return;
@@ -114,13 +160,13 @@ export default function ReferentielsPage() {
       }
       const data = (await res.json()) as {
         source: string;
-        chunks: number;
+        status?: string;
       };
       toast({
-        title: "Référentiel indexé",
-        description: `${data.source} — ${data.chunks} chunks.`,
+        title: "Indexation lancée",
+        description: `${data.source} — vous pouvez fermer l'onglet, une notification signalera la fin.`,
       });
-      await reload();
+      void pollQueue();
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Erreur";
       toast({
@@ -219,13 +265,37 @@ export default function ReferentielsPage() {
             </p>
           </div>
 
+          {queue.active_total > 0 ? (
+            <div className="flex items-center gap-3 rounded-2xl border border-soft bg-accent-soft px-4 py-3 text-sm text-accent shadow-tinted-sm">
+              <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+              <div className="flex-1 min-w-0">
+                {queue.running ? (
+                  <div className="truncate font-medium">
+                    Indexation en cours · {queue.running.filename}
+                  </div>
+                ) : (
+                  <div className="font-medium">Indexation en cours…</div>
+                )}
+                {queue.pending > 0 ? (
+                  <div className="mt-0.5 flex items-center gap-1.5 text-xs text-accent/80">
+                    <Hourglass className="h-3 w-3" />
+                    {queue.pending} {queue.pending > 1 ? "fichiers en file" : "fichier en file"}
+                  </div>
+                ) : null}
+              </div>
+              <span className="rounded-full bg-accent/15 px-2 py-0.5 text-xs font-semibold tabular-nums">
+                {queue.active_total}
+              </span>
+            </div>
+          ) : null}
+
           <UploadDropzone
             accept={ACCEPT}
             disabled={uploading}
             onFile={handleUpload}
             title={
               uploading
-                ? "Indexation en cours…"
+                ? "Envoi du fichier…"
                 : "Déposer vos référentiels"
             }
             hint="Formats admis : PDF, DOCX, XLSX, XLS — 50 Mo max"

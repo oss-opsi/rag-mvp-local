@@ -43,6 +43,7 @@ System:
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -1153,10 +1154,113 @@ async def admin_referentiels_list(_: str = Depends(require_admin)) -> dict:
     return {"documents": list_referentiels()}
 
 
+# File d'attente sérialisée pour les indexations de référentiels.
+# Un seul worker consomme la queue : impossible de saturer le CPU avec
+# plusieurs BGE-M3 en parallèle. La queue et le worker sont créés à la
+# première requête (lazy) car asyncio.Queue() doit être instanciée
+# depuis la boucle d'événements active.
+_REFERENTIEL_INGEST_QUEUE: "asyncio.Queue[tuple[str, str, str]] | None" = None
+_REFERENTIEL_INGEST_WORKER: "asyncio.Task | None" = None
+_REFERENTIEL_INGEST_CURRENT: "dict | None" = None  # {filename, started_at}
+
+
+async def _referentiel_worker_loop() -> None:
+    global _REFERENTIEL_INGEST_CURRENT
+    assert _REFERENTIEL_INGEST_QUEUE is not None
+    import time as _time
+    while True:
+        tmp_path, filename, admin_id = await _REFERENTIEL_INGEST_QUEUE.get()
+        _REFERENTIEL_INGEST_CURRENT = {
+            "filename": filename,
+            "started_at": _time.time(),
+        }
+        try:
+            await asyncio.to_thread(
+                _ingest_referentiel_blocking, tmp_path, filename, admin_id
+            )
+        except Exception:
+            logger.exception(
+                "[referentiels] worker crashé sur '%s' — la queue continue",
+                filename,
+            )
+        finally:
+            _REFERENTIEL_INGEST_CURRENT = None
+            _REFERENTIEL_INGEST_QUEUE.task_done()
+
+
+def _ensure_referentiel_worker() -> "asyncio.Queue":
+    """Instancie (à la demande) la queue et son worker dans la boucle courante."""
+    global _REFERENTIEL_INGEST_QUEUE, _REFERENTIEL_INGEST_WORKER
+    if _REFERENTIEL_INGEST_QUEUE is None:
+        _REFERENTIEL_INGEST_QUEUE = asyncio.Queue()
+    if _REFERENTIEL_INGEST_WORKER is None or _REFERENTIEL_INGEST_WORKER.done():
+        _REFERENTIEL_INGEST_WORKER = asyncio.create_task(_referentiel_worker_loop())
+    return _REFERENTIEL_INGEST_QUEUE
+
+
+def _ingest_referentiel_blocking(
+    tmp_path: str,
+    filename: str,
+    admin_id: str,
+) -> None:
+    """Pipeline complet exécuté dans un thread d'arrière-plan."""
+    from rag.referentiels import delete_referentiel, ingest_referentiel
+    from rag.scheduler import db as _sdb
+
+    try:
+        try:
+            delete_referentiel(filename)
+        except Exception:
+            logger.exception(
+                "[referentiels] purge avant réindexation échouée pour '%s'", filename
+            )
+
+        try:
+            result = ingest_referentiel(tmp_path, filename)
+        except ValueError as exc:
+            try:
+                _sdb.insert_notification(
+                    user=admin_id,
+                    level="error",
+                    title=f"Référentiel refusé · {filename}",
+                    body=str(exc)[:300],
+                )
+            except Exception:
+                pass
+            return
+        except Exception as exc:
+            logger.exception("[referentiels] upload failed for '%s'", filename)
+            try:
+                _sdb.insert_notification(
+                    user=admin_id,
+                    level="error",
+                    title=f"Indexation référentiel échouée · {filename}",
+                    body=str(exc)[:300] or "Erreur inconnue",
+                )
+            except Exception:
+                pass
+            return
+
+        try:
+            _sdb.insert_notification(
+                user=admin_id,
+                level="info",
+                title=f"Référentiel indexé · {result['source']}",
+                body=f"{result['chunks']} chunks ajoutés à referentiels_opsidium.",
+            )
+        except Exception:
+            pass
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
 @app.post(
     "/admin/referentiels/upload",
     tags=["Admin"],
-    status_code=201,
+    status_code=202,
 )
 async def admin_referentiels_upload(
     file: UploadFile = File(
@@ -1165,22 +1269,18 @@ async def admin_referentiels_upload(
     ),
     admin_id: str = Depends(require_admin),
 ) -> dict:
-    """Indexe un référentiel méthodologie interne.
+    """Met en file l'indexation d'un référentiel méthodologie interne.
 
-    Le fichier est découpé puis indexé dans la collection partagée
-    `referentiels_opsidium`. Cette collection est interrogée UNIQUEMENT
-    par le pipeline d'analyse CDC client (gap-analysis), jamais par le
-    chat « Tell me ».
+    Réponse immédiate (202). L'indexation (parsing + embeddings + Qdrant)
+    tourne en arrière-plan ; une notification signale la fin (succès ou
+    erreur). L'utilisateur peut fermer l'onglet sans interrompre le job.
 
-    Si un référentiel du même nom existe déjà, ses anciens chunks sont
-    supprimés avant la réindexation (mise à jour atomique).
+    La collection partagée `referentiels_opsidium` est interrogée UNIQUEMENT
+    par le pipeline d'analyse CDC client (gap-analysis), jamais par le chat
+    « Tell me ». Si un référentiel du même nom existe déjà, ses anciens
+    chunks sont supprimés avant la réindexation (mise à jour atomique).
     """
-    from rag.referentiels import (
-        SUPPORTED_REFERENTIEL_EXTENSIONS,
-        delete_referentiel,
-        ingest_referentiel,
-    )
-    from rag.scheduler import db as _sdb
+    from rag.referentiels import SUPPORTED_REFERENTIEL_EXTENSIONS
     import pathlib
 
     if not file.filename:
@@ -1196,7 +1296,6 @@ async def admin_referentiels_upload(
             ),
         )
 
-    # Persist upload to a temp file
     with tempfile.NamedTemporaryFile(
         delete=False, suffix=ext, prefix="rag_referentiel_"
     ) as tmp:
@@ -1204,65 +1303,34 @@ async def admin_referentiels_upload(
         tmp.write(content)
         tmp_path = tmp.name
 
-    try:
-        # Mise à jour atomique : on supprime d'abord les chunks existants
-        # de ce même fichier source (s'il a déjà été indexé auparavant).
-        try:
-            delete_referentiel(file.filename)
-        except Exception:
-            logger.exception(
-                "[referentiels] purge avant réindexation échouée pour '%s'",
-                file.filename,
-            )
-
-        # Indexation synchrone (volumétrie attendue faible : méthodo interne).
-        result = ingest_referentiel(tmp_path, file.filename)
-    except ValueError as exc:
-        try:
-            _sdb.insert_notification(
-                user=admin_id,
-                level="error",
-                title=f"Référentiel refusé · {file.filename}",
-                body=str(exc)[:300],
-            )
-        except Exception:
-            pass
-        raise HTTPException(status_code=400, detail=str(exc))
-    except Exception as exc:
-        logger.exception("[referentiels] upload failed for '%s'", file.filename)
-        try:
-            _sdb.insert_notification(
-                user=admin_id,
-                level="error",
-                title=f"Indexation référentiel échouée · {file.filename}",
-                body=str(exc)[:300] or "Erreur inconnue",
-            )
-        except Exception:
-            pass
-        raise HTTPException(
-            status_code=500,
-            detail=f"Indexation du référentiel échouée : {exc}",
-        )
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-
-    try:
-        _sdb.insert_notification(
-            user=admin_id,
-            level="info",
-            title=f"Référentiel indexé · {result['source']}",
-            body=f"{result['chunks']} chunks ajoutés à referentiels_opsidium.",
-        )
-    except Exception:
-        pass
+    queue = _ensure_referentiel_worker()
+    await queue.put((tmp_path, file.filename, admin_id))
+    pending = queue.qsize()
+    running = _REFERENTIEL_INGEST_CURRENT is not None
 
     return {
-        "source": result["source"],
-        "chunks": result["chunks"],
-        "chunker_version": result["chunker_version"],
+        "source": file.filename,
+        "status": "queued",
+        "pending": pending,           # nb de jobs en attente APRÈS le current
+        "running": running,           # un job tourne déjà (le nouveau attendra)
+    }
+
+
+@app.get("/admin/referentiels/queue-status", tags=["Admin"])
+async def admin_referentiels_queue_status(
+    _admin_id: str = Depends(require_admin),
+) -> dict:
+    """État de la file d'indexation des référentiels (pour bandeau UI)."""
+    pending = (
+        _REFERENTIEL_INGEST_QUEUE.qsize()
+        if _REFERENTIEL_INGEST_QUEUE is not None
+        else 0
+    )
+    current = _REFERENTIEL_INGEST_CURRENT
+    return {
+        "running": current,           # {filename, started_at} ou null
+        "pending": pending,           # jobs encore en file
+        "active_total": (1 if current else 0) + pending,
     }
 
 
