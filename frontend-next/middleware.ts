@@ -1,5 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 
+// Runtime nodejs (stable depuis Next 15.2) : sans ça le middleware tourne
+// sur Edge, qui matérialise le body en mémoire avec une limite ~10 MB ;
+// les uploads >10 MB échouent côté client avec "Load failed" / 413.
+// Le middleware n'inspecte que les cookies, jamais le body, donc le
+// passage en nodejs est sans impact fonctionnel.
+export const runtime = "nodejs";
+
 const PUBLIC_PATHS = ["/login", "/mockup"];
 const PUBLIC_API = ["/api/auth/login"];
 
