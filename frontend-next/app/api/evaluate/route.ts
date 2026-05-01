@@ -9,11 +9,11 @@ export const maxDuration = 600;
  */
 export async function POST(request: Request): Promise<Response> {
   // Streaming proxy : pas de request.formData() (limite 10 MB côté Next.js).
+  // Pas de Content-Length : node:fetch passe en chunked sur un body stream,
+  // forwarder les deux casse le parsing multipart côté uvicorn.
   const contentType = request.headers.get("content-type") || "";
-  const contentLength = request.headers.get("content-length") || "";
   const headers: Record<string, string> = {};
   if (contentType) headers["content-type"] = contentType;
-  if (contentLength) headers["content-length"] = contentLength;
 
   const res = await fetchBackend("/evaluate", {
     method: "POST",
