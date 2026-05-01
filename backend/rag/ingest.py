@@ -223,7 +223,7 @@ def _load_excel_document(file_path: str, ext: str, source_name: str):
     sous forme `cell1 | cell2 | ...` (cellules vides ignorées). Retourne un
     Document unique : le chunker sémantique le découpera ensuite par taille.
     """
-    from langchain.schema import Document
+    from langchain_core.documents import Document
 
     parts: list[str] = []
     if ext == ".xlsx":
@@ -286,7 +286,7 @@ def _load_docx_document(file_path: str, source_name: str):
 
     En cas d'erreur python-docx, fallback sur Docx2txtLoader.
     """
-    from langchain.schema import Document
+    from langchain_core.documents import Document
 
     try:
         import docx as pydocx  # python-docx
