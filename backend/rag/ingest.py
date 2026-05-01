@@ -4,7 +4,7 @@ Document ingestion pipeline:
 
 Supported formats:
   .pdf   — PyPDFLoader
-  .docx  — Docx2txtLoader
+  .docx  — python-docx (paragraphes + tableaux), fallback Docx2txtLoader
   .txt   — TextLoader (utf-8)
   .md    — TextLoader (utf-8)  [UnstructuredMarkdownLoader is too heavy]
 
@@ -266,6 +266,114 @@ def _load_excel_document(file_path: str, ext: str, source_name: str):
     return [Document(page_content=text, metadata={"source": source_name, "page": 1})]
 
 
+def _load_docx_document(file_path: str, source_name: str):
+    """Extrait le texte ET les tableaux d'un .docx en préservant l'ordre.
+
+    Utilise python-docx (au lieu de docx2txt) qui ne lit que le texte plat
+    et perd les tableaux. Pour des dossiers de conception SIRH qui sont
+    majoritairement structurés en tableaux, le gain est important :
+    typiquement 3-5× plus de chunks utiles.
+
+    Format de sortie (markdown-like) — le chunker sémantique v2 reconnaît
+    les # comme breaks de section :
+        # Heading 1
+        ## Heading 2
+        Paragraphe...
+
+        | col1 | col2 |
+        | val1 | val2 |
+        | ...  | ...  |
+
+    En cas d'erreur python-docx, fallback sur Docx2txtLoader.
+    """
+    from langchain.schema import Document
+
+    try:
+        import docx as pydocx  # python-docx
+        from docx.oxml.ns import qn  # type: ignore
+    except ImportError:
+        # Fallback : si python-docx pas installé, on retombe sur l'ancien loader
+        from langchain_community.document_loaders import Docx2txtLoader
+        return Docx2txtLoader(file_path).load()
+
+    try:
+        doc = pydocx.Document(file_path)
+    except Exception as exc:
+        logger.warning(
+            "[docx] python-docx a échoué sur '%s' : %s. Fallback docx2txt.",
+            source_name, exc,
+        )
+        from langchain_community.document_loaders import Docx2txtLoader
+        return Docx2txtLoader(file_path).load()
+
+    # Mappe chaque <w:p> et <w:tbl> du body dans l'ordre du document.
+    # python-docx fournit doc.paragraphs et doc.tables séparément ;
+    # on parcourt l'élément XML pour préserver l'ordre.
+    parts: list[str] = []
+    P_TAG = qn("w:p")
+    TBL_TAG = qn("w:tbl")
+    paragraphs_by_id = {p._element: p for p in doc.paragraphs}
+    tables_by_id = {t._element: t for t in doc.tables}
+
+    def _md_heading_level(style_name: str) -> int:
+        """Retourne 1, 2, 3… si le style commence par 'Heading' / 'Titre',
+        sinon 0 (= paragraphe normal)."""
+        if not style_name:
+            return 0
+        s = style_name.strip().lower()
+        for prefix in ("heading ", "titre "):
+            if s.startswith(prefix):
+                tail = s[len(prefix):].strip()
+                try:
+                    n = int(tail)
+                    return max(1, min(6, n))
+                except ValueError:
+                    return 1
+        return 0
+
+    for child in doc.element.body.iterchildren():
+        if child.tag == P_TAG:
+            p = paragraphs_by_id.get(child)
+            if p is None:
+                continue
+            text = (p.text or "").strip()
+            if not text:
+                continue
+            level = _md_heading_level(p.style.name if p.style else "")
+            if level > 0:
+                parts.append("\n" + ("#" * level) + " " + text + "\n")
+            else:
+                parts.append(text)
+        elif child.tag == TBL_TAG:
+            tbl = tables_by_id.get(child)
+            if tbl is None:
+                continue
+            rows_text: list[str] = []
+            for row in tbl.rows:
+                cells = [
+                    " ".join((c.text or "").split()).strip() for c in row.cells
+                ]
+                # Ignore les lignes 100% vides
+                if any(cells):
+                    rows_text.append("| " + " | ".join(cells) + " |")
+            if rows_text:
+                parts.append("")  # ligne vide avant le tableau
+                parts.extend(rows_text)
+                parts.append("")  # ligne vide après
+
+    full_text = "\n".join(parts).strip()
+    if not full_text:
+        # Document vide ou contenu non extractible → fallback docx2txt au cas où
+        logger.warning(
+            "[docx] python-docx n'a rien extrait de '%s', fallback docx2txt.",
+            source_name,
+        )
+        from langchain_community.document_loaders import Docx2txtLoader
+        return Docx2txtLoader(file_path).load()
+
+    return [Document(page_content=full_text, metadata={"source": source_name, "page": 1})]
+
+
 def _load_documents(file_path: str, ext: str, source_name: str | None = None):
     """
     Load a document using the appropriate loader for the file extension.
@@ -276,8 +384,10 @@ def _load_documents(file_path: str, ext: str, source_name: str | None = None):
         from langchain_community.document_loaders import PyPDFLoader
         loader = PyPDFLoader(file_path)
     elif ext == ".docx":
-        from langchain_community.document_loaders import Docx2txtLoader
-        loader = Docx2txtLoader(file_path)
+        # Loader custom python-docx (préserve paragraphes + tableaux). Fallback
+        # docx2txt intégré dans le helper si python-docx n'est pas dispo ou
+        # n'arrive pas à parser.
+        return _load_docx_document(file_path, source_name or file_path)
     elif ext in {".txt", ".md"}:
         from langchain_community.document_loaders import TextLoader
         loader = TextLoader(file_path, encoding="utf-8")

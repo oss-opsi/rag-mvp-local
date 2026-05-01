@@ -12,7 +12,8 @@ sentence-transformers>=3.0
 pypdf>=4.3
 rank-bm25>=0.2.2
 tiktoken>=0.7
-docx2txt>=0.8
+docx2txt>=0.8  # fallback si python-docx ne sait pas parser
+python-docx>=1.1  # parser principal docx — préserve paragraphes + tableaux
 # v3.1 additions
 ragas>=0.1.19
 datasets>=2.20.0
