@@ -2,8 +2,25 @@
 
 ## Tags de référence
 
+**`v4.7.1-uploads-fix`** — branche `feat/ui-modern-v4` (2 mai 2026)
+État stable courant. Patch sur v4.7.0 : généralise la bufferisation du body
+(via `request.arrayBuffer()`) aux 4 autres proxys multipart restants
+(upload corpus, evaluate RAGAS, lancer analyse CDC, import corrections,
+upload CDC client). Sans ça, le streaming via `node:fetch` corrompait
+encore le multipart côté uvicorn — observé sur l'upload CDC client
+(« Expected boundary character 45, got 109 at index 2 »).
+
+Rollback rapide :
+```bash
+git fetch --tags
+git checkout v4.7.1-uploads-fix
+docker compose up -d --build --force-recreate
+```
+
+---
+
 **`v4.7.0-corrections-uploads`** — branche `feat/ui-modern-v4` (1 mai 2026)
-État stable courant. 17 commits depuis `v4.6.0-history-judge`, regroupés en deux chantiers majeurs :
+17 commits depuis `v4.6.0-history-judge`, regroupés en deux chantiers majeurs :
 
 - **Corrections humaines validées** : export Excel enrichi (3 colonnes verdict / description corrigée / notes), endpoint d'import avec matching par `content_key` + fallback titre, overrides automatiquement réappliqués lors des re-pass et ré-extractions, UI bouton « Importer corrections » + bandeau persistant
 - **Uploads >10 MB robustes** : middleware Next.js en runtime `nodejs` (lève la limite des 10 MB sur Edge), suppression du `Content-Length` dans tous les proxys streaming (collision avec chunked encoding), bufferisation du body sur la route référentiels (le streaming via `node:fetch` corrompait le multipart côté uvicorn), endpoint backend en **fire-and-forget sérialisé** (queue avec un seul worker, BGE-M3 jamais en concurrence), bandeau d'avancement + polling côté UI

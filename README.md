@@ -157,7 +157,7 @@ docker compose down -v
 
 ## Rollback
 
-En cas de problème, voir [ROLLBACK.md](./ROLLBACK.md) — tag stable de référence : **`v4.7.0-corrections-uploads`**.
+En cas de problème, voir [ROLLBACK.md](./ROLLBACK.md) — tag stable de référence : **`v4.7.1-uploads-fix`**.
 
 ---
 

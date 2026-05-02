@@ -12,18 +12,20 @@ export async function GET(_req: Request, ctx: Ctx): Promise<Response> {
 
 export async function POST(request: Request, ctx: Ctx): Promise<Response> {
   const { id } = await ctx.params;
-  // Streaming proxy : pas de request.formData() (limite 10 MB côté Next.js).
-  // Pas de Content-Length : node:fetch passe en chunked sur un body stream,
-  // forwarder les deux casse le parsing multipart côté uvicorn.
+  // On évite request.formData() (>10 MB côté Next.js) ET le streaming via
+  // node:fetch (corrompt le multipart côté uvicorn). On bufferise le body
+  // en mémoire route handler, OK jusqu'à 60 MB depuis que le middleware
+  // tourne en runtime nodejs.
   const contentType = request.headers.get("content-type") || "";
   const headers: Record<string, string> = {};
   if (contentType) headers["content-type"] = contentType;
 
+  const buffer = await request.arrayBuffer();
   const res = await fetchBackend(
     `/workspace/clients/${encodeURIComponent(id)}/cdcs`,
     {
       method: "POST",
-      body: request.body,
+      body: buffer,
       headers,
       timeoutMs: 900_000,
     }
